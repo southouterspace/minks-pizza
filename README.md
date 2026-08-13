@@ -53,10 +53,11 @@ npm run dev
    (Size, Crust, Toppings…); toggle availability to 86 an item instantly.
 3. **Modifiers** — reusable option groups with required/optional rules
    (`minSelect`/`maxSelect`) and per-option price deltas.
-4. **Settings** — store identity, hours, pickup/delivery toggles, prep times,
-   delivery fee/minimum, tax rate — and the **Publish** switch that takes the
-   storefront live (before that, customers see a coming-soon page). A separate
-   **Accepting orders** switch pauses ordering without unpublishing.
+4. **Settings** — store identity (including a **logo** you can upload or link,
+   shown instead of the initial badge), hours, pickup/delivery toggles, prep
+   times, delivery fee/minimum, tax rate — and the **Publish** switch that
+   takes the storefront live (before that, customers see a coming-soon page). A
+   separate **Accepting orders** switch pauses ordering without unpublishing.
 5. **Orders** (`/admin`) — live inbox that auto-refreshes; move orders through
    `new → confirmed → preparing → ready → completed` (or cancel).
 

@@ -22,7 +22,7 @@ export function RecentOrderLink() {
   return (
     <Link
       href={`/order/${orderId}`}
-      className="inline-flex items-center gap-1 text-sm font-medium text-link underline-offset-2 hover:underline"
+      className="inline-flex items-center gap-1 text-sm font-medium text-primary underline-offset-2 hover:underline"
     >
       Track your recent order →
     </Link>

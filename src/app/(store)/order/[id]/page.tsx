@@ -6,6 +6,15 @@ import { db, orderItems, orders } from "@/db";
 import { formatCents } from "@/lib/money";
 import { getSettings } from "@/lib/orders";
 import { OrderAutoRefresh } from "@/components/store/order-auto-refresh";
+import { buttonVariants } from "@/components/ui/button";
+import {
+  Card,
+  CardContent,
+  CardFooter,
+  CardHeader,
+  CardTitle,
+} from "@/components/ui/card";
+import { cn } from "@/lib/utils";
 
 export const metadata: Metadata = { title: "Order status" };
 export const dynamic = "force-dynamic";
@@ -67,21 +76,22 @@ export default async function OrderPage({
     <div className="mx-auto max-w-2xl px-4 py-10 sm:px-6">
       {active ? <OrderAutoRefresh /> : null}
 
-      <p className="text-sm text-muted">
+      <p className="text-sm text-muted-foreground">
         Order <span className="font-mono">#{order.orderNumber}</span> ·{" "}
         {order.orderType === "pickup" ? "Pickup" : "Delivery"}
       </p>
       <h1 className="mt-1 text-2xl font-bold tracking-tight">{label.title}</h1>
-      <p className="mt-2 text-sm text-muted">{label.blurb}</p>
+      <p className="mt-2 text-sm text-muted-foreground">{label.blurb}</p>
 
       {order.status !== "canceled" ? (
         <ol className="mt-6 flex items-center gap-1.5" aria-label="Order progress">
           {STATUS_STEPS.slice(0, 4).map((step, i) => (
             <li
               key={step}
-              className={`h-1.5 flex-1 rounded-full ${
-                i <= stepIndex ? "bg-foreground" : "bg-border"
-              }`}
+              className={cn(
+                "h-1.5 flex-1 rounded-full",
+                i <= stepIndex ? "bg-foreground" : "bg-border",
+              )}
               title={STATUS_LABELS[step].title}
             />
           ))}
@@ -89,97 +99,109 @@ export default async function OrderPage({
       ) : null}
 
       {order.orderType === "pickup" && settings.addressLine1 ? (
-        <div className="mt-6 rounded-lg border border-border p-4 text-sm">
-          <p className="font-medium">Pickup at</p>
-          <p className="mt-1 text-muted">
-            {settings.name} · {settings.addressLine1}
-            {settings.addressLine2 ? `, ${settings.addressLine2}` : ""},{" "}
-            {settings.city} {settings.zip}
-          </p>
-          {settings.phone ? (
-            <p className="mt-1 text-muted">{settings.phone}</p>
-          ) : null}
-        </div>
+        <Card className="mt-6">
+          <CardContent className="text-sm">
+            <p className="font-medium">Pickup at</p>
+            <p className="mt-1 text-muted-foreground">
+              {settings.name} · {settings.addressLine1}
+              {settings.addressLine2 ? `, ${settings.addressLine2}` : ""},{" "}
+              {settings.city} {settings.zip}
+            </p>
+            {settings.phone ? (
+              <p className="mt-1 text-muted-foreground">{settings.phone}</p>
+            ) : null}
+          </CardContent>
+        </Card>
       ) : null}
 
-      <div className="mt-8 rounded-lg border border-border">
-        <div className="border-b border-border px-4 py-3 text-sm font-semibold">
-          Order details
-        </div>
-        <ul className="divide-y divide-border px-4">
-          {items.map((item) => (
-            <li key={item.id} className="flex justify-between gap-3 py-3 text-sm">
-              <div className="min-w-0">
-                <p>
-                  <span className="tabular-nums text-muted">
-                    {item.quantity}×
-                  </span>{" "}
-                  <span className="font-medium">{item.itemName}</span>
-                </p>
-                {item.modifiers.length > 0 ? (
-                  <p className="mt-0.5 text-xs text-muted">
-                    {item.modifiers.map((m) => m.modifierName).join(" · ")}
+      <Card className="mt-8">
+        <CardHeader className="border-b">
+          <CardTitle className="text-sm font-semibold">Order details</CardTitle>
+        </CardHeader>
+        <CardContent>
+          <ul className="divide-y divide-border">
+            {items.map((item) => (
+              <li
+                key={item.id}
+                className="flex justify-between gap-3 py-3 text-sm first:pt-0"
+              >
+                <div className="min-w-0">
+                  <p>
+                    <span className="tabular-nums text-muted-foreground">
+                      {item.quantity}×
+                    </span>{" "}
+                    <span className="font-medium">{item.itemName}</span>
                   </p>
-                ) : null}
-                {item.notes ? (
-                  <p className="mt-0.5 text-xs italic text-faint">
-                    “{item.notes}”
-                  </p>
-                ) : null}
-              </div>
-              <span className="shrink-0 tabular-nums">
-                {formatCents(item.lineTotalCents)}
-              </span>
-            </li>
-          ))}
-        </ul>
-        <dl className="space-y-1.5 border-t border-border px-4 py-3 text-sm">
-          <div className="flex justify-between">
-            <dt className="text-muted">Subtotal</dt>
-            <dd className="tabular-nums">{formatCents(order.subtotalCents)}</dd>
-          </div>
-          {order.taxCents > 0 ? (
+                  {item.modifiers.length > 0 ? (
+                    <p className="mt-0.5 text-xs text-muted-foreground">
+                      {item.modifiers.map((m) => m.modifierName).join(" · ")}
+                    </p>
+                  ) : null}
+                  {item.notes ? (
+                    <p className="mt-0.5 text-xs italic text-muted-foreground">
+                      “{item.notes}”
+                    </p>
+                  ) : null}
+                </div>
+                <span className="shrink-0 tabular-nums">
+                  {formatCents(item.lineTotalCents)}
+                </span>
+              </li>
+            ))}
+          </ul>
+        </CardContent>
+        <CardFooter>
+          <dl className="w-full space-y-1.5 text-sm">
             <div className="flex justify-between">
-              <dt className="text-muted">Tax</dt>
-              <dd className="tabular-nums">{formatCents(order.taxCents)}</dd>
+              <dt className="text-muted-foreground">Subtotal</dt>
+              <dd className="tabular-nums">{formatCents(order.subtotalCents)}</dd>
             </div>
-          ) : null}
-          {order.deliveryFeeCents > 0 ? (
-            <div className="flex justify-between">
-              <dt className="text-muted">Delivery fee</dt>
-              <dd className="tabular-nums">
-                {formatCents(order.deliveryFeeCents)}
+            {order.taxCents > 0 ? (
+              <div className="flex justify-between">
+                <dt className="text-muted-foreground">Tax</dt>
+                <dd className="tabular-nums">{formatCents(order.taxCents)}</dd>
+              </div>
+            ) : null}
+            {order.deliveryFeeCents > 0 ? (
+              <div className="flex justify-between">
+                <dt className="text-muted-foreground">Delivery fee</dt>
+                <dd className="tabular-nums">
+                  {formatCents(order.deliveryFeeCents)}
+                </dd>
+              </div>
+            ) : null}
+            {order.tipCents > 0 ? (
+              <div className="flex justify-between">
+                <dt className="text-muted-foreground">Tip</dt>
+                <dd className="tabular-nums">{formatCents(order.tipCents)}</dd>
+              </div>
+            ) : null}
+            <div className="flex justify-between border-t border-border pt-2 text-base font-semibold">
+              <dt>Total</dt>
+              <dd className="tabular-nums">{formatCents(order.totalCents)}</dd>
+            </div>
+            <div className="flex justify-between pt-1">
+              <dt className="text-muted-foreground">Payment</dt>
+              <dd className="text-muted-foreground">
+                {order.paymentStatus === "paid"
+                  ? "Paid online"
+                  : `Due at ${order.orderType === "pickup" ? "pickup" : "delivery"}`}
               </dd>
             </div>
-          ) : null}
-          {order.tipCents > 0 ? (
-            <div className="flex justify-between">
-              <dt className="text-muted">Tip</dt>
-              <dd className="tabular-nums">{formatCents(order.tipCents)}</dd>
-            </div>
-          ) : null}
-          <div className="flex justify-between border-t border-border pt-2 text-base font-semibold">
-            <dt>Total</dt>
-            <dd className="tabular-nums">{formatCents(order.totalCents)}</dd>
-          </div>
-          <div className="flex justify-between pt-1">
-            <dt className="text-muted">Payment</dt>
-            <dd className="text-muted">
-              {order.paymentStatus === "paid"
-                ? "Paid online"
-                : `Due at ${order.orderType === "pickup" ? "pickup" : "delivery"}`}
-            </dd>
-          </div>
-        </dl>
-      </div>
+          </dl>
+        </CardFooter>
+      </Card>
 
-      <p className="mt-6 text-sm text-muted">
+      <p className="mt-6 text-sm text-muted-foreground">
         Questions about your order?
         {settings.phone ? ` Call us at ${settings.phone}.` : " Call the store."}
       </p>
       <Link
         href="/"
-        className="mt-4 inline-flex h-10 items-center rounded-md border border-border px-5 text-sm font-medium transition-colors hover:border-foreground/40"
+        className={cn(
+          buttonVariants({ variant: "outline", size: "lg" }),
+          "mt-4 h-10! px-5!",
+        )}
       >
         Back to menu
       </Link>

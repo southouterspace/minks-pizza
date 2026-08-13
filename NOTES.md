@@ -128,6 +128,28 @@ Migration map applied across the app: `text-muted`→`text-muted-foreground`,
 `bg-accent`/`text-accent-foreground`→`bg-primary`/`text-primary-foreground` (or
 a real `<Button>`), `text-error`→`text-destructive`, `text-link`→`text-primary`.
 
+### Store logo (session 2)
+
+`store_settings.logo_url` holds either an `https://` URL or a self-contained
+`data:` URL. The admin uploader (`src/components/admin/logo-field.tsx`)
+downscales the picked file to 512px on a canvas, encodes it as WebP (PNG
+fallback) and inlines it, capped at 400 KB — so the platform needs **no object
+storage** (no S3/Vercel Blob to provision). `logoUrlOrNull()` in
+`src/app/admin/actions.ts` accepts only `https:` and `data:image/*` so the logo
+can't become active content. `src/components/store-mark.tsx` renders the logo
+(or the initial badge fallback) in the storefront header, the coming-soon page
+and the admin sidebar.
+
+### Bug fixed: cart wiped on page refresh
+
+`cart-context.tsx` gated its persist effect on a `useRef` that was flipped
+synchronously inside the hydrate effect. Both effects run in the same commit,
+so the persist effect saw `hydrated.current === true` while `lines` was still
+`[]` and wrote the empty cart back over the saved one (guaranteed under
+StrictMode; a race in production). It now gates on the `ready` **state**, which
+can't be true until the render that carries the restored lines. Client-side
+navigation hid this from the e2e — only a hard refresh reproduced it.
+
 ## Gotchas hit (for future sessions)
 
 - Playwright `getByRole(name:)` is substring-matching: "Publish store" also

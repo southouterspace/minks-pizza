@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import type { DayHours } from "@/db/schema";
 import { isOpenNow } from "@/lib/hours";
+import { cn } from "@/lib/utils";
 
 /**
  * Open/closed pill computed on the client so it reflects the visitor's
@@ -29,14 +30,17 @@ export function StoreStatusBanner({
 
   if (open === null) return null;
 
+  const live = open && acceptingOrders;
+
   return (
     <span className="inline-flex items-center gap-1.5 font-medium">
       <span
-        className={`h-2 w-2 rounded-full ${
-          open && acceptingOrders ? "bg-success" : "bg-error"
-        }`}
+        className={cn(
+          "h-2 w-2 rounded-full",
+          live ? "bg-success" : "bg-destructive",
+        )}
       />
-      <span className={open && acceptingOrders ? "text-success" : "text-error"}>
+      <span className={live ? "text-success" : "text-destructive"}>
         {!acceptingOrders ? "Ordering paused" : open ? "Open now" : "Closed now"}
       </span>
     </span>

@@ -53,7 +53,7 @@ export default async function EditItemPage({
   return (
     <div>
       <h1 className="text-xl font-semibold tracking-tight">Edit item</h1>
-      <p className="mt-1 text-sm text-muted">{item.name}</p>
+      <p className="mt-1 text-sm text-muted-foreground">{item.name}</p>
       <div className="mt-6">
         <ItemForm
           item={{

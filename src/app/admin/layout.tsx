@@ -1,15 +1,16 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 import { eq } from "drizzle-orm";
+import { ExternalLink } from "lucide-react";
 import { db, storeSettings } from "@/db";
 import { getCurrentOperator } from "@/lib/auth";
 import { AdminNavLinks } from "@/components/admin/nav-links";
+import { StoreMark } from "@/components/store-mark";
+import { Button } from "@/components/ui/button";
+import { Separator } from "@/components/ui/separator";
 import { logout } from "./actions";
 
 export const metadata: Metadata = { title: "Admin" };
-
-const signOutButtonClass =
-  "rounded-md px-2 py-1 text-xs font-medium text-muted transition-colors hover:bg-surface hover:text-foreground";
 
 export default async function AdminLayout({ children }: LayoutProps<"/admin">) {
   const operator = await getCurrentOperator();
@@ -18,7 +19,7 @@ export default async function AdminLayout({ children }: LayoutProps<"/admin">) {
   if (!operator) return <>{children}</>;
 
   const [settings] = await db
-    .select({ name: storeSettings.name })
+    .select({ name: storeSettings.name, logoUrl: storeSettings.logoUrl })
     .from(storeSettings)
     .where(eq(storeSettings.id, 1));
   const storeName = settings?.name ?? "Mink's Pizza";
@@ -28,30 +29,45 @@ export default async function AdminLayout({ children }: LayoutProps<"/admin">) {
       {/* Desktop sidebar */}
       <aside className="sticky top-0 hidden h-screen w-56 shrink-0 flex-col border-r border-border md:flex">
         <div className="border-b border-border px-5 py-4">
-          <Link href="/admin" className="block">
-            <span className="block truncate text-sm font-semibold tracking-tight">
-              {storeName}
+          <Link href="/admin" className="flex items-center gap-2.5">
+            <StoreMark
+              name={storeName}
+              logoUrl={settings?.logoUrl ?? null}
+              className="size-8"
+              textClassName="text-sm"
+            />
+            <span className="min-w-0">
+              <span className="block truncate text-sm font-semibold tracking-tight">
+                {storeName}
+              </span>
+              <span className="block text-xs text-muted-foreground">Admin</span>
             </span>
-            <span className="block text-xs text-muted">Admin</span>
           </Link>
         </div>
         <div className="flex-1 overflow-y-auto p-3">
           <AdminNavLinks orientation="vertical" />
+          <Separator className="my-3" />
           <a
             href="/"
             target="_blank"
             rel="noreferrer"
-            className="mt-4 block rounded-md px-3 py-2 text-sm text-muted transition-colors hover:bg-surface hover:text-foreground"
+            className="flex items-center gap-2 rounded-lg px-3 py-2 text-sm text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
           >
-            View store →
+            <ExternalLink className="size-4 shrink-0" aria-hidden="true" />
+            View store
           </a>
         </div>
         <div className="border-t border-border p-4">
           <p className="truncate text-sm font-medium">{operator.name}</p>
-          <form action={logout} className="mt-1 -ml-2">
-            <button type="submit" className={signOutButtonClass}>
+          <form action={logout} className="mt-1 -ml-2.5">
+            <Button
+              type="submit"
+              variant="ghost"
+              size="xs"
+              className="text-muted-foreground"
+            >
               Sign out
-            </button>
+            </Button>
           </form>
         </div>
       </aside>
@@ -62,12 +78,17 @@ export default async function AdminLayout({ children }: LayoutProps<"/admin">) {
           <div className="flex items-center justify-between px-4 pt-3">
             <Link href="/admin" className="text-sm font-semibold tracking-tight">
               {storeName}{" "}
-              <span className="font-normal text-muted">Admin</span>
+              <span className="font-normal text-muted-foreground">Admin</span>
             </Link>
             <form action={logout}>
-              <button type="submit" className={signOutButtonClass}>
+              <Button
+                type="submit"
+                variant="ghost"
+                size="xs"
+                className="text-muted-foreground"
+              >
                 Sign out
-              </button>
+              </Button>
             </form>
           </div>
           <div className="flex items-center gap-1 overflow-x-auto px-2 py-2">
@@ -76,9 +97,10 @@ export default async function AdminLayout({ children }: LayoutProps<"/admin">) {
               href="/"
               target="_blank"
               rel="noreferrer"
-              className="whitespace-nowrap rounded-md px-3 py-1.5 text-sm text-muted transition-colors hover:bg-surface hover:text-foreground"
+              className="flex items-center gap-2 rounded-lg px-2.5 py-1.5 text-sm whitespace-nowrap text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
             >
-              View store →
+              <ExternalLink className="size-4 shrink-0" aria-hidden="true" />
+              View store
             </a>
           </div>
         </header>

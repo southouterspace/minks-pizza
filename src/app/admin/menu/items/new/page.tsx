@@ -27,7 +27,7 @@ export default async function NewItemPage() {
   return (
     <div>
       <h1 className="text-xl font-semibold tracking-tight">New item</h1>
-      <p className="mt-1 text-sm text-muted">
+      <p className="mt-1 text-sm text-muted-foreground">
         Add a dish to your menu. You can attach modifier groups for sizes,
         crusts, and toppings.
       </p>

@@ -1,8 +1,20 @@
 "use client";
 
 import Link from "next/link";
+import { Minus, Plus, ShoppingBag } from "lucide-react";
 import { useCart } from "@/components/cart-context";
 import { formatCents } from "@/lib/money";
+import { Button, buttonVariants } from "@/components/ui/button";
+import {
+  Empty,
+  EmptyContent,
+  EmptyDescription,
+  EmptyHeader,
+  EmptyMedia,
+  EmptyTitle,
+} from "@/components/ui/empty";
+import { Separator } from "@/components/ui/separator";
+import { cn } from "@/lib/utils";
 
 export function CartView() {
   const { lines, subtotalCents, updateQuantity, removeLine, ready } = useCart();
@@ -13,17 +25,28 @@ export function CartView() {
 
   if (lines.length === 0) {
     return (
-      <div className="mx-auto max-w-2xl px-4 py-24 text-center sm:px-6">
-        <h1 className="text-2xl font-bold tracking-tight">Your cart is empty</h1>
-        <p className="mt-2 text-sm text-muted">
-          Add something delicious from the menu to get started.
-        </p>
-        <Link
-          href="/"
-          className="mt-6 inline-flex h-10 items-center rounded-md bg-accent px-5 text-sm font-medium text-accent-foreground transition-opacity hover:opacity-85"
-        >
-          Browse the menu
-        </Link>
+      <div className="mx-auto max-w-2xl px-4 py-24 sm:px-6">
+        <Empty>
+          <EmptyHeader>
+            <EmptyMedia variant="icon">
+              <ShoppingBag aria-hidden />
+            </EmptyMedia>
+            <EmptyTitle className="text-2xl! font-bold! tracking-tight">
+              Your cart is empty
+            </EmptyTitle>
+            <EmptyDescription>
+              Add something delicious from the menu to get started.
+            </EmptyDescription>
+          </EmptyHeader>
+          <EmptyContent>
+            <Link
+              href="/"
+              className={cn(buttonVariants({ size: "lg" }), "h-10! px-5!")}
+            >
+              Browse the menu
+            </Link>
+          </EmptyContent>
+        </Empty>
       </div>
     );
   }
@@ -42,7 +65,7 @@ export function CartView() {
                 </span>
               </div>
               {line.modifiers.length > 0 ? (
-                <p className="mt-1 text-sm text-muted">
+                <p className="mt-1 text-sm text-muted-foreground">
                   {line.modifiers
                     .map((m) =>
                       m.priceDeltaCents
@@ -53,39 +76,42 @@ export function CartView() {
                 </p>
               ) : null}
               {line.notes ? (
-                <p className="mt-1 text-sm italic text-faint">“{line.notes}”</p>
+                <p className="mt-1 text-sm italic text-muted-foreground">
+                  “{line.notes}”
+                </p>
               ) : null}
               <div className="mt-3 flex items-center gap-3">
-                <div className="flex items-center rounded-md border border-border">
-                  <button
-                    type="button"
+                <div className="flex items-center rounded-lg border border-border">
+                  <Button
+                    variant="ghost"
+                    size="icon-sm"
                     aria-label={`Decrease quantity of ${line.itemName}`}
                     onClick={() => updateQuantity(line.key, line.quantity - 1)}
-                    className="h-8 w-8 text-muted transition-colors hover:text-foreground"
                   >
-                    −
-                  </button>
+                    <Minus />
+                  </Button>
                   <span className="w-7 text-center text-sm tabular-nums">
                     {line.quantity}
                   </span>
-                  <button
-                    type="button"
+                  <Button
+                    variant="ghost"
+                    size="icon-sm"
                     aria-label={`Increase quantity of ${line.itemName}`}
                     onClick={() =>
                       updateQuantity(line.key, Math.min(50, line.quantity + 1))
                     }
-                    className="h-8 w-8 text-muted transition-colors hover:text-foreground"
                   >
-                    +
-                  </button>
+                    <Plus />
+                  </Button>
                 </div>
-                <button
-                  type="button"
+                <Button
+                  variant="ghost"
+                  size="sm"
                   onClick={() => removeLine(line.key)}
-                  className="text-sm text-muted underline-offset-2 transition-colors hover:text-error hover:underline"
+                  className="text-muted-foreground hover:text-destructive"
                 >
                   Remove
-                </button>
+                </Button>
               </div>
             </div>
           </li>
@@ -93,25 +119,30 @@ export function CartView() {
       </ul>
 
       <div className="mt-6 flex items-center justify-between text-sm">
-        <span className="text-muted">Subtotal</span>
+        <span className="text-muted-foreground">Subtotal</span>
         <span className="text-base font-semibold tabular-nums">
           {formatCents(subtotalCents)}
         </span>
       </div>
-      <p className="mt-1 text-xs text-faint">
+      <p className="mt-1 text-xs text-muted-foreground">
         Tax, fees, and tip are calculated at checkout.
       </p>
+
+      <Separator className="mt-6" />
 
       <div className="mt-6 flex flex-col gap-3 sm:flex-row">
         <Link
           href="/checkout"
-          className="flex h-11 flex-1 items-center justify-center rounded-md bg-accent text-sm font-medium text-accent-foreground transition-opacity hover:opacity-85"
+          className={cn(buttonVariants({ size: "lg" }), "h-11! flex-1")}
         >
           Go to checkout
         </Link>
         <Link
           href="/"
-          className="flex h-11 items-center justify-center rounded-md border border-border px-5 text-sm font-medium transition-colors hover:border-foreground/40"
+          className={cn(
+            buttonVariants({ variant: "outline", size: "lg" }),
+            "h-11! px-5!",
+          )}
         >
           Add more items
         </Link>

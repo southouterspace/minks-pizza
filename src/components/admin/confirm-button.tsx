@@ -1,6 +1,10 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { Button } from "@/components/ui/button";
+
+type ButtonSize = "xs" | "sm" | "default" | "lg";
+type IdleVariant = "outline" | "ghost" | "secondary";
 
 /**
  * Two-step destructive submit: first click arms the button, second click
@@ -9,13 +13,15 @@ import { useEffect, useState } from "react";
 export function ConfirmButton({
   label,
   confirmLabel,
-  className = "",
-  confirmClassName,
+  size = "sm",
+  variant = "outline",
+  className,
 }: {
   label: string;
   confirmLabel: string;
+  size?: ButtonSize;
+  variant?: IdleVariant;
   className?: string;
-  confirmClassName?: string;
 }) {
   const [armed, setArmed] = useState(false);
 
@@ -27,14 +33,20 @@ export function ConfirmButton({
 
   if (!armed) {
     return (
-      <button type="button" onClick={() => setArmed(true)} className={className}>
+      <Button
+        type="button"
+        variant={variant}
+        size={size}
+        className={className}
+        onClick={() => setArmed(true)}
+      >
         {label}
-      </button>
+      </Button>
     );
   }
   return (
-    <button type="submit" className={confirmClassName ?? className}>
+    <Button type="submit" variant="destructive" size={size} className={className}>
       {confirmLabel}
-    </button>
+    </Button>
   );
 }

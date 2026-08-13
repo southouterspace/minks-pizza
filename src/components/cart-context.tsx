@@ -6,7 +6,6 @@ import {
   useContext,
   useEffect,
   useMemo,
-  useRef,
   useState,
 } from "react";
 
@@ -53,7 +52,6 @@ function lineKey(line: Omit<CartLine, "key">): string {
 export function CartProvider({ children }: { children: React.ReactNode }) {
   const [lines, setLines] = useState<CartLine[]>([]);
   const [ready, setReady] = useState(false);
-  const hydrated = useRef(false);
 
   // Hydrate from localStorage after mount — deliberate setState-in-effect so
   // server and first client render agree (empty cart), avoiding hydration
@@ -69,18 +67,20 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
     } catch {
       // corrupted cart — start fresh
     }
-    hydrated.current = true;
     setReady(true);
   }, []);
 
+  // Gated on the `ready` STATE, not a ref: a ref flips synchronously inside the
+  // hydrate effect, so this effect would run in the same commit while `lines`
+  // is still empty and write that empty cart back over the saved one.
   useEffect(() => {
-    if (!hydrated.current) return;
+    if (!ready) return;
     try {
       localStorage.setItem(STORAGE_KEY, JSON.stringify(lines));
     } catch {
       // storage unavailable (private mode) — cart is session-only
     }
-  }, [lines]);
+  }, [lines, ready]);
 
   const addLine = useCallback((line: Omit<CartLine, "key">) => {
     const key = lineKey(line);

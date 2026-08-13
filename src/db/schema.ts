@@ -61,6 +61,12 @@ export const storeSettings = pgTable("store_settings", {
   id: integer("id").primaryKey(), // always 1
   name: text("name").notNull().default("My Pizzeria"),
   tagline: text("tagline"),
+  /**
+   * Store logo shown instead of the initial badge. Either an https URL or a
+   * self-contained data: URL (the admin uploader downscales and inlines the
+   * image, so no object storage is required).
+   */
+  logoUrl: text("logo_url"),
   phone: text("phone"),
   email: text("email"),
   addressLine1: text("address_line1"),

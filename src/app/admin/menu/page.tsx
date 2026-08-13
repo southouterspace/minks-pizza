@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 import { asc } from "drizzle-orm";
+import { ArrowDown, ArrowUp, Plus, UtensilsCrossed } from "lucide-react";
 import { categories, db, menuItems } from "@/db";
 import { requireOperator } from "@/lib/auth";
 import { formatCents } from "@/lib/money";
@@ -15,13 +16,23 @@ import {
   updateCategory,
 } from "@/app/admin/actions";
 import { ConfirmButton } from "@/components/admin/confirm-button";
+import { Badge } from "@/components/ui/badge";
+import { Button, buttonVariants } from "@/components/ui/button";
 import {
-  inputClass,
-  labelClass,
-  primaryButtonClass,
-  smallButtonClass,
-  summaryButtonClass,
-} from "@/components/admin/ui";
+  Card,
+  CardAction,
+  CardHeader,
+  CardTitle,
+} from "@/components/ui/card";
+import {
+  Empty,
+  EmptyDescription,
+  EmptyHeader,
+  EmptyMedia,
+  EmptyTitle,
+} from "@/components/ui/empty";
+import { Field, FieldLabel, FieldGroup } from "@/components/ui/field";
+import { Input } from "@/components/ui/input";
 
 export const dynamic = "force-dynamic";
 
@@ -45,26 +56,30 @@ function ReorderButtons({
       <form action={action}>
         <input type="hidden" name={idName} value={id} />
         <input type="hidden" name="direction" value="up" />
-        <button
+        <Button
           type="submit"
+          variant="ghost"
+          size="icon-sm"
           disabled={isFirst}
           aria-label="Move up"
-          className={`${smallButtonClass} w-7 justify-center px-0 disabled:cursor-not-allowed disabled:opacity-40`}
+          className="text-muted-foreground"
         >
-          ↑
-        </button>
+          <ArrowUp />
+        </Button>
       </form>
       <form action={action}>
         <input type="hidden" name={idName} value={id} />
         <input type="hidden" name="direction" value="down" />
-        <button
+        <Button
           type="submit"
+          variant="ghost"
+          size="icon-sm"
           disabled={isLast}
           aria-label="Move down"
-          className={`${smallButtonClass} w-7 justify-center px-0 disabled:cursor-not-allowed disabled:opacity-40`}
+          className="text-muted-foreground"
         >
-          ↓
-        </button>
+          <ArrowDown />
+        </Button>
       </form>
     </div>
   );
@@ -86,81 +101,89 @@ export default async function MenuPage() {
     <div>
       <div className="flex flex-wrap items-center justify-between gap-3">
         <h1 className="text-xl font-semibold tracking-tight">Menu</h1>
-        <Link href="/admin/menu/items/new" className={primaryButtonClass}>
+        <Link
+          href="/admin/menu/items/new"
+          className={buttonVariants({ variant: "default", size: "default" })}
+        >
+          <Plus aria-hidden="true" />
           New item
         </Link>
       </div>
 
       {/* New category */}
-      <details className="mt-6 rounded-lg border border-border">
-        <summary className="cursor-pointer list-none px-4 py-3 text-sm font-medium text-muted transition-colors hover:text-foreground [&::-webkit-details-marker]:hidden">
-          + New category
-        </summary>
-        <form
-          action={createCategory}
-          className="flex flex-col gap-3 border-t border-border p-4 sm:flex-row sm:items-end"
-        >
-          <div className="flex-1">
-            <label htmlFor="new-cat-name" className={labelClass}>
-              Name
-            </label>
-            <input
-              id="new-cat-name"
-              name="name"
-              type="text"
-              required
-              maxLength={120}
-              className={inputClass}
-            />
-          </div>
-          <div className="flex-1">
-            <label htmlFor="new-cat-description" className={labelClass}>
-              Description{" "}
-              <span className="font-normal text-faint">(optional)</span>
-            </label>
-            <input
-              id="new-cat-description"
-              name="description"
-              type="text"
-              maxLength={500}
-              className={inputClass}
-            />
-          </div>
-          <button type="submit" className={primaryButtonClass}>
-            Add category
-          </button>
-        </form>
-      </details>
+      <Card className="mt-6 gap-0! py-0!">
+        <details>
+          <summary className="cursor-pointer list-none px-4 py-3 text-sm font-medium text-muted-foreground transition-colors hover:text-foreground [&::-webkit-details-marker]:hidden">
+            + New category
+          </summary>
+          <form
+            action={createCategory}
+            className="flex flex-col gap-3 border-t border-border p-4 sm:flex-row sm:items-end"
+          >
+            <Field className="flex-1">
+              <FieldLabel htmlFor="new-cat-name">Name</FieldLabel>
+              <Input
+                id="new-cat-name"
+                name="name"
+                type="text"
+                required
+                maxLength={120}
+              />
+            </Field>
+            <Field className="flex-1">
+              <FieldLabel htmlFor="new-cat-description">
+                Description{" "}
+                <span className="font-normal text-muted-foreground">
+                  (optional)
+                </span>
+              </FieldLabel>
+              <Input
+                id="new-cat-description"
+                name="description"
+                type="text"
+                maxLength={500}
+              />
+            </Field>
+            <Button type="submit" className="shrink-0">
+              Add category
+            </Button>
+          </form>
+        </details>
+      </Card>
 
       {allCategories.length === 0 ? (
-        <div className="mt-6 rounded-lg border border-border px-6 py-14 text-center">
-          <p className="text-sm font-medium">No categories yet</p>
-          <p className="mt-1 text-sm text-muted">
-            Create a category above, then add items to it.
-          </p>
-        </div>
+        <Empty className="mt-6 border">
+          <EmptyHeader>
+            <EmptyMedia variant="icon">
+              <UtensilsCrossed />
+            </EmptyMedia>
+            <EmptyTitle>No categories yet</EmptyTitle>
+            <EmptyDescription>
+              Create a category above, then add items to it.
+            </EmptyDescription>
+          </EmptyHeader>
+        </Empty>
       ) : null}
 
       <div className="mt-6 space-y-6">
         {allCategories.map((category, catIndex) => {
           const items = allItems.filter((i) => i.categoryId === category.id);
           return (
-            <section
-              key={category.id}
-              className="rounded-lg border border-border"
-            >
+            <Card key={category.id} className="gap-0! py-0!">
               {/* Category header */}
-              <div className="flex flex-wrap items-center gap-2 border-b border-border px-4 py-3">
-                <h2 className="text-sm font-semibold">{category.name}</h2>
-                <span className="text-xs text-faint">
-                  {items.length} {items.length === 1 ? "item" : "items"}
-                </span>
-                {!category.isActive ? (
-                  <span className="inline-flex items-center rounded-full bg-surface px-2 py-0.5 text-[11px] font-medium text-muted">
-                    Hidden from store
+              <CardHeader className="border-b pt-3 pb-3!">
+                <CardTitle className="flex flex-wrap items-center gap-2">
+                  <span className="text-sm font-semibold">{category.name}</span>
+                  <span className="text-xs font-normal text-muted-foreground">
+                    {items.length} {items.length === 1 ? "item" : "items"}
                   </span>
-                ) : null}
-                <div className="ml-auto flex flex-wrap items-center gap-1.5">
+                  {!category.isActive ? (
+                    <Badge variant="secondary" className="text-muted-foreground!">
+                      Hidden from store
+                    </Badge>
+                  ) : null}
+                </CardTitle>
+                <CardAction className="flex flex-wrap items-center gap-1.5">
                   <ReorderButtons
                     action={moveCategory}
                     idName="categoryId"
@@ -174,58 +197,56 @@ export default async function MenuPage() {
                       name="categoryId"
                       value={category.id}
                     />
-                    <button type="submit" className={smallButtonClass}>
+                    <Button type="submit" variant="outline" size="sm">
                       {category.isActive ? "Hide" : "Show"}
-                    </button>
+                    </Button>
                   </form>
                   <details className="relative">
-                    <summary className={summaryButtonClass}>Edit</summary>
-                    <div className="absolute right-0 z-20 mt-2 w-72 rounded-lg border border-border bg-background p-4 shadow-sm">
-                      <form action={updateCategory} className="space-y-3">
+                    <summary
+                      className={`${buttonVariants({
+                        variant: "outline",
+                        size: "sm",
+                      })} cursor-pointer list-none [&::-webkit-details-marker]:hidden`}
+                    >
+                      Edit
+                    </summary>
+                    <div className="absolute right-0 z-20 mt-2 w-72 rounded-xl border border-border bg-popover p-4 text-left shadow-md">
+                      <form action={updateCategory}>
                         <input
                           type="hidden"
                           name="categoryId"
                           value={category.id}
                         />
-                        <div>
-                          <label
-                            htmlFor={`cat-name-${category.id}`}
-                            className={labelClass}
-                          >
-                            Name
-                          </label>
-                          <input
-                            id={`cat-name-${category.id}`}
-                            name="name"
-                            type="text"
-                            required
-                            maxLength={120}
-                            defaultValue={category.name}
-                            className={inputClass}
-                          />
-                        </div>
-                        <div>
-                          <label
-                            htmlFor={`cat-desc-${category.id}`}
-                            className={labelClass}
-                          >
-                            Description
-                          </label>
-                          <input
-                            id={`cat-desc-${category.id}`}
-                            name="description"
-                            type="text"
-                            maxLength={500}
-                            defaultValue={category.description ?? ""}
-                            className={inputClass}
-                          />
-                        </div>
-                        <button
-                          type="submit"
-                          className={`${primaryButtonClass} w-full`}
-                        >
-                          Save
-                        </button>
+                        <FieldGroup>
+                          <Field>
+                            <FieldLabel htmlFor={`cat-name-${category.id}`}>
+                              Name
+                            </FieldLabel>
+                            <Input
+                              id={`cat-name-${category.id}`}
+                              name="name"
+                              type="text"
+                              required
+                              maxLength={120}
+                              defaultValue={category.name}
+                            />
+                          </Field>
+                          <Field>
+                            <FieldLabel htmlFor={`cat-desc-${category.id}`}>
+                              Description
+                            </FieldLabel>
+                            <Input
+                              id={`cat-desc-${category.id}`}
+                              name="description"
+                              type="text"
+                              maxLength={500}
+                              defaultValue={category.description ?? ""}
+                            />
+                          </Field>
+                          <Button type="submit" className="w-full">
+                            Save
+                          </Button>
+                        </FieldGroup>
                       </form>
                     </div>
                   </details>
@@ -238,21 +259,19 @@ export default async function MenuPage() {
                     <ConfirmButton
                       label="Delete"
                       confirmLabel="Delete category + items?"
-                      className={smallButtonClass}
-                      confirmClassName="inline-flex h-7 items-center rounded-md border border-error px-2.5 text-xs font-medium text-error transition-opacity hover:opacity-85"
                     />
                   </form>
-                </div>
-              </div>
+                </CardAction>
+              </CardHeader>
               {category.description ? (
-                <p className="border-b border-border px-4 py-2 text-xs text-muted">
+                <p className="border-b border-border px-4 py-2 text-xs text-muted-foreground">
                   {category.description}
                 </p>
               ) : null}
 
               {/* Items */}
               {items.length === 0 ? (
-                <p className="px-4 py-4 text-sm text-faint">
+                <p className="px-4 py-4 text-sm text-muted-foreground">
                   No items in this category yet.
                 </p>
               ) : (
@@ -268,9 +287,12 @@ export default async function MenuPage() {
                             {item.name}
                           </span>
                           {item.isFeatured ? (
-                            <span className="inline-flex items-center rounded-full border border-border px-2 py-0.5 text-[11px] font-medium text-muted">
+                            <Badge
+                              variant="outline"
+                              className="text-muted-foreground!"
+                            >
                               Featured
-                            </span>
+                            </Badge>
                           ) : null}
                         </div>
                       </div>
@@ -279,18 +301,20 @@ export default async function MenuPage() {
                       </span>
                       <form action={toggleItemAvailability}>
                         <input type="hidden" name="itemId" value={item.id} />
-                        <button
+                        <Button
                           type="submit"
-                          className={`inline-flex h-7 items-center rounded-md border px-2.5 text-xs font-medium transition-opacity hover:opacity-80 ${
+                          variant="outline"
+                          size="sm"
+                          className={
                             item.isAvailable
-                              ? "border-success/40 text-success"
-                              : "border-error/40 text-error"
-                          }`}
+                              ? "border-success/40! text-success!"
+                              : "border-destructive/40! text-destructive!"
+                          }
                         >
                           {item.isAvailable
                             ? "Available"
                             : "86’d — unavailable"}
-                        </button>
+                        </Button>
                       </form>
                       <ReorderButtons
                         action={moveItem}
@@ -301,7 +325,10 @@ export default async function MenuPage() {
                       />
                       <Link
                         href={`/admin/menu/items/${item.id}`}
-                        className={smallButtonClass}
+                        className={buttonVariants({
+                          variant: "outline",
+                          size: "sm",
+                        })}
                       >
                         Edit
                       </Link>
@@ -310,15 +337,13 @@ export default async function MenuPage() {
                         <ConfirmButton
                           label="Delete"
                           confirmLabel="Really delete?"
-                          className={smallButtonClass}
-                          confirmClassName="inline-flex h-7 items-center rounded-md border border-error px-2.5 text-xs font-medium text-error transition-opacity hover:opacity-85"
                         />
                       </form>
                     </li>
                   ))}
                 </ul>
               )}
-            </section>
+            </Card>
           );
         })}
       </div>

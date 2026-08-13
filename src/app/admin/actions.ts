@@ -611,6 +611,20 @@ export async function deleteModifier(formData: FormData): Promise<void> {
 
 const TIME_RE = /^\d{2}:\d{2}$/;
 
+/**
+ * Accepts only an https URL or an inline image data URL, so a hostile value
+ * can't turn the logo into a `javascript:` or other active-content URL.
+ */
+function logoUrlOrNull(formData: FormData): string | null {
+  const raw = textField(formData, "logoUrl");
+  if (!raw) return null;
+  if (/^data:image\/(png|jpeg|webp|gif|svg\+xml);base64,[A-Za-z0-9+/=]+$/.test(raw)) {
+    return raw;
+  }
+  if (/^https:\/\/\S+$/i.test(raw)) return raw;
+  return null;
+}
+
 export async function saveSettings(formData: FormData): Promise<void> {
   await requireOperator();
 
@@ -635,6 +649,7 @@ export async function saveSettings(formData: FormData): Promise<void> {
   const values = {
     name: textField(formData, "name") || "My Pizzeria",
     tagline: textOrNull(formData, "tagline"),
+    logoUrl: logoUrlOrNull(formData),
     phone: textOrNull(formData, "phone"),
     email: textOrNull(formData, "email"),
     addressLine1: textOrNull(formData, "addressLine1"),

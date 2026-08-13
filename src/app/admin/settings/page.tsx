@@ -8,12 +8,21 @@ import {
   toggleAcceptingOrders,
   togglePublished,
 } from "@/app/admin/actions";
+import { ToggleSwitchForm } from "@/components/admin/toggle-switch-form";
+import { LogoField } from "@/components/admin/logo-field";
+import { centsToDollars } from "@/components/admin/ui";
+import { Button } from "@/components/ui/button";
+import { Card } from "@/components/ui/card";
+import { Checkbox } from "@/components/ui/checkbox";
 import {
-  centsToDollars,
-  inputClass,
-  labelClass,
-  primaryButtonClass,
-} from "@/components/admin/ui";
+  Field,
+  FieldDescription,
+  FieldGroup,
+  FieldLabel,
+  FieldLegend,
+  FieldSet,
+} from "@/components/ui/field";
+import { Input } from "@/components/ui/input";
 
 export const dynamic = "force-dynamic";
 
@@ -22,6 +31,7 @@ export const metadata: Metadata = { title: "Settings" };
 const DEFAULTS = {
   name: "My Pizzeria",
   tagline: null as string | null,
+  logoUrl: null as string | null,
   phone: null as string | null,
   email: null as string | null,
   addressLine1: null as string | null,
@@ -40,35 +50,6 @@ const DEFAULTS = {
   isPublished: false,
   isAcceptingOrders: true,
 };
-
-function Switch({ on, label }: { on: boolean; label: string }) {
-  return (
-    <button
-      type="submit"
-      role="switch"
-      aria-checked={on}
-      className={`relative inline-flex h-6 w-11 shrink-0 rounded-full transition-colors ${
-        on ? "bg-success" : "bg-border"
-      }`}
-    >
-      <span className="sr-only">{label}</span>
-      <span
-        aria-hidden="true"
-        className={`absolute top-0.5 left-0 h-5 w-5 rounded-full border border-border bg-white transition-transform ${
-          on ? "translate-x-[22px]" : "translate-x-0.5"
-        }`}
-      />
-    </button>
-  );
-}
-
-function SectionHeading({ children }: { children: React.ReactNode }) {
-  return (
-    <h2 className="border-b border-border pb-2 text-sm font-semibold">
-      {children}
-    </h2>
-  );
-}
 
 export default async function SettingsPage({
   searchParams,
@@ -93,35 +74,31 @@ export default async function SettingsPage({
       <h1 className="text-xl font-semibold tracking-tight">Settings</h1>
 
       {/* Storefront controls */}
-      <section className="mt-6 rounded-lg border border-border">
+      <Card className="mt-6 gap-0! py-0!">
         <div className="flex items-start justify-between gap-4 px-5 py-4">
           <div>
             <h2 className="text-sm font-semibold">Publish store</h2>
-            <p className="mt-1 text-sm text-muted">
+            <p className="mt-1 text-sm text-muted-foreground">
               {settings.isPublished ? (
                 <span className="font-medium text-success">
                   Your store is live.
                 </span>
               ) : (
-                <>
-                  Your store is hidden — customers see a coming-soon page.
-                </>
+                <>Your store is hidden — customers see a coming-soon page.</>
               )}
             </p>
           </div>
-          <form action={togglePublished} className="pt-0.5">
-            <Switch
-              on={settings.isPublished}
-              label={
-                settings.isPublished ? "Unpublish store" : "Publish store"
-              }
-            />
-          </form>
+          <ToggleSwitchForm
+            action={togglePublished}
+            checked={settings.isPublished}
+            label={settings.isPublished ? "Unpublish store" : "Publish store"}
+            className="pt-1"
+          />
         </div>
         <div className="flex items-start justify-between gap-4 border-t border-border px-5 py-4">
           <div>
             <h2 className="text-sm font-semibold">Accepting orders</h2>
-            <p className="mt-1 text-sm text-muted">
+            <p className="mt-1 text-sm text-muted-foreground">
               Pause online ordering temporarily without unpublishing.
               {settings.isAcceptingOrders ? null : (
                 <span className="block font-medium text-warning">
@@ -130,160 +107,138 @@ export default async function SettingsPage({
               )}
             </p>
           </div>
-          <form action={toggleAcceptingOrders} className="pt-0.5">
-            <Switch
-              on={settings.isAcceptingOrders}
-              label={
-                settings.isAcceptingOrders
-                  ? "Pause online ordering"
-                  : "Resume online ordering"
-              }
-            />
-          </form>
+          <ToggleSwitchForm
+            action={toggleAcceptingOrders}
+            checked={settings.isAcceptingOrders}
+            label={
+              settings.isAcceptingOrders
+                ? "Pause online ordering"
+                : "Resume online ordering"
+            }
+            className="pt-1"
+          />
         </div>
-      </section>
+      </Card>
 
       {/* Main settings form */}
       <form action={saveSettings} className="mt-8 max-w-2xl space-y-8">
-        <section className="space-y-4">
-          <SectionHeading>Store info</SectionHeading>
+        <FieldSet>
+          <FieldLegend className="w-full border-b border-border pb-2 text-sm!">
+            Store info
+          </FieldLegend>
+          <LogoField initialLogoUrl={settings.logoUrl} />
           <div className="grid gap-4 sm:grid-cols-2">
-            <div>
-              <label htmlFor="s-name" className={labelClass}>
-                Store name
-              </label>
-              <input
+            <Field>
+              <FieldLabel htmlFor="s-name">Store name</FieldLabel>
+              <Input
                 id="s-name"
                 name="name"
                 type="text"
                 required
                 maxLength={120}
                 defaultValue={settings.name}
-                className={inputClass}
               />
-            </div>
-            <div>
-              <label htmlFor="s-tagline" className={labelClass}>
-                Tagline
-              </label>
-              <input
+            </Field>
+            <Field>
+              <FieldLabel htmlFor="s-tagline">Tagline</FieldLabel>
+              <Input
                 id="s-tagline"
                 name="tagline"
                 type="text"
                 maxLength={200}
                 defaultValue={settings.tagline ?? ""}
-                className={inputClass}
               />
-            </div>
-            <div>
-              <label htmlFor="s-phone" className={labelClass}>
-                Phone
-              </label>
-              <input
+            </Field>
+            <Field>
+              <FieldLabel htmlFor="s-phone">Phone</FieldLabel>
+              <Input
                 id="s-phone"
                 name="phone"
                 type="tel"
                 maxLength={25}
                 defaultValue={settings.phone ?? ""}
-                className={inputClass}
               />
-            </div>
-            <div>
-              <label htmlFor="s-email" className={labelClass}>
-                Email
-              </label>
-              <input
+            </Field>
+            <Field>
+              <FieldLabel htmlFor="s-email">Email</FieldLabel>
+              <Input
                 id="s-email"
                 name="email"
                 type="email"
                 maxLength={200}
                 defaultValue={settings.email ?? ""}
-                className={inputClass}
               />
-            </div>
+            </Field>
           </div>
-        </section>
+        </FieldSet>
 
-        <section className="space-y-4">
-          <SectionHeading>Address</SectionHeading>
+        <FieldSet>
+          <FieldLegend className="w-full border-b border-border pb-2 text-sm!">
+            Address
+          </FieldLegend>
           <div className="grid gap-4 sm:grid-cols-2">
-            <div>
-              <label htmlFor="s-address1" className={labelClass}>
-                Address line 1
-              </label>
-              <input
+            <Field>
+              <FieldLabel htmlFor="s-address1">Address line 1</FieldLabel>
+              <Input
                 id="s-address1"
                 name="addressLine1"
                 type="text"
                 maxLength={200}
                 defaultValue={settings.addressLine1 ?? ""}
-                className={inputClass}
               />
-            </div>
-            <div>
-              <label htmlFor="s-address2" className={labelClass}>
-                Address line 2
-              </label>
-              <input
+            </Field>
+            <Field>
+              <FieldLabel htmlFor="s-address2">Address line 2</FieldLabel>
+              <Input
                 id="s-address2"
                 name="addressLine2"
                 type="text"
                 maxLength={200}
                 defaultValue={settings.addressLine2 ?? ""}
-                className={inputClass}
               />
-            </div>
-            <div>
-              <label htmlFor="s-city" className={labelClass}>
-                City
-              </label>
-              <input
+            </Field>
+            <Field>
+              <FieldLabel htmlFor="s-city">City</FieldLabel>
+              <Input
                 id="s-city"
                 name="city"
                 type="text"
                 maxLength={100}
                 defaultValue={settings.city ?? ""}
-                className={inputClass}
               />
-            </div>
+            </Field>
             <div className="grid grid-cols-2 gap-4">
-              <div>
-                <label htmlFor="s-state" className={labelClass}>
-                  State
-                </label>
-                <input
+              <Field>
+                <FieldLabel htmlFor="s-state">State</FieldLabel>
+                <Input
                   id="s-state"
                   name="state"
                   type="text"
                   maxLength={20}
                   defaultValue={settings.state ?? ""}
-                  className={inputClass}
                 />
-              </div>
-              <div>
-                <label htmlFor="s-zip" className={labelClass}>
-                  ZIP
-                </label>
-                <input
+              </Field>
+              <Field>
+                <FieldLabel htmlFor="s-zip">ZIP</FieldLabel>
+                <Input
                   id="s-zip"
                   name="zip"
                   type="text"
                   maxLength={20}
                   defaultValue={settings.zip ?? ""}
-                  className={inputClass}
                 />
-              </div>
+              </Field>
             </div>
           </div>
-        </section>
+        </FieldSet>
 
-        <section className="space-y-4">
-          <SectionHeading>Taxes</SectionHeading>
-          <div className="max-w-xs">
-            <label htmlFor="s-tax" className={labelClass}>
-              Sales tax rate (%)
-            </label>
-            <input
+        <FieldSet>
+          <FieldLegend className="w-full border-b border-border pb-2 text-sm!">
+            Taxes
+          </FieldLegend>
+          <Field className="max-w-xs">
+            <FieldLabel htmlFor="s-tax">Sales tax rate (%)</FieldLabel>
+            <Input
               id="s-tax"
               name="taxPercent"
               type="number"
@@ -291,160 +246,172 @@ export default async function SettingsPage({
               min="0"
               max="100"
               defaultValue={(settings.taxRateBps / 100).toFixed(2)}
-              className={`${inputClass} tabular-nums`}
+              className="tabular-nums"
             />
-            <p className="mt-1.5 text-xs text-faint">
+            <FieldDescription>
               Applied to the order subtotal, e.g. 8.75 for 8.75%.
-            </p>
-          </div>
-        </section>
+            </FieldDescription>
+          </Field>
+        </FieldSet>
 
-        <section className="space-y-4">
-          <SectionHeading>Ordering</SectionHeading>
+        <FieldSet>
+          <FieldLegend className="w-full border-b border-border pb-2 text-sm!">
+            Ordering
+          </FieldLegend>
           <div className="grid gap-4 sm:grid-cols-2">
-            <div className="space-y-3 rounded-lg border border-border p-4">
-              <label className="flex items-center gap-2 text-sm font-medium">
-                <input
-                  type="checkbox"
-                  name="pickupEnabled"
-                  defaultChecked={settings.pickupEnabled}
-                  className="h-4 w-4 accent-black"
-                />
-                Pickup enabled
-              </label>
-              <div>
-                <label htmlFor="s-pickup-prep" className={labelClass}>
-                  Pickup prep time (minutes)
-                </label>
-                <input
-                  id="s-pickup-prep"
-                  name="pickupPrepMinutes"
-                  type="number"
-                  min="0"
-                  step="1"
-                  defaultValue={settings.pickupPrepMinutes}
-                  className={`${inputClass} tabular-nums`}
-                />
-              </div>
-            </div>
-            <div className="space-y-3 rounded-lg border border-border p-4">
-              <label className="flex items-center gap-2 text-sm font-medium">
-                <input
-                  type="checkbox"
-                  name="deliveryEnabled"
-                  defaultChecked={settings.deliveryEnabled}
-                  className="h-4 w-4 accent-black"
-                />
-                Delivery enabled
-              </label>
-              <div>
-                <label htmlFor="s-delivery-prep" className={labelClass}>
-                  Delivery prep time (minutes)
-                </label>
-                <input
-                  id="s-delivery-prep"
-                  name="deliveryPrepMinutes"
-                  type="number"
-                  min="0"
-                  step="1"
-                  defaultValue={settings.deliveryPrepMinutes}
-                  className={`${inputClass} tabular-nums`}
-                />
-              </div>
-              <div className="grid grid-cols-2 gap-4">
-                <div>
-                  <label htmlFor="s-delivery-fee" className={labelClass}>
-                    Delivery fee ($)
-                  </label>
-                  <input
-                    id="s-delivery-fee"
-                    name="deliveryFee"
-                    type="number"
-                    step="0.01"
-                    min="0"
-                    defaultValue={centsToDollars(settings.deliveryFeeCents)}
-                    className={`${inputClass} tabular-nums`}
+            <Card>
+              <FieldGroup className="px-4">
+                <Field orientation="horizontal">
+                  <Checkbox
+                    id="s-pickup-enabled"
+                    name="pickupEnabled"
+                    defaultChecked={settings.pickupEnabled}
                   />
-                </div>
-                <div>
-                  <label htmlFor="s-delivery-min" className={labelClass}>
-                    Delivery minimum ($)
-                  </label>
-                  <input
-                    id="s-delivery-min"
-                    name="deliveryMinimum"
+                  <FieldLabel htmlFor="s-pickup-enabled">
+                    Pickup enabled
+                  </FieldLabel>
+                </Field>
+                <Field>
+                  <FieldLabel htmlFor="s-pickup-prep">
+                    Pickup prep time (minutes)
+                  </FieldLabel>
+                  <Input
+                    id="s-pickup-prep"
+                    name="pickupPrepMinutes"
                     type="number"
-                    step="0.01"
                     min="0"
-                    defaultValue={centsToDollars(
-                      settings.deliveryMinimumCents,
-                    )}
-                    className={`${inputClass} tabular-nums`}
+                    step="1"
+                    defaultValue={settings.pickupPrepMinutes}
+                    className="tabular-nums"
                   />
+                </Field>
+              </FieldGroup>
+            </Card>
+            <Card>
+              <FieldGroup className="px-4">
+                <Field orientation="horizontal">
+                  <Checkbox
+                    id="s-delivery-enabled"
+                    name="deliveryEnabled"
+                    defaultChecked={settings.deliveryEnabled}
+                  />
+                  <FieldLabel htmlFor="s-delivery-enabled">
+                    Delivery enabled
+                  </FieldLabel>
+                </Field>
+                <Field>
+                  <FieldLabel htmlFor="s-delivery-prep">
+                    Delivery prep time (minutes)
+                  </FieldLabel>
+                  <Input
+                    id="s-delivery-prep"
+                    name="deliveryPrepMinutes"
+                    type="number"
+                    min="0"
+                    step="1"
+                    defaultValue={settings.deliveryPrepMinutes}
+                    className="tabular-nums"
+                  />
+                </Field>
+                <div className="grid grid-cols-2 gap-4">
+                  <Field>
+                    <FieldLabel htmlFor="s-delivery-fee">
+                      Delivery fee ($)
+                    </FieldLabel>
+                    <Input
+                      id="s-delivery-fee"
+                      name="deliveryFee"
+                      type="number"
+                      step="0.01"
+                      min="0"
+                      defaultValue={centsToDollars(settings.deliveryFeeCents)}
+                      className="tabular-nums"
+                    />
+                  </Field>
+                  <Field>
+                    <FieldLabel htmlFor="s-delivery-min">
+                      Delivery minimum ($)
+                    </FieldLabel>
+                    <Input
+                      id="s-delivery-min"
+                      name="deliveryMinimum"
+                      type="number"
+                      step="0.01"
+                      min="0"
+                      defaultValue={centsToDollars(
+                        settings.deliveryMinimumCents,
+                      )}
+                      className="tabular-nums"
+                    />
+                  </Field>
                 </div>
-              </div>
-            </div>
+              </FieldGroup>
+            </Card>
           </div>
-        </section>
+        </FieldSet>
 
-        <section className="space-y-4">
-          <SectionHeading>Hours</SectionHeading>
+        <FieldSet>
+          <FieldLegend className="w-full border-b border-border pb-2 text-sm!">
+            Hours
+          </FieldLegend>
           <div className="space-y-2">
             {DAY_NAMES.map((dayName, day) => {
               const dayHours = hoursByDay.get(day);
               return (
                 <div
                   key={day}
-                  className="flex flex-wrap items-center gap-3 rounded-md border border-border px-3 py-2"
+                  className="flex flex-wrap items-center gap-3 rounded-lg border border-border px-3 py-2"
                 >
                   <span className="w-24 text-sm font-medium">{dayName}</span>
-                  <label className="flex items-center gap-2 text-sm text-muted">
-                    <input
-                      type="checkbox"
+                  <Field orientation="horizontal" className="w-auto">
+                    <Checkbox
+                      id={`closed-${day}`}
                       name={`closed-${day}`}
                       defaultChecked={dayHours?.closed ?? false}
-                      className="h-4 w-4 accent-black"
                     />
-                    Closed
-                  </label>
+                    <FieldLabel
+                      htmlFor={`closed-${day}`}
+                      className="font-normal! text-muted-foreground"
+                    >
+                      Closed
+                    </FieldLabel>
+                  </Field>
                   <div className="ml-auto flex items-center gap-2">
-                    <label
+                    <FieldLabel
                       htmlFor={`open-${day}`}
-                      className="text-xs text-faint"
+                      className="text-xs! font-normal! text-muted-foreground"
                     >
                       Open
-                    </label>
-                    <input
+                    </FieldLabel>
+                    <Input
                       id={`open-${day}`}
                       name={`open-${day}`}
                       type="time"
                       defaultValue={dayHours?.open ?? "11:00"}
-                      className={`${inputClass} w-auto tabular-nums`}
+                      className="w-auto tabular-nums"
                     />
-                    <label
+                    <FieldLabel
                       htmlFor={`close-${day}`}
-                      className="text-xs text-faint"
+                      className="text-xs! font-normal! text-muted-foreground"
                     >
                       Close
-                    </label>
-                    <input
+                    </FieldLabel>
+                    <Input
                       id={`close-${day}`}
                       name={`close-${day}`}
                       type="time"
                       defaultValue={dayHours?.close ?? "21:00"}
-                      className={`${inputClass} w-auto tabular-nums`}
+                      className="w-auto tabular-nums"
                     />
                   </div>
                 </div>
               );
             })}
           </div>
-        </section>
+        </FieldSet>
 
         <div className="flex items-center gap-3 border-t border-border pt-5">
-          <button type="submit" className={primaryButtonClass}>
-            Save settings
-          </button>
+          <Button type="submit">Save settings</Button>
           {saved ? (
             <span className="text-sm font-medium text-success" role="status">
               Saved
