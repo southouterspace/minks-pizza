@@ -1,0 +1,41 @@
+"use client";
+
+import { useEffect, useState } from "react";
+import type { DayHours } from "@/db/schema";
+import { isOpenNow } from "@/lib/hours";
+
+/**
+ * Open/closed pill computed on the client so it reflects the visitor's
+ * local clock (informational — ordering is governed by the operator's
+ * pause switch, not by hours).
+ */
+export function StoreStatusBanner({
+  hours,
+  acceptingOrders,
+}: {
+  hours: DayHours[] | null;
+  acceptingOrders: boolean;
+}) {
+  const [open, setOpen] = useState<boolean | null>(null);
+
+  useEffect(() => {
+    setOpen(isOpenNow(hours));
+    const t = setInterval(() => setOpen(isOpenNow(hours)), 60_000);
+    return () => clearInterval(t);
+  }, [hours]);
+
+  if (open === null) return null;
+
+  return (
+    <span className="inline-flex items-center gap-1.5 font-medium">
+      <span
+        className={`h-2 w-2 rounded-full ${
+          open && acceptingOrders ? "bg-success" : "bg-error"
+        }`}
+      />
+      <span className={open && acceptingOrders ? "text-success" : "text-error"}>
+        {!acceptingOrders ? "Ordering paused" : open ? "Open now" : "Closed now"}
+      </span>
+    </span>
+  );
+}
