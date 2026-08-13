@@ -1,13 +1,19 @@
 import Link from "next/link";
 import { saveItem } from "@/app/admin/actions";
+import { Button, buttonVariants } from "@/components/ui/button";
+import { Checkbox } from "@/components/ui/checkbox";
 import {
-  centsToDollars,
-  inputClass,
-  labelClass,
-  primaryButtonClass,
-  ruleSummary,
-  secondaryButtonClass,
-} from "./ui";
+  Field,
+  FieldDescription,
+  FieldGroup,
+  FieldLabel,
+  FieldLegend,
+  FieldSet,
+} from "@/components/ui/field";
+import { Input } from "@/components/ui/input";
+import { NativeSelect } from "@/components/ui/native-select";
+import { Textarea } from "@/components/ui/textarea";
+import { centsToDollars, ruleSummary } from "./ui";
 
 export type ItemFormItem = {
   id: number;
@@ -43,140 +49,141 @@ export function ItemForm({
   const selected = new Set(selectedGroupIds);
 
   return (
-    <form action={saveItem} className="max-w-xl space-y-5">
+    <form action={saveItem} className="max-w-xl">
       {item ? <input type="hidden" name="itemId" value={item.id} /> : null}
 
-      <div>
-        <label htmlFor="item-name" className={labelClass}>
-          Name
-        </label>
-        <input
-          id="item-name"
-          name="name"
-          type="text"
-          required
-          maxLength={200}
-          defaultValue={item?.name ?? ""}
-          className={inputClass}
-        />
-      </div>
-
-      <div>
-        <label htmlFor="item-description" className={labelClass}>
-          Description <span className="font-normal text-faint">(optional)</span>
-        </label>
-        <textarea
-          id="item-description"
-          name="description"
-          rows={3}
-          maxLength={2000}
-          defaultValue={item?.description ?? ""}
-          className={`${inputClass} resize-none`}
-        />
-      </div>
-
-      <div className="grid gap-5 sm:grid-cols-2">
-        <div>
-          <label htmlFor="item-price" className={labelClass}>
-            Price ($)
-          </label>
-          <input
-            id="item-price"
-            name="price"
-            type="number"
-            step="0.01"
-            min="0"
+      <FieldGroup>
+        <Field>
+          <FieldLabel htmlFor="item-name">Name</FieldLabel>
+          <Input
+            id="item-name"
+            name="name"
+            type="text"
             required
-            defaultValue={item ? centsToDollars(item.basePriceCents) : ""}
-            className={`${inputClass} tabular-nums`}
+            maxLength={200}
+            defaultValue={item?.name ?? ""}
           />
+        </Field>
+
+        <Field>
+          <FieldLabel htmlFor="item-description">
+            Description{" "}
+            <span className="font-normal text-muted-foreground">
+              (optional)
+            </span>
+          </FieldLabel>
+          <Textarea
+            id="item-description"
+            name="description"
+            rows={3}
+            maxLength={2000}
+            defaultValue={item?.description ?? ""}
+            className="resize-none"
+          />
+        </Field>
+
+        <div className="grid gap-5 sm:grid-cols-2">
+          <Field>
+            <FieldLabel htmlFor="item-price">Price ($)</FieldLabel>
+            <Input
+              id="item-price"
+              name="price"
+              type="number"
+              step="0.01"
+              min="0"
+              required
+              defaultValue={item ? centsToDollars(item.basePriceCents) : ""}
+              className="tabular-nums"
+            />
+          </Field>
+          <Field>
+            <FieldLabel htmlFor="item-category">Category</FieldLabel>
+            <NativeSelect
+              id="item-category"
+              name="categoryId"
+              required
+              defaultValue={item?.categoryId ?? allCategories[0]?.id ?? ""}
+              className="w-full"
+            >
+              {allCategories.map((category) => (
+                <option key={category.id} value={category.id}>
+                  {category.name}
+                </option>
+              ))}
+            </NativeSelect>
+          </Field>
         </div>
-        <div>
-          <label htmlFor="item-category" className={labelClass}>
-            Category
-          </label>
-          <select
-            id="item-category"
-            name="categoryId"
-            required
-            defaultValue={item?.categoryId ?? allCategories[0]?.id ?? ""}
-            className={inputClass}
+
+        <div className="flex flex-wrap gap-6">
+          <Field orientation="horizontal" className="w-auto">
+            <Checkbox
+              id="item-available"
+              name="isAvailable"
+              defaultChecked={item?.isAvailable ?? true}
+            />
+            <FieldLabel htmlFor="item-available" className="font-normal!">
+              Available for ordering
+            </FieldLabel>
+          </Field>
+          <Field orientation="horizontal" className="w-auto">
+            <Checkbox
+              id="item-featured"
+              name="isFeatured"
+              defaultChecked={item?.isFeatured ?? false}
+            />
+            <FieldLabel htmlFor="item-featured" className="font-normal!">
+              Featured (“Popular” badge)
+            </FieldLabel>
+          </Field>
+        </div>
+
+        <FieldSet>
+          <FieldLegend variant="label">Modifier groups</FieldLegend>
+          <FieldDescription>
+            Options customers pick when ordering this item.
+          </FieldDescription>
+          {allGroups.length === 0 ? (
+            <p className="text-sm text-muted-foreground">
+              No modifier groups yet — create them under Modifiers.
+            </p>
+          ) : (
+            <div className="space-y-1.5">
+              {allGroups.map((group) => (
+                <FieldLabel
+                  key={group.id}
+                  htmlFor={`group-${group.id}`}
+                  className="w-full cursor-pointer rounded-lg border border-border px-3.5 py-2.5 font-normal! transition-colors hover:bg-muted"
+                >
+                  <span className="flex flex-1 items-center gap-3">
+                    <Checkbox
+                      id={`group-${group.id}`}
+                      name="groupIds"
+                      value={String(group.id)}
+                      defaultChecked={selected.has(group.id)}
+                    />
+                    <span className="text-sm">{group.name}</span>
+                  </span>
+                  <span className="text-xs text-muted-foreground">
+                    {ruleSummary(group.minSelect, group.maxSelect)} ·{" "}
+                    {group.modifierCount}{" "}
+                    {group.modifierCount === 1 ? "option" : "options"}
+                  </span>
+                </FieldLabel>
+              ))}
+            </div>
+          )}
+        </FieldSet>
+
+        <div className="flex items-center gap-3 border-t border-border pt-5">
+          <Button type="submit">{item ? "Save changes" : "Create item"}</Button>
+          <Link
+            href="/admin/menu"
+            className={buttonVariants({ variant: "outline" })}
           >
-            {allCategories.map((category) => (
-              <option key={category.id} value={category.id}>
-                {category.name}
-              </option>
-            ))}
-          </select>
+            Cancel
+          </Link>
         </div>
-      </div>
-
-      <div className="flex flex-wrap gap-6">
-        <label className="flex items-center gap-2 text-sm">
-          <input
-            type="checkbox"
-            name="isAvailable"
-            defaultChecked={item?.isAvailable ?? true}
-            className="h-4 w-4 accent-black"
-          />
-          Available for ordering
-        </label>
-        <label className="flex items-center gap-2 text-sm">
-          <input
-            type="checkbox"
-            name="isFeatured"
-            defaultChecked={item?.isFeatured ?? false}
-            className="h-4 w-4 accent-black"
-          />
-          Featured (“Popular” badge)
-        </label>
-      </div>
-
-      <fieldset>
-        <legend className="text-sm font-medium">Modifier groups</legend>
-        <p className="mt-1 text-xs text-muted">
-          Options customers pick when ordering this item.
-        </p>
-        {allGroups.length === 0 ? (
-          <p className="mt-3 text-sm text-faint">
-            No modifier groups yet — create them under Modifiers.
-          </p>
-        ) : (
-          <div className="mt-3 space-y-1.5">
-            {allGroups.map((group) => (
-              <label
-                key={group.id}
-                className="flex cursor-pointer items-center justify-between gap-3 rounded-md border border-border px-3.5 py-2.5 text-sm transition-colors hover:border-foreground/30"
-              >
-                <span className="flex items-center gap-3">
-                  <input
-                    type="checkbox"
-                    name="groupIds"
-                    value={group.id}
-                    defaultChecked={selected.has(group.id)}
-                    className="h-4 w-4 accent-black"
-                  />
-                  {group.name}
-                </span>
-                <span className="text-xs text-faint">
-                  {ruleSummary(group.minSelect, group.maxSelect)} ·{" "}
-                  {group.modifierCount}{" "}
-                  {group.modifierCount === 1 ? "option" : "options"}
-                </span>
-              </label>
-            ))}
-          </div>
-        )}
-      </fieldset>
-
-      <div className="flex items-center gap-3 border-t border-border pt-5">
-        <button type="submit" className={primaryButtonClass}>
-          {item ? "Save changes" : "Create item"}
-        </button>
-        <Link href="/admin/menu" className={secondaryButtonClass}>
-          Cancel
-        </Link>
-      </div>
+      </FieldGroup>
     </form>
   );
 }

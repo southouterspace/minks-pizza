@@ -2,25 +2,48 @@ import type { InferSelectModel } from "drizzle-orm";
 import type { orderItems, orders } from "@/db";
 import { updateOrderStatus } from "@/app/admin/actions";
 import { formatCents } from "@/lib/money";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import {
+  Card,
+  CardAction,
+  CardContent,
+  CardFooter,
+  CardHeader,
+  CardTitle,
+} from "@/components/ui/card";
 import { ConfirmButton } from "./confirm-button";
-import { formatDateTime, smallButtonClass } from "./ui";
+import { formatDateTime } from "./ui";
 
 export type AdminOrder = InferSelectModel<typeof orders> & {
   items: InferSelectModel<typeof orderItems>[];
 };
 
 type OrderStatus = AdminOrder["status"];
+type BadgeVariant = "default" | "secondary" | "destructive" | "outline";
 
 export const STATUS_META: Record<
   OrderStatus,
-  { label: string; className: string }
+  { label: string; variant: BadgeVariant; className?: string }
 > = {
-  new: { label: "New", className: "bg-warning/10 text-warning" },
-  confirmed: { label: "Confirmed", className: "bg-surface text-foreground" },
-  preparing: { label: "Preparing", className: "bg-surface text-foreground" },
-  ready: { label: "Ready", className: "bg-success/10 text-success" },
-  completed: { label: "Completed", className: "bg-surface text-muted" },
-  canceled: { label: "Canceled", className: "bg-error/10 text-error" },
+  new: {
+    label: "New",
+    variant: "outline",
+    className: "border-transparent! bg-warning/10 text-warning!",
+  },
+  confirmed: { label: "Confirmed", variant: "secondary" },
+  preparing: { label: "Preparing", variant: "secondary" },
+  ready: {
+    label: "Ready",
+    variant: "outline",
+    className: "border-transparent! bg-success/10 text-success!",
+  },
+  completed: {
+    label: "Completed",
+    variant: "secondary",
+    className: "text-muted-foreground!",
+  },
+  canceled: { label: "Canceled", variant: "destructive" },
 };
 
 const NEXT_ACTION: Partial<
@@ -37,33 +60,54 @@ const CANCELABLE: readonly OrderStatus[] = ["new", "confirmed"];
 export function StatusBadge({ status }: { status: OrderStatus }) {
   const meta = STATUS_META[status];
   return (
-    <span
-      className={`inline-flex items-center rounded-full px-2 py-0.5 text-[11px] font-medium ${meta.className}`}
-    >
+    <Badge variant={meta.variant} className={meta.className}>
       {meta.label}
-    </span>
+    </Badge>
   );
 }
 
 function PaymentPill({ status }: { status: AdminOrder["paymentStatus"] }) {
   if (status === "paid") {
     return (
-      <span className="inline-flex items-center rounded-full border border-border px-2 py-0.5 text-[11px] font-medium text-success">
+      <Badge variant="outline" className="text-success!">
         Paid
-      </span>
+      </Badge>
     );
   }
   if (status === "refunded") {
     return (
-      <span className="inline-flex items-center rounded-full border border-border px-2 py-0.5 text-[11px] font-medium text-muted">
+      <Badge variant="outline" className="text-muted-foreground!">
         Refunded
-      </span>
+      </Badge>
     );
   }
   return (
-    <span className="inline-flex items-center rounded-full border border-border px-2 py-0.5 text-[11px] font-medium text-warning">
+    <Badge variant="outline" className="text-warning!">
       Payment pending
-    </span>
+    </Badge>
+  );
+}
+
+function TotalRow({
+  label,
+  value,
+  strong = false,
+}: {
+  label: string;
+  value: string;
+  strong?: boolean;
+}) {
+  return (
+    <div
+      className={
+        strong
+          ? "flex justify-between gap-8 pt-1 text-sm font-semibold"
+          : "flex justify-between gap-8"
+      }
+    >
+      <dt className={strong ? undefined : "text-muted-foreground"}>{label}</dt>
+      <dd className="tabular-nums">{value}</dd>
+    </div>
   );
 }
 
@@ -73,30 +117,34 @@ export function OrderCard({ order }: { order: AdminOrder }) {
   const isDelivery = order.orderType === "delivery";
 
   return (
-    <article className="rounded-lg border border-border">
-      {/* Header */}
-      <div className="flex flex-wrap items-center gap-2 border-b border-border px-4 py-3">
-        <span className="text-sm font-semibold tabular-nums">
-          #{order.orderNumber}
-        </span>
-        <StatusBadge status={order.status} />
-        <span className="inline-flex items-center rounded-full border border-border px-2 py-0.5 text-[11px] font-medium text-muted">
-          {isDelivery ? "Delivery" : "Pickup"}
-        </span>
-        <PaymentPill status={order.paymentStatus} />
-        <span className="ml-auto text-xs text-muted">
+    <Card>
+      <CardHeader className="border-b">
+        <CardTitle className="flex flex-wrap items-center gap-2">
+          <span className="text-sm font-semibold tabular-nums">
+            #{order.orderNumber}
+          </span>
+          <StatusBadge status={order.status} />
+          <Badge variant="outline" className="text-muted-foreground!">
+            {isDelivery ? "Delivery" : "Pickup"}
+          </Badge>
+          <PaymentPill status={order.paymentStatus} />
+        </CardTitle>
+        <CardAction className="text-xs text-muted-foreground">
           {formatDateTime(order.placedAt)}
-        </span>
-      </div>
+        </CardAction>
+      </CardHeader>
 
       {/* Customer + items */}
-      <div className="px-4 py-3">
+      <CardContent>
         <p className="text-sm">
           <span className="font-medium">{order.customerName}</span>
-          <span className="text-muted"> · {order.customerPhone}</span>
+          <span className="text-muted-foreground">
+            {" "}
+            · {order.customerPhone}
+          </span>
         </p>
         {isDelivery && order.addressLine1 ? (
-          <p className="mt-0.5 text-sm text-muted">
+          <p className="mt-0.5 text-sm text-muted-foreground">
             {order.addressLine1}
             {order.addressLine2 ? `, ${order.addressLine2}` : ""}
             {order.city ? `, ${order.city}` : ""}
@@ -114,61 +162,53 @@ export function OrderCard({ order }: { order: AdminOrder }) {
                   </span>{" "}
                   {line.itemName}
                 </span>
-                <span className="tabular-nums text-muted">
+                <span className="tabular-nums text-muted-foreground">
                   {formatCents(line.lineTotalCents)}
                 </span>
               </div>
               {line.modifiers.length > 0 ? (
-                <p className="mt-0.5 text-xs text-muted">
+                <p className="mt-0.5 text-xs text-muted-foreground">
                   {line.modifiers
                     .map((m) => `${m.groupName}: ${m.modifierName}`)
                     .join(" · ")}
                 </p>
               ) : null}
               {line.notes ? (
-                <p className="mt-0.5 text-xs text-faint">“{line.notes}”</p>
+                <p className="mt-0.5 text-xs text-muted-foreground">
+                  “{line.notes}”
+                </p>
               ) : null}
             </li>
           ))}
         </ul>
 
         {order.orderNotes ? (
-          <p className="mt-3 rounded-md bg-surface px-3 py-2 text-xs text-muted">
+          <p className="mt-3 rounded-lg bg-muted px-3 py-2 text-xs text-muted-foreground">
             <span className="font-medium text-foreground">Order note:</span>{" "}
             {order.orderNotes}
           </p>
         ) : null}
-      </div>
+      </CardContent>
 
       {/* Money + actions */}
-      <div className="flex flex-wrap items-end justify-between gap-4 border-t border-border px-4 py-3">
+      <CardFooter className="flex-wrap items-end justify-between gap-4">
         <dl className="space-y-0.5 text-xs">
-          <div className="flex justify-between gap-8">
-            <dt className="text-muted">Subtotal</dt>
-            <dd className="tabular-nums">{formatCents(order.subtotalCents)}</dd>
-          </div>
-          <div className="flex justify-between gap-8">
-            <dt className="text-muted">Tax</dt>
-            <dd className="tabular-nums">{formatCents(order.taxCents)}</dd>
-          </div>
+          <TotalRow label="Subtotal" value={formatCents(order.subtotalCents)} />
+          <TotalRow label="Tax" value={formatCents(order.taxCents)} />
           {isDelivery || order.deliveryFeeCents > 0 ? (
-            <div className="flex justify-between gap-8">
-              <dt className="text-muted">Delivery fee</dt>
-              <dd className="tabular-nums">
-                {formatCents(order.deliveryFeeCents)}
-              </dd>
-            </div>
+            <TotalRow
+              label="Delivery fee"
+              value={formatCents(order.deliveryFeeCents)}
+            />
           ) : null}
           {order.tipCents > 0 ? (
-            <div className="flex justify-between gap-8">
-              <dt className="text-muted">Tip</dt>
-              <dd className="tabular-nums">{formatCents(order.tipCents)}</dd>
-            </div>
+            <TotalRow label="Tip" value={formatCents(order.tipCents)} />
           ) : null}
-          <div className="flex justify-between gap-8 pt-1 text-sm font-semibold">
-            <dt>Total</dt>
-            <dd className="tabular-nums">{formatCents(order.totalCents)}</dd>
-          </div>
+          <TotalRow
+            label="Total"
+            value={formatCents(order.totalCents)}
+            strong
+          />
         </dl>
 
         <div className="flex items-center gap-2">
@@ -179,8 +219,8 @@ export function OrderCard({ order }: { order: AdminOrder }) {
               <ConfirmButton
                 label="Cancel"
                 confirmLabel="Confirm cancel"
-                className={`${smallButtonClass} h-9 px-3 text-sm`}
-                confirmClassName="inline-flex h-9 items-center rounded-md border border-error px-3 text-sm font-medium text-error transition-opacity hover:opacity-85"
+                size="default"
+                variant="outline"
               />
             </form>
           ) : null}
@@ -188,16 +228,11 @@ export function OrderCard({ order }: { order: AdminOrder }) {
             <form action={updateOrderStatus}>
               <input type="hidden" name="orderId" value={order.id} />
               <input type="hidden" name="status" value={next.status} />
-              <button
-                type="submit"
-                className="inline-flex h-9 items-center justify-center rounded-md bg-accent px-4 text-sm font-medium text-accent-foreground transition-opacity hover:opacity-85"
-              >
-                {next.label}
-              </button>
+              <Button type="submit">{next.label}</Button>
             </form>
           ) : null}
         </div>
-      </div>
-    </article>
+      </CardFooter>
+    </Card>
   );
 }

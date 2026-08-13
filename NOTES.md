@@ -81,6 +81,75 @@ A fully functioning online pizza ordering platform:
   Demo orders #1001–#1002 left in the inbox intentionally.
 - [x] Final push
 
+## Session 2 — shadcn/ui migration, address change, deployment
+
+- **Address**: store moved to 30340 FM-2978, The Woodlands, TX 77354 (live DB +
+  `seed.ts`). Tax rate followed it: 0 bps (Oregon) → **825 bps** (TX 6.25% state
+  + 2% local). Operator can change it in Settings.
+- **Deployment**: Vercel project `minks-pizza`
+  (`prj_9P5LKTI8efRgnDcEBXKCSFoXunHt`, team `south-outer-spaces-projects`)
+  linked to the GitHub repo with production branch
+  `claude/spin-up-say-hi-faiohe`. Vercel Authentication (SSO protection) was
+  ON for all deployments — turned OFF, since customers must reach the
+  storefront anonymously. Deploys happen on push.
+  - `src/db/index.ts` now builds the Drizzle client **lazily** behind a Proxy so
+    a build without `DATABASE_URL` can't fail at import time.
+  - The sandbox proxy blocks `*.vercel.app`, so the live URL can't be verified
+    from this session — check it in a browser.
+
+### shadcn/ui — Base UI variant, Nova preset
+
+The CLI (`npx shadcn init -b base -p nova`) could not run: this sandbox's proxy
+returns 403 for `ui.shadcn.com`. Components were **vendored manually** from the
+upstream repo instead, which is exactly what the CLI does anyway:
+
+1. `git clone --depth 1 --filter=blob:none --sparse https://github.com/shadcn-ui/ui`
+   → `apps/v4/registry/bases/base/ui/*.tsx` (Base UI variant).
+2. Copied into `src/components/ui/`, rewriting `@/registry/bases/base/...`
+   imports to `@/lib/utils` and `@/components/ui/...`.
+3. The registry ships `<IconPlaceholder lucide="XIcon" tabler=… />` shims that
+   the CLI swaps for the chosen icon set; a script replaced each with its real
+   Lucide icon + import (`scratchpad/fix-icons.py`).
+4. Theme: `src/app/globals.css` imports `tailwindcss`, `tw-animate-css`,
+   `shadcn/tailwind.css` and `src/styles/style-nova.css`, then the upstream
+   neutral token blocks. `--success`/`--warning` are appended as app-specific
+   extras (shadcn has no such tokens).
+5. The Nova component classes are scoped under `.style-nova`, so `<html>`
+   carries that class; `next/font` now binds Geist to `--font-sans`/`--font-mono`
+   because that's what the shadcn theme reads.
+6. `components.json` records the setup (`base: "base"`, `style: "nova"`) so the
+   CLI can add more components later — from a network that allows the registry.
+
+**Token meanings changed** (the trap in this migration): shadcn's `muted` is a
+near-white *background* (old code used `text-muted` for secondary text → became
+invisible) and `accent` is a light-gray hover surface, not the brand black.
+Migration map applied across the app: `text-muted`→`text-muted-foreground`,
+`text-faint`→`text-muted-foreground`, `bg-surface`→`bg-muted`,
+`bg-accent`/`text-accent-foreground`→`bg-primary`/`text-primary-foreground` (or
+a real `<Button>`), `text-error`→`text-destructive`, `text-link`→`text-primary`.
+
+### Store logo (session 2)
+
+`store_settings.logo_url` holds either an `https://` URL or a self-contained
+`data:` URL. The admin uploader (`src/components/admin/logo-field.tsx`)
+downscales the picked file to 512px on a canvas, encodes it as WebP (PNG
+fallback) and inlines it, capped at 400 KB — so the platform needs **no object
+storage** (no S3/Vercel Blob to provision). `logoUrlOrNull()` in
+`src/app/admin/actions.ts` accepts only `https:` and `data:image/*` so the logo
+can't become active content. `src/components/store-mark.tsx` renders the logo
+(or the initial badge fallback) in the storefront header, the coming-soon page
+and the admin sidebar.
+
+### Bug fixed: cart wiped on page refresh
+
+`cart-context.tsx` gated its persist effect on a `useRef` that was flipped
+synchronously inside the hydrate effect. Both effects run in the same commit,
+so the persist effect saw `hydrated.current === true` while `lines` was still
+`[]` and wrote the empty cart back over the saved one (guaranteed under
+StrictMode; a race in production). It now gates on the `ready` **state**, which
+can't be true until the render that carries the restored lines. Client-side
+navigation hid this from the e2e — only a hard refresh reproduced it.
+
 ## Gotchas hit (for future sessions)
 
 - Playwright `getByRole(name:)` is substring-matching: "Publish store" also

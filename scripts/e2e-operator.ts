@@ -37,8 +37,13 @@ async function main() {
   await page.waitForURL(/\/admin$/, { timeout: 20_000 });
   await shot("a2-orders-inbox");
 
-  // 2. Orders inbox should show the seeded test orders; advance one status
-  await page.waitForSelector("text=#100");
+  // 2. Orders inbox lists orders; advance one status.
+  // Match any order number rather than a fixed prefix — order numbers grow,
+  // and completed/canceled ones live in a collapsed "Recent" section.
+  await page
+    .locator("text=/#\\d{4,}/")
+    .first()
+    .waitFor({ state: "attached", timeout: 30_000 });
   const confirmBtn = page.locator('button:has-text("Confirm")').first();
   if (await confirmBtn.count()) {
     await confirmBtn.click();

@@ -12,9 +12,19 @@ Stripe will slot in (see [Stripe readiness](#stripe-readiness)).
 ## Stack
 
 - **Next.js 16** (App Router, Server Components, Server Actions), TypeScript
-- **Tailwind CSS v4** — minimal Vercel-style design system
+- **Tailwind CSS v4** + **shadcn/ui** (Base UI variant, Nova preset) — minimal
+  Vercel-style design system
 - **Neon Postgres** + **Drizzle ORM** (`@neondatabase/serverless` over HTTP)
 - **Auth**: email + password for the operator (bcrypt), jose-signed JWT session cookie
+
+### UI components
+
+Components live in `src/components/ui/` and are built on
+[Base UI](https://base-ui.com) primitives with the shadcn **Nova** preset.
+Component styles are the `.cn-*` classes in `src/styles/style-nova.css`, scoped
+by the `style-nova` class on `<html>`; design tokens live in
+`src/app/globals.css`. `components.json` records the configuration, so
+`npx shadcn@latest add <component>` will add more in the same style.
 
 ## Getting started
 
@@ -43,10 +53,11 @@ npm run dev
    (Size, Crust, Toppings…); toggle availability to 86 an item instantly.
 3. **Modifiers** — reusable option groups with required/optional rules
    (`minSelect`/`maxSelect`) and per-option price deltas.
-4. **Settings** — store identity, hours, pickup/delivery toggles, prep times,
-   delivery fee/minimum, tax rate — and the **Publish** switch that takes the
-   storefront live (before that, customers see a coming-soon page). A separate
-   **Accepting orders** switch pauses ordering without unpublishing.
+4. **Settings** — store identity (including a **logo** you can upload or link,
+   shown instead of the initial badge), hours, pickup/delivery toggles, prep
+   times, delivery fee/minimum, tax rate — and the **Publish** switch that
+   takes the storefront live (before that, customers see a coming-soon page). A
+   separate **Accepting orders** switch pauses ordering without unpublishing.
 5. **Orders** (`/admin`) — live inbox that auto-refreshes; move orders through
    `new → confirmed → preparing → ready → completed` (or cancel).
 

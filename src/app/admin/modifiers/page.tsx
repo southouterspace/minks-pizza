@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import { asc, eq } from "drizzle-orm";
+import { SlidersHorizontal, Star } from "lucide-react";
 import { db, itemModifierGroups, menuItems, modifierGroups, modifiers } from "@/db";
 import { requireOperator } from "@/lib/auth";
 import {
@@ -13,36 +14,32 @@ import {
   updateModifierGroup,
 } from "@/app/admin/actions";
 import { ConfirmButton } from "@/components/admin/confirm-button";
+import { Button, buttonVariants } from "@/components/ui/button";
+import {
+  Card,
+  CardAction,
+  CardHeader,
+  CardTitle,
+} from "@/components/ui/card";
+import { Checkbox } from "@/components/ui/checkbox";
+import {
+  Empty,
+  EmptyDescription,
+  EmptyHeader,
+  EmptyMedia,
+  EmptyTitle,
+} from "@/components/ui/empty";
+import { Field, FieldGroup, FieldLabel } from "@/components/ui/field";
+import { Input } from "@/components/ui/input";
 import {
   centsToDollars,
   formatDelta,
-  inputClass,
-  labelClass,
-  primaryButtonClass,
   ruleSummary,
-  smallButtonClass,
-  summaryButtonClass,
 } from "@/components/admin/ui";
 
 export const dynamic = "force-dynamic";
 
 export const metadata: Metadata = { title: "Modifiers" };
-
-function StarIcon({ filled }: { filled: boolean }) {
-  return (
-    <svg
-      viewBox="0 0 24 24"
-      className="h-4 w-4"
-      fill={filled ? "currentColor" : "none"}
-      stroke="currentColor"
-      strokeWidth="1.5"
-      strokeLinejoin="round"
-      aria-hidden="true"
-    >
-      <path d="M12 3l2.7 5.6 6.1.8-4.5 4.2 1.1 6L12 16.7l-5.4 2.9 1.1-6L3.2 9.4l6.1-.8L12 3z" />
-    </svg>
-  );
-}
 
 function GroupFields({
   idPrefix,
@@ -53,11 +50,9 @@ function GroupFields({
 }) {
   return (
     <div className="grid gap-3 sm:grid-cols-3">
-      <div>
-        <label htmlFor={`${idPrefix}-name`} className={labelClass}>
-          Name
-        </label>
-        <input
+      <Field>
+        <FieldLabel htmlFor={`${idPrefix}-name`}>Name</FieldLabel>
+        <Input
           id={`${idPrefix}-name`}
           name="name"
           type="text"
@@ -65,38 +60,37 @@ function GroupFields({
           maxLength={120}
           defaultValue={defaults?.name ?? ""}
           placeholder="e.g. Size"
-          className={inputClass}
         />
-      </div>
-      <div>
-        <label htmlFor={`${idPrefix}-min`} className={labelClass}>
-          Min selections
-        </label>
-        <input
+      </Field>
+      <Field>
+        <FieldLabel htmlFor={`${idPrefix}-min`}>Min selections</FieldLabel>
+        <Input
           id={`${idPrefix}-min`}
           name="minSelect"
           type="number"
           min="0"
           step="1"
           defaultValue={defaults?.minSelect ?? 0}
-          className={`${inputClass} tabular-nums`}
+          className="tabular-nums"
         />
-      </div>
-      <div>
-        <label htmlFor={`${idPrefix}-max`} className={labelClass}>
+      </Field>
+      <Field>
+        <FieldLabel htmlFor={`${idPrefix}-max`}>
           Max selections{" "}
-          <span className="font-normal text-faint">(blank = unlimited)</span>
-        </label>
-        <input
+          <span className="font-normal text-muted-foreground">
+            (blank = unlimited)
+          </span>
+        </FieldLabel>
+        <Input
           id={`${idPrefix}-max`}
           name="maxSelect"
           type="number"
           min="1"
           step="1"
           defaultValue={defaults?.maxSelect ?? ""}
-          className={`${inputClass} tabular-nums`}
+          className="tabular-nums"
         />
-      </div>
+      </Field>
     </div>
   );
 }
@@ -127,34 +121,40 @@ export default async function ModifiersPage() {
           Modifier groups
         </h1>
       </div>
-      <p className="mt-1 text-sm text-muted">
+      <p className="mt-1 text-sm text-muted-foreground">
         Reusable option sets — sizes, crusts, toppings — that you attach to
         menu items.
       </p>
 
       {/* New group */}
-      <details className="mt-6 rounded-lg border border-border">
-        <summary className="cursor-pointer list-none px-4 py-3 text-sm font-medium text-muted transition-colors hover:text-foreground [&::-webkit-details-marker]:hidden">
-          + New group
-        </summary>
-        <form
-          action={createModifierGroup}
-          className="space-y-3 border-t border-border p-4"
-        >
-          <GroupFields idPrefix="new-group" />
-          <button type="submit" className={primaryButtonClass}>
-            Add group
-          </button>
-        </form>
-      </details>
+      <Card className="mt-6 gap-0! py-0!">
+        <details>
+          <summary className="cursor-pointer list-none px-4 py-3 text-sm font-medium text-muted-foreground transition-colors hover:text-foreground [&::-webkit-details-marker]:hidden">
+            + New group
+          </summary>
+          <form
+            action={createModifierGroup}
+            className="space-y-3 border-t border-border p-4"
+          >
+            <GroupFields idPrefix="new-group" />
+            <Button type="submit">Add group</Button>
+          </form>
+        </details>
+      </Card>
 
       {groups.length === 0 ? (
-        <div className="mt-6 rounded-lg border border-border px-6 py-14 text-center">
-          <p className="text-sm font-medium">No modifier groups yet</p>
-          <p className="mt-1 text-sm text-muted">
-            Create one above — for example “Size” with a required single pick.
-          </p>
-        </div>
+        <Empty className="mt-6 border">
+          <EmptyHeader>
+            <EmptyMedia variant="icon">
+              <SlidersHorizontal />
+            </EmptyMedia>
+            <EmptyTitle>No modifier groups yet</EmptyTitle>
+            <EmptyDescription>
+              Create one above — for example “Size” with a required single
+              pick.
+            </EmptyDescription>
+          </EmptyHeader>
+        </Empty>
       ) : null}
 
       <div className="mt-6 space-y-6">
@@ -168,26 +168,28 @@ export default async function ModifiersPage() {
             ),
           ];
           return (
-            <section key={group.id} className="rounded-lg border border-border">
+            <Card key={group.id} className="gap-0! py-0!">
               {/* Group header */}
-              <div className="flex flex-wrap items-center gap-2 border-b border-border px-4 py-3">
-                <h2 className="text-sm font-semibold">{group.name}</h2>
-                <span className="text-xs text-muted">
-                  {ruleSummary(group.minSelect, group.maxSelect)}
-                </span>
-                <div className="ml-auto flex flex-wrap items-center gap-1.5">
+              <CardHeader className="border-b pt-3 pb-3!">
+                <CardTitle className="flex flex-wrap items-center gap-2">
+                  <span className="text-sm font-semibold">{group.name}</span>
+                  <span className="text-xs font-normal text-muted-foreground">
+                    {ruleSummary(group.minSelect, group.maxSelect)}
+                  </span>
+                </CardTitle>
+                <CardAction className="flex flex-wrap items-center gap-1.5">
                   <details className="relative">
-                    <summary className={summaryButtonClass}>Edit</summary>
-                    <div className="absolute right-0 z-20 mt-2 w-80 rounded-lg border border-border bg-background p-4 shadow-sm">
-                      <form
-                        action={updateModifierGroup}
-                        className="space-y-3"
-                      >
-                        <input
-                          type="hidden"
-                          name="groupId"
-                          value={group.id}
-                        />
+                    <summary
+                      className={`${buttonVariants({
+                        variant: "outline",
+                        size: "sm",
+                      })} cursor-pointer list-none [&::-webkit-details-marker]:hidden`}
+                    >
+                      Edit
+                    </summary>
+                    <div className="absolute right-0 z-20 mt-2 w-80 rounded-xl border border-border bg-popover p-4 text-left shadow-md">
+                      <form action={updateModifierGroup} className="space-y-3">
+                        <input type="hidden" name="groupId" value={group.id} />
                         <GroupFields
                           idPrefix={`group-${group.id}`}
                           defaults={{
@@ -196,12 +198,9 @@ export default async function ModifiersPage() {
                             maxSelect: group.maxSelect,
                           }}
                         />
-                        <button
-                          type="submit"
-                          className={`${primaryButtonClass} w-full`}
-                        >
+                        <Button type="submit" className="w-full">
                           Save
-                        </button>
+                        </Button>
                       </form>
                     </div>
                   </details>
@@ -210,16 +209,14 @@ export default async function ModifiersPage() {
                     <ConfirmButton
                       label="Delete"
                       confirmLabel="Delete group + options?"
-                      className={smallButtonClass}
-                      confirmClassName="inline-flex h-7 items-center rounded-md border border-error px-2.5 text-xs font-medium text-error transition-opacity hover:opacity-85"
                     />
                   </form>
-                </div>
-              </div>
+                </CardAction>
+              </CardHeader>
 
               {/* Modifiers */}
               {groupModifiers.length === 0 ? (
-                <p className="px-4 py-4 text-sm text-faint">
+                <p className="px-4 py-4 text-sm text-muted-foreground">
                   No options yet — add one below.
                 </p>
               ) : (
@@ -235,8 +232,10 @@ export default async function ModifiersPage() {
                           name="modifierId"
                           value={modifier.id}
                         />
-                        <button
+                        <Button
                           type="submit"
+                          variant="ghost"
+                          size="icon-sm"
                           aria-label={
                             modifier.isDefault
                               ? `Unset ${modifier.name} as default`
@@ -245,19 +244,21 @@ export default async function ModifiersPage() {
                           title={
                             modifier.isDefault ? "Default" : "Make default"
                           }
-                          className={`flex h-7 w-7 items-center justify-center rounded-md transition-colors ${
+                          className={
                             modifier.isDefault
                               ? "text-foreground"
-                              : "text-faint hover:text-foreground"
-                          }`}
+                              : "text-muted-foreground"
+                          }
                         >
-                          <StarIcon filled={modifier.isDefault} />
-                        </button>
+                          <Star
+                            fill={modifier.isDefault ? "currentColor" : "none"}
+                          />
+                        </Button>
                       </form>
                       <span className="min-w-0 flex-1 truncate text-sm font-medium">
                         {modifier.name}
                       </span>
-                      <span className="text-sm tabular-nums text-muted">
+                      <span className="text-sm tabular-nums text-muted-foreground">
                         {formatDelta(modifier.priceDeltaCents)}
                       </span>
                       <form action={toggleModifierAvailability}>
@@ -266,79 +267,86 @@ export default async function ModifiersPage() {
                           name="modifierId"
                           value={modifier.id}
                         />
-                        <button
+                        <Button
                           type="submit"
-                          className={`inline-flex h-7 items-center rounded-md border px-2.5 text-xs font-medium transition-opacity hover:opacity-80 ${
+                          variant="outline"
+                          size="sm"
+                          className={
                             modifier.isAvailable
-                              ? "border-success/40 text-success"
-                              : "border-error/40 text-error"
-                          }`}
+                              ? "border-success/40! text-success!"
+                              : "border-destructive/40! text-destructive!"
+                          }
                         >
                           {modifier.isAvailable
                             ? "Available"
                             : "86’d — unavailable"}
-                        </button>
+                        </Button>
                       </form>
                       <details className="relative">
-                        <summary className={summaryButtonClass}>Edit</summary>
-                        <div className="absolute right-0 z-20 mt-2 w-72 rounded-lg border border-border bg-background p-4 shadow-sm">
-                          <form action={updateModifier} className="space-y-3">
+                        <summary
+                          className={`${buttonVariants({
+                            variant: "outline",
+                            size: "sm",
+                          })} cursor-pointer list-none [&::-webkit-details-marker]:hidden`}
+                        >
+                          Edit
+                        </summary>
+                        <div className="absolute right-0 z-20 mt-2 w-72 rounded-xl border border-border bg-popover p-4 text-left shadow-md">
+                          <form action={updateModifier}>
                             <input
                               type="hidden"
                               name="modifierId"
                               value={modifier.id}
                             />
-                            <div>
-                              <label
-                                htmlFor={`mod-name-${modifier.id}`}
-                                className={labelClass}
-                              >
-                                Name
-                              </label>
-                              <input
-                                id={`mod-name-${modifier.id}`}
-                                name="name"
-                                type="text"
-                                required
-                                maxLength={120}
-                                defaultValue={modifier.name}
-                                className={inputClass}
-                              />
-                            </div>
-                            <div>
-                              <label
-                                htmlFor={`mod-price-${modifier.id}`}
-                                className={labelClass}
-                              >
-                                Price delta ($)
-                              </label>
-                              <input
-                                id={`mod-price-${modifier.id}`}
-                                name="price"
-                                type="number"
-                                step="0.01"
-                                min="0"
-                                defaultValue={centsToDollars(
-                                  modifier.priceDeltaCents,
-                                )}
-                                className={`${inputClass} tabular-nums`}
-                              />
-                            </div>
-                            <label className="flex items-center gap-2 text-sm">
-                              <input
-                                type="checkbox"
-                                name="isDefault"
-                                defaultChecked={modifier.isDefault}
-                                className="h-4 w-4 accent-black"
-                              />
-                              Selected by default
-                            </label>
-                            <button
-                              type="submit"
-                              className={`${primaryButtonClass} w-full`}
-                            >
-                              Save
-                            </button>
+                            <FieldGroup>
+                              <Field>
+                                <FieldLabel htmlFor={`mod-name-${modifier.id}`}>
+                                  Name
+                                </FieldLabel>
+                                <Input
+                                  id={`mod-name-${modifier.id}`}
+                                  name="name"
+                                  type="text"
+                                  required
+                                  maxLength={120}
+                                  defaultValue={modifier.name}
+                                />
+                              </Field>
+                              <Field>
+                                <FieldLabel
+                                  htmlFor={`mod-price-${modifier.id}`}
+                                >
+                                  Price delta ($)
+                                </FieldLabel>
+                                <Input
+                                  id={`mod-price-${modifier.id}`}
+                                  name="price"
+                                  type="number"
+                                  step="0.01"
+                                  min="0"
+                                  defaultValue={centsToDollars(
+                                    modifier.priceDeltaCents,
+                                  )}
+                                  className="tabular-nums"
+                                />
+                              </Field>
+                              <Field orientation="horizontal">
+                                <Checkbox
+                                  id={`mod-default-${modifier.id}`}
+                                  name="isDefault"
+                                  defaultChecked={modifier.isDefault}
+                                />
+                                <FieldLabel
+                                  htmlFor={`mod-default-${modifier.id}`}
+                                  className="font-normal!"
+                                >
+                                  Selected by default
+                                </FieldLabel>
+                              </Field>
+                              <Button type="submit" className="w-full">
+                                Save
+                              </Button>
+                            </FieldGroup>
                           </form>
                         </div>
                       </details>
@@ -351,8 +359,6 @@ export default async function ModifiersPage() {
                         <ConfirmButton
                           label="Delete"
                           confirmLabel="Really delete?"
-                          className={smallButtonClass}
-                          confirmClassName="inline-flex h-7 items-center rounded-md border border-error px-2.5 text-xs font-medium text-error transition-opacity hover:opacity-85"
                         />
                       </form>
                     </li>
@@ -362,7 +368,7 @@ export default async function ModifiersPage() {
 
               {/* Add modifier */}
               <details className="border-t border-border">
-                <summary className="cursor-pointer list-none px-4 py-2.5 text-xs font-medium text-muted transition-colors hover:text-foreground [&::-webkit-details-marker]:hidden">
+                <summary className="cursor-pointer list-none px-4 py-2.5 text-xs font-medium text-muted-foreground transition-colors hover:text-foreground [&::-webkit-details-marker]:hidden">
                   + Add option
                 </summary>
                 <form
@@ -370,60 +376,60 @@ export default async function ModifiersPage() {
                   className="flex flex-col gap-3 px-4 pb-4 sm:flex-row sm:items-end"
                 >
                   <input type="hidden" name="groupId" value={group.id} />
-                  <div className="flex-1">
-                    <label
-                      htmlFor={`add-mod-name-${group.id}`}
-                      className={labelClass}
-                    >
+                  <Field className="flex-1">
+                    <FieldLabel htmlFor={`add-mod-name-${group.id}`}>
                       Name
-                    </label>
-                    <input
+                    </FieldLabel>
+                    <Input
                       id={`add-mod-name-${group.id}`}
                       name="name"
                       type="text"
                       required
                       maxLength={120}
                       placeholder="e.g. Large 14&#34;"
-                      className={inputClass}
                     />
-                  </div>
-                  <div className="w-full sm:w-36">
-                    <label
-                      htmlFor={`add-mod-price-${group.id}`}
-                      className={labelClass}
-                    >
+                  </Field>
+                  <Field className="w-full sm:w-36">
+                    <FieldLabel htmlFor={`add-mod-price-${group.id}`}>
                       Price delta ($)
-                    </label>
-                    <input
+                    </FieldLabel>
+                    <Input
                       id={`add-mod-price-${group.id}`}
                       name="price"
                       type="number"
                       step="0.01"
                       min="0"
                       defaultValue="0.00"
-                      className={`${inputClass} tabular-nums`}
+                      className="tabular-nums"
                     />
-                  </div>
-                  <label className="flex h-9 items-center gap-2 text-sm">
-                    <input
-                      type="checkbox"
+                  </Field>
+                  <Field
+                    orientation="horizontal"
+                    className="h-8 w-auto shrink-0"
+                  >
+                    <Checkbox
+                      id={`add-mod-default-${group.id}`}
                       name="isDefault"
-                      className="h-4 w-4 accent-black"
                     />
-                    Default
-                  </label>
-                  <button type="submit" className={primaryButtonClass}>
+                    <FieldLabel
+                      htmlFor={`add-mod-default-${group.id}`}
+                      className="font-normal!"
+                    >
+                      Default
+                    </FieldLabel>
+                  </Field>
+                  <Button type="submit" className="shrink-0">
                     Add
-                  </button>
+                  </Button>
                 </form>
               </details>
 
-              <p className="border-t border-border px-4 py-2.5 text-xs text-faint">
+              <p className="border-t border-border px-4 py-2.5 text-xs text-muted-foreground">
                 {usedBy.length > 0
                   ? `Used by: ${usedBy.join(", ")}`
                   : "Not attached to any items yet."}
               </p>
-            </section>
+            </Card>
           );
         })}
       </div>

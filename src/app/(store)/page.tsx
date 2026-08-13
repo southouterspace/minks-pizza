@@ -12,7 +12,13 @@ export default async function StorePage() {
   const settings = await getSettings();
 
   if (!settings.isPublished) {
-    return <ComingSoon name={settings.name} phone={settings.phone} />;
+    return (
+      <ComingSoon
+        name={settings.name}
+        phone={settings.phone}
+        logoUrl={settings.logoUrl}
+      />
+    );
   }
 
   const menu = await getPublicMenu();
@@ -22,17 +28,17 @@ export default async function StorePage() {
 
   return (
     <div>
-      <section className="border-b border-border bg-surface">
+      <section className="border-b border-border bg-muted">
         <div className="mx-auto max-w-5xl px-4 py-14 sm:px-6 sm:py-20">
           <h1 className="max-w-2xl text-4xl font-bold tracking-tight sm:text-5xl">
             {settings.name}
           </h1>
           {settings.tagline ? (
-            <p className="mt-3 max-w-xl text-lg text-muted">
+            <p className="mt-3 max-w-xl text-lg text-muted-foreground">
               {settings.tagline}
             </p>
           ) : null}
-          <div className="mt-6 flex flex-wrap items-center gap-x-5 gap-y-2 text-sm text-muted">
+          <div className="mt-6 flex flex-wrap items-center gap-x-5 gap-y-2 text-sm text-muted-foreground">
             <StoreStatusBanner
               hours={settings.hours ?? null}
               acceptingOrders={settings.isAcceptingOrders}
@@ -51,7 +57,7 @@ export default async function StorePage() {
       </section>
 
       {settings.isAcceptingOrders ? null : (
-        <div className="border-b border-border bg-surface">
+        <div className="border-b border-border bg-muted">
           <div className="mx-auto max-w-5xl px-4 py-3 text-sm font-medium text-warning sm:px-6">
             Online ordering is temporarily paused. Please call
             {settings.phone ? ` ${settings.phone}` : " the store"} to order.
@@ -62,7 +68,7 @@ export default async function StorePage() {
       {menu.length === 0 ? (
         <div className="mx-auto max-w-5xl px-4 py-24 text-center sm:px-6">
           <p className="text-lg font-medium">Menu coming soon</p>
-          <p className="mt-2 text-sm text-muted">
+          <p className="mt-2 text-sm text-muted-foreground">
             We&apos;re still putting our menu together. Check back shortly.
           </p>
         </div>
@@ -83,7 +89,7 @@ export default async function StorePage() {
                 .sort((a, b) => a.day - b.day)
                 .map((h) => (
                   <div key={h.day} className="flex justify-between gap-8">
-                    <dt className="text-muted">{DAY_NAMES[h.day]}</dt>
+                    <dt className="text-muted-foreground">{DAY_NAMES[h.day]}</dt>
                     <dd className="font-medium tabular-nums">
                       {h.closed
                         ? "Closed"

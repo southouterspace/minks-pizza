@@ -10,7 +10,13 @@ export default async function CheckoutPage() {
   const settings = await getSettings();
 
   if (!settings.isPublished) {
-    return <ComingSoon name={settings.name} phone={settings.phone} />;
+    return (
+      <ComingSoon
+        name={settings.name}
+        phone={settings.phone}
+        logoUrl={settings.logoUrl}
+      />
+    );
   }
 
   return (

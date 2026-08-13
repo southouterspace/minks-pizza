@@ -26,7 +26,7 @@ export function AutoRefresh({ intervalMs = 15_000 }: { intervalMs?: number }) {
   }, [router, intervalMs]);
 
   return (
-    <span className="inline-flex items-center gap-1.5 text-xs text-muted">
+    <span className="inline-flex items-center gap-1.5 text-xs text-muted-foreground">
       <span className="h-1.5 w-1.5 rounded-full bg-success" aria-hidden="true" />
       Live · updated {elapsed}s ago
     </span>

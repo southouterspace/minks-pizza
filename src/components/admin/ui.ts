@@ -1,21 +1,4 @@
-/** Shared class strings + tiny formatters for the admin dashboard. */
-
-export const inputClass =
-  "w-full rounded-md border border-border bg-background px-3 py-2 text-sm outline-none transition-colors placeholder:text-faint focus:border-foreground";
-
-export const labelClass = "mb-1.5 block text-sm font-medium";
-
-export const primaryButtonClass =
-  "inline-flex h-9 items-center justify-center rounded-md bg-accent px-4 text-sm font-medium text-accent-foreground transition-opacity hover:opacity-85 disabled:cursor-not-allowed disabled:opacity-40";
-
-export const secondaryButtonClass =
-  "inline-flex h-9 items-center justify-center rounded-md border border-border px-4 text-sm font-medium transition-colors hover:border-foreground/40";
-
-export const smallButtonClass =
-  "inline-flex h-7 items-center rounded-md border border-border px-2.5 text-xs font-medium text-muted transition-colors hover:border-foreground/40 hover:text-foreground";
-
-export const summaryButtonClass =
-  "inline-flex h-7 cursor-pointer list-none items-center rounded-md border border-border px-2.5 text-xs font-medium text-muted transition-colors hover:border-foreground/40 hover:text-foreground [&::-webkit-details-marker]:hidden";
+/** Tiny pure formatters shared across the admin dashboard. */
 
 /** "Required, pick 1" style rule summary for a modifier group. */
 export function ruleSummary(

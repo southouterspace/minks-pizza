@@ -21,10 +21,10 @@ async function main() {
       name: "Mink's Pizza",
       tagline: "Hand-tossed. Wood-fired. Neighborhood favorite.",
       phone: "(555) 010-7429",
-      addressLine1: "412 Elm Street",
-      city: "Portland",
-      state: "OR",
-      zip: "97205",
+      addressLine1: "30340 FM-2978",
+      city: "The Woodlands",
+      state: "TX",
+      zip: "77354",
       hours: [
         { day: 0, open: "12:00", close: "21:00", closed: false },
         { day: 1, open: "11:00", close: "21:00", closed: true },
@@ -40,7 +40,7 @@ async function main() {
       deliveryPrepMinutes: 45,
       deliveryFeeCents: 399,
       deliveryMinimumCents: 1500,
-      taxRateBps: 0, // Oregon — no sales tax; operator can change
+      taxRateBps: 825, // TX 6.25% state + 2% local; operator can change
       isPublished: false,
       isAcceptingOrders: true,
     })

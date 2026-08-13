@@ -1,8 +1,11 @@
 "use client";
 
 import { useState } from "react";
+import { Plus } from "lucide-react";
 import type { CategoryView, MenuItemView } from "@/lib/menu";
 import { formatCents } from "@/lib/money";
+import { Badge } from "@/components/ui/badge";
+import { Card, CardContent } from "@/components/ui/card";
 import { ItemDialog } from "./item-dialog";
 
 export function MenuBrowser({
@@ -22,7 +25,7 @@ export function MenuBrowser({
           <a
             key={cat.id}
             href={`#category-${cat.id}`}
-            className="whitespace-nowrap rounded-md px-3 py-1.5 text-sm text-muted transition-colors hover:bg-surface hover:text-foreground"
+            className="whitespace-nowrap rounded-md px-3 py-1.5 text-sm text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
           >
             {cat.name}
           </a>
@@ -37,40 +40,53 @@ export function MenuBrowser({
         >
           <h2 className="text-xl font-semibold tracking-tight">{cat.name}</h2>
           {cat.description ? (
-            <p className="mt-1 text-sm text-muted">{cat.description}</p>
+            <p className="mt-1 text-sm text-muted-foreground">
+              {cat.description}
+            </p>
           ) : null}
           <div className="mt-5 grid gap-3 sm:grid-cols-2">
             {cat.items.map((item) => (
-              <button
+              <Card
                 key={item.id}
-                type="button"
+                role="button"
+                tabIndex={0}
+                aria-haspopup="dialog"
                 onClick={() => setActiveItem(item)}
-                className="group flex items-start justify-between gap-4 rounded-lg border border-border p-4 text-left transition-colors hover:border-foreground/30"
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" || e.key === " ") {
+                    e.preventDefault();
+                    setActiveItem(item);
+                  }
+                }}
+                className="group cursor-pointer text-left transition-shadow outline-none hover:ring-foreground/25 focus-visible:ring-2 focus-visible:ring-ring"
               >
-                <div className="min-w-0">
-                  <div className="flex items-center gap-2">
-                    <span className="font-medium">{item.name}</span>
-                    {item.isFeatured ? (
-                      <span className="rounded-full border border-border px-2 py-0.5 text-[11px] font-medium text-muted">
-                        Popular
-                      </span>
+                <CardContent className="flex items-start justify-between gap-4">
+                  <div className="min-w-0">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span className="font-medium">{item.name}</span>
+                      {item.isFeatured ? (
+                        <Badge variant="secondary">Popular</Badge>
+                      ) : null}
+                    </div>
+                    {item.description ? (
+                      <p className="mt-1 line-clamp-2 text-sm text-muted-foreground">
+                        {item.description}
+                      </p>
                     ) : null}
-                  </div>
-                  {item.description ? (
-                    <p className="mt-1 line-clamp-2 text-sm text-muted">
-                      {item.description}
+                    <p className="mt-2 text-sm font-medium tabular-nums">
+                      {item.modifierGroups.some((g) => g.minSelect > 0)
+                        ? `from ${formatCents(item.basePriceCents + minRequiredDelta(item))}`
+                        : formatCents(item.basePriceCents)}
                     </p>
-                  ) : null}
-                  <p className="mt-2 text-sm font-medium tabular-nums">
-                    {item.modifierGroups.some((g) => g.minSelect > 0)
-                      ? `from ${formatCents(item.basePriceCents + minRequiredDelta(item))}`
-                      : formatCents(item.basePriceCents)}
-                  </p>
-                </div>
-                <span className="mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-full border border-border text-muted transition-colors group-hover:border-foreground group-hover:text-foreground">
-                  +
-                </span>
-              </button>
+                  </div>
+                  <span
+                    aria-hidden
+                    className="mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-full border border-border text-muted-foreground transition-colors group-hover:border-foreground group-hover:text-foreground"
+                  >
+                    <Plus className="size-4" />
+                  </span>
+                </CardContent>
+              </Card>
             ))}
           </div>
         </section>
@@ -78,6 +94,7 @@ export function MenuBrowser({
 
       {activeItem ? (
         <ItemDialog
+          key={activeItem.id}
           item={activeItem}
           orderingEnabled={orderingEnabled}
           onClose={() => setActiveItem(null)}

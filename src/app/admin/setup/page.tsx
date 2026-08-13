@@ -2,6 +2,13 @@ import type { Metadata } from "next";
 import { redirect } from "next/navigation";
 import { operatorExists } from "@/lib/auth";
 import { SetupForm } from "@/components/admin/auth-forms";
+import {
+  Card,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+} from "@/components/ui/card";
 
 export const dynamic = "force-dynamic";
 
@@ -12,18 +19,20 @@ export default async function SetupPage() {
 
   return (
     <div className="flex min-h-screen flex-1 items-center justify-center px-4 py-12">
-      <div className="w-full max-w-sm">
-        <h1 className="text-xl font-semibold tracking-tight">
-          Welcome to your pizzeria
-        </h1>
-        <p className="mt-1.5 text-sm text-muted">
-          Create the operator account you&apos;ll use to run the store. This
-          only happens once.
-        </p>
-        <div className="mt-6 rounded-lg border border-border p-6">
+      <Card className="w-full max-w-sm [--card-spacing:--spacing(6)]!">
+        <CardHeader>
+          <CardTitle className="text-xl! font-semibold! tracking-tight">
+            Welcome to your pizzeria
+          </CardTitle>
+          <CardDescription>
+            Create the operator account you&apos;ll use to run the store. This
+            only happens once.
+          </CardDescription>
+        </CardHeader>
+        <CardContent>
           <SetupForm />
-        </div>
-      </div>
+        </CardContent>
+      </Card>
     </div>
   );
 }

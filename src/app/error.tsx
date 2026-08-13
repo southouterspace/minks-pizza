@@ -1,5 +1,16 @@
 "use client";
 
+import { TriangleAlert } from "lucide-react";
+import { Button } from "@/components/ui/button";
+import {
+  Empty,
+  EmptyContent,
+  EmptyDescription,
+  EmptyHeader,
+  EmptyMedia,
+  EmptyTitle,
+} from "@/components/ui/empty";
+
 export default function ErrorPage({
   reset,
 }: {
@@ -7,20 +18,25 @@ export default function ErrorPage({
   reset: () => void;
 }) {
   return (
-    <div className="flex flex-1 flex-col items-center justify-center px-4 py-32 text-center">
-      <h1 className="text-2xl font-bold tracking-tight">
-        Something went wrong
-      </h1>
-      <p className="mt-2 text-sm text-muted">
-        Sorry about that — please try again.
-      </p>
-      <button
-        type="button"
-        onClick={reset}
-        className="mt-6 inline-flex h-10 items-center rounded-md bg-accent px-5 text-sm font-medium text-accent-foreground transition-opacity hover:opacity-85"
-      >
-        Try again
-      </button>
+    <div className="flex flex-1 flex-col items-center justify-center px-4 py-32">
+      <Empty>
+        <EmptyHeader>
+          <EmptyMedia variant="icon">
+            <TriangleAlert aria-hidden />
+          </EmptyMedia>
+          <EmptyTitle className="text-2xl! font-bold! tracking-tight">
+            Something went wrong
+          </EmptyTitle>
+          <EmptyDescription>
+            Sorry about that — please try again.
+          </EmptyDescription>
+        </EmptyHeader>
+        <EmptyContent>
+          <Button type="button" onClick={reset} size="lg" className="h-10! px-5!">
+            Try again
+          </Button>
+        </EmptyContent>
+      </Empty>
     </div>
   );
 }
