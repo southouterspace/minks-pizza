@@ -57,17 +57,18 @@ A fully functioning online pizza ordering platform:
 - [x] Deps: drizzle-orm, @neondatabase/serverless, drizzle-kit, zod, bcryptjs, jose, tsx
 - [x] Research agent dispatched: industry UX/feature research (Domino's, Slice, Toast, Square…)
 - [x] Docs agent dispatched: Next.js 16.3 breaking-changes brief from bundled docs
-- [ ] Drizzle schema + migration pushed to Neon
-- [ ] Seed script (demo menu: classic pizzeria categories/items/modifiers)
-- [ ] Operator auth (setup/login/session)
-- [ ] Admin: store settings + publish toggle
-- [ ] Admin: menu management (categories, items, modifier groups)
-- [ ] Admin: orders inbox with status transitions
-- [ ] Storefront: menu, item customization, cart
-- [ ] Checkout: details + validation + order creation (Stripe-ready seam)
-- [ ] Order confirmation/status page
-- [ ] Build passes, end-to-end smoke test (operator flow + customer flow)
-- [ ] Final: README, push
+- [x] Drizzle schema + migration pushed to Neon
+- [x] Seed script (demo menu: classic pizzeria categories/items/modifiers)
+- [x] Operator auth lib (bcrypt + jose sessions)
+- [ ] Admin dashboard (delegated to subagent: setup/login, orders inbox, menu CRUD, modifiers, settings + publish toggle)
+- [x] Storefront: menu, item customization dialog, cart (localStorage)
+- [x] Checkout: details + validation + order creation (Stripe-ready seam)
+- [x] Order confirmation/status page with live polling
+- [x] Order pipeline test: pricing exact (subtotal 4048¢ case), missing-required-modifier and delivery-minimum rejections verified against live DB
+- [x] README
+- [ ] Admin flow review + typecheck + lint after subagent lands
+- [ ] Full e2e smoke test in browser (operator + customer)
+- [ ] Final push
 
 ## Decisions & findings
 
@@ -77,3 +78,10 @@ A fully functioning online pizza ordering platform:
   `.env.local` (documented in README; `.env.example` committed).
 - Money is always integer cents. Tax computed at checkout from
   `store_settings.tax_rate_bps` (basis points) to avoid float drift.
+- The sandbox pre-sets a stale ambient `DATABASE_URL` that `.env` files can't
+  override → app reads `MINKS_DATABASE_URL` first (`src/db/url.ts`).
+- Scaffold's `src/app/page.tsx` shadowed `(store)/page.tsx` for `/` — removed.
+- Hours are informational (viewer-local clock, no store TZ column in v1);
+  order intake is governed by the operator's publish + pause switches. Server
+  enforces: published, accepting, order-type enabled, delivery minimum.
+- Test order #1001 exists in the dev DB (useful for admin inbox demo).

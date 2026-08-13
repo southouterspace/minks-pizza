@@ -1,36 +1,87 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# Mink's Pizza — Online Ordering Platform
 
-## Getting Started
+A complete online ordering platform for a single pizzeria: a public storefront
+where customers browse the menu, customize pizzas, and place pickup/delivery
+orders, plus an operator dashboard for menu management, store settings, and a
+live orders inbox.
 
-First, run the development server:
+Payments are intentionally **not** captured yet — orders are persisted with
+`payment_status = 'pending'` and the checkout path has a clean seam where
+Stripe will slot in (see [Stripe readiness](#stripe-readiness)).
+
+## Stack
+
+- **Next.js 16** (App Router, Server Components, Server Actions), TypeScript
+- **Tailwind CSS v4** — minimal Vercel-style design system
+- **Neon Postgres** + **Drizzle ORM** (`@neondatabase/serverless` over HTTP)
+- **Auth**: email + password for the operator (bcrypt), jose-signed JWT session cookie
+
+## Getting started
 
 ```bash
+npm install
+cp .env.example .env.local   # fill in values (see below)
+npm run db:push              # create tables in your Neon database
+npm run db:seed              # optional: store settings + starter pizzeria menu
 npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+`.env.local`:
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+| Variable | Purpose |
+|---|---|
+| `MINKS_DATABASE_URL` (or `DATABASE_URL`) | Neon Postgres connection string. `MINKS_DATABASE_URL` wins when both are set. |
+| `SESSION_SECRET` | 32+ byte hex secret for session cookies (`openssl rand -hex 32`) |
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+## The two sides of the platform
 
-## Learn More
+### Operator (`/admin`)
 
-To learn more about Next.js, take a look at the following resources:
+1. Visit `/admin` — on first run you're redirected to **/admin/setup** to create
+   your operator account.
+2. **Menu** — create categories, items, and prices; attach modifier groups
+   (Size, Crust, Toppings…); toggle availability to 86 an item instantly.
+3. **Modifiers** — reusable option groups with required/optional rules
+   (`minSelect`/`maxSelect`) and per-option price deltas.
+4. **Settings** — store identity, hours, pickup/delivery toggles, prep times,
+   delivery fee/minimum, tax rate — and the **Publish** switch that takes the
+   storefront live (before that, customers see a coming-soon page). A separate
+   **Accepting orders** switch pauses ordering without unpublishing.
+5. **Orders** (`/admin`) — live inbox that auto-refreshes; move orders through
+   `new → confirmed → preparing → ready → completed` (or cancel).
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+### Customer (`/`)
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+Menu browsing with category navigation → item customization dialog (sizes,
+crusts, toppings with live price updates, quantity, special instructions) →
+cart (persisted in localStorage) → checkout (pickup/delivery, contact details,
+address for delivery, tip presets, order notes) → order confirmation page with
+a live status tracker.
 
-## Deploy on Vercel
+All pricing is authoritative server-side: the cart submits only item/modifier
+ids, and the server re-validates availability, modifier rules, delivery
+minimums, and recomputes every price at order time.
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+## Stripe readiness
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+- Money is integer cents everywhere; `orders` carries a full breakdown
+  (subtotal, tax, delivery fee, tip, total) and `payment_status`
+  (`pending`/`paid`/`refunded`).
+- `src/lib/orders.ts` → `createOrder()` is the single seam: create a
+  PaymentIntent for `totalCents` there, store its id, and flip
+  `payment_status` from a Stripe webhook. `placeOrder` in
+  `src/app/(store)/actions.ts` already returns a structured result to which a
+  client secret can be added.
+
+## Project layout
+
+```
+src/
+  db/            schema.ts (Drizzle), seed.ts, index.ts (client)
+  lib/           menu.ts, orders.ts (pricing + creation), auth.ts, validation.ts
+  app/(store)/   customer storefront (menu, cart, checkout, order status)
+  app/admin/     operator dashboard (orders, menu, modifiers, settings)
+  components/    cart context, storefront + admin UI
+```
+
+See `NOTES.md` for the build log and decision record.
