@@ -4,10 +4,12 @@ export function ComingSoon({
   name,
   phone,
   logoUrl = null,
+  logoUploadedAt = null,
 }: {
   name: string;
   phone: string | null;
   logoUrl?: string | null;
+  logoUploadedAt?: Date | null;
 }) {
   return (
     <div className="flex flex-1 items-center justify-center px-4 py-32">
@@ -15,8 +17,9 @@ export function ComingSoon({
         <StoreMark
           name={name}
           logoUrl={logoUrl}
-          className="mx-auto size-20"
-          textClassName="text-xl"
+          logoUploadedAt={logoUploadedAt}
+          className="mx-auto max-h-28 w-auto max-w-64"
+          textClassName="size-20 text-xl"
         />
         <h1 className="mt-6 text-3xl font-bold tracking-tight">{name}</h1>
         <p className="mt-3 text-muted-foreground">

@@ -16,8 +16,9 @@ export default async function StoreLayout({ children }: LayoutProps<"/">) {
             <StoreMark
               name={settings.name}
               logoUrl={settings.logoUrl}
-              className="size-8"
-              textClassName="text-sm"
+              logoUploadedAt={settings.logoUploadedAt}
+              className="max-h-10 w-auto max-w-40"
+              textClassName="text-sm size-8"
             />
             <span className="text-[15px] font-semibold tracking-tight">
               {settings.name}

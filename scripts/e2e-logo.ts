@@ -12,12 +12,15 @@ const BASE = process.env.E2E_BASE_URL ?? "http://localhost:3000";
 const SHOT_DIR = process.env.E2E_SHOT_DIR ?? "/tmp";
 const EMAIL = process.env.E2E_EMAIL ?? "owner@minks.example";
 const PASSWORD = process.env.E2E_PASSWORD ?? "pizza-test-1234";
-const LOGO = "/tmp/e2e-test-logo.png";
+const LOGO = process.env.E2E_LOGO ?? "/tmp/e2e-test-logo.png";
 
 async function main() {
-  execFileSync("npx", ["tsx", "scripts/make-test-logo.ts", LOGO], {
-    stdio: "inherit",
-  });
+  // Only generate the built-in fixture; an explicit E2E_LOGO is used as-is.
+  if (!process.env.E2E_LOGO) {
+    execFileSync("npx", ["tsx", "scripts/make-test-logo.ts", LOGO], {
+      stdio: "inherit",
+    });
+  }
 
   const browser = await chromium.launch({
     executablePath: process.env.CHROMIUM_PATH ?? "/opt/pw-browsers/chromium",
@@ -37,24 +40,20 @@ async function main() {
   // Upload: the file input is hidden behind the "Upload image" button.
   await page.waitForSelector("text=Logo");
   await page.setInputFiles('input[type="file"]', LOGO);
-  await page.waitForFunction(
-    () =>
-      document
-        .querySelector<HTMLInputElement>('input[name="logoUrl"]')
-        ?.value.startsWith("data:image/") ?? false,
-    undefined,
-    { timeout: 15_000 },
-  );
+  // Upload posts to /api/admin/logo; the preview flips to the asset route.
+  await page
+    .locator('img[alt="Current logo"][src^="/api/logo"]')
+    .waitFor({ timeout: 20_000 });
   await page.screenshot({ path: `${SHOT_DIR}/logo-1-settings.png` });
 
   await page.click('button[type="submit"]:has-text("Save")');
   await page.waitForURL(/saved=1/, { timeout: 20_000 });
 
-  // Persisted?
-  const stored = await page.getAttribute('input[name="logoUrl"]', "value");
-  if (!stored?.startsWith("data:image/")) {
-    throw new Error(`logo not persisted, got: ${String(stored).slice(0, 40)}`);
-  }
+  // Survives a reload of the settings page?
+  await page.reload({ waitUntil: "networkidle" });
+  await page
+    .locator('img[alt="Current logo"][src^="/api/logo"]')
+    .waitFor({ timeout: 20_000 });
   await page.screenshot({ path: `${SHOT_DIR}/logo-2-saved.png` });
 
   // Storefront header renders it.
@@ -62,8 +61,13 @@ async function main() {
   const headerLogo = page.locator('header img[alt]').first();
   await headerLogo.waitFor({ timeout: 15_000 });
   const src = await headerLogo.getAttribute("src");
-  if (!src?.startsWith("data:image/")) {
-    throw new Error(`storefront header not showing the logo: ${src?.slice(0, 40)}`);
+  if (!src?.startsWith("/api/logo")) {
+    throw new Error(`storefront header not showing the logo: ${src?.slice(0, 60)}`);
+  }
+  // The asset route must actually serve the image bytes.
+  const assetRes = await page.request.get(new URL(src, BASE).toString());
+  if (!assetRes.ok() || !(assetRes.headers()["content-type"] ?? "").startsWith("image/")) {
+    throw new Error(`asset route failed: ${assetRes.status()}`);
   }
   await page.screenshot({ path: `${SHOT_DIR}/logo-3-storefront.png` });
 

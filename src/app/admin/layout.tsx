@@ -19,7 +19,11 @@ export default async function AdminLayout({ children }: LayoutProps<"/admin">) {
   if (!operator) return <>{children}</>;
 
   const [settings] = await db
-    .select({ name: storeSettings.name, logoUrl: storeSettings.logoUrl })
+    .select({
+      name: storeSettings.name,
+      logoUrl: storeSettings.logoUrl,
+      logoUploadedAt: storeSettings.logoUploadedAt,
+    })
     .from(storeSettings)
     .where(eq(storeSettings.id, 1));
   const storeName = settings?.name ?? "Mink's Pizza";
@@ -33,8 +37,9 @@ export default async function AdminLayout({ children }: LayoutProps<"/admin">) {
             <StoreMark
               name={storeName}
               logoUrl={settings?.logoUrl ?? null}
-              className="size-8"
-              textClassName="text-sm"
+              logoUploadedAt={settings?.logoUploadedAt ?? null}
+              className="max-h-8 w-auto max-w-28"
+              textClassName="size-8 text-sm"
             />
             <span className="min-w-0">
               <span className="block truncate text-sm font-semibold tracking-tight">

@@ -130,15 +130,33 @@ a real `<Button>`), `text-error`→`text-destructive`, `text-link`→`text-prima
 
 ### Store logo (session 2)
 
-`store_settings.logo_url` holds either an `https://` URL or a self-contained
-`data:` URL. The admin uploader (`src/components/admin/logo-field.tsx`)
-downscales the picked file to 512px on a canvas, encodes it as WebP (PNG
-fallback) and inlines it, capped at 400 KB — so the platform needs **no object
-storage** (no S3/Vercel Blob to provision). `logoUrlOrNull()` in
-`src/app/admin/actions.ts` accepts only `https:` and `data:image/*` so the logo
-can't become active content. `src/components/store-mark.tsx` renders the logo
-(or the initial badge fallback) in the storefront header, the coming-soon page
-and the admin sidebar.
+Stored in Neon as a real asset, not inlined. The first cut downscaled the image
+to a `data:` URL inside `store_settings` and capped it at 400 KB — which a
+detailed crest logo blew straight past, and which would have dragged the image
+bytes into every storefront page query.
+
+Current design:
+
+- `store_logo` — its own table (id = 1, `content_type`, base64 `data`,
+  `byte_size`). Separate from `store_settings` so page renders never read the
+  bytes. Base64 text rather than `bytea` keeps the serverless HTTP driver on
+  plain text.
+- `store_settings.logo_uploaded_at` — set when an upload exists; doubles as the
+  cache-busting version. `logo_url` still holds an externally hosted https URL.
+- `POST/DELETE /api/admin/logo` — operator-authed multipart upload (4 MB cap,
+  under Vercel's ~4.5 MB request-body limit), so uploads bypass the server
+  action body limit entirely. Uploading clears `logo_url`; saving a pasted URL
+  deletes the upload, so exactly one logo wins.
+- `GET /api/logo` — serves the bytes with `immutable` caching + ETag; callers
+  append `?v=<logo_uploaded_at>`.
+- `resolveLogoSrc()` in `src/components/store-mark.tsx` picks upload → URL →
+  initial-badge fallback. The logo renders at its **natural shape** (no
+  rounding or cropping) so crests and wordmarks aren't clipped into a circle;
+  only the fallback initial is round.
+
+Neon was chosen over Cloudflare R2 deliberately: R2 would need a bucket plus
+access keys added to Vercel's env, whereas the database is already wired into
+production, so this needs no new credentials or configuration.
 
 ### Bug fixed: cart wiped on page refresh
 
