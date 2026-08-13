@@ -85,3 +85,12 @@ A fully functioning online pizza ordering platform:
   order intake is governed by the operator's publish + pause switches. Server
   enforces: published, accepting, order-type enabled, delivery minimum.
 - Test order #1001 exists in the dev DB (useful for admin inbox demo).
+- Industry research landed (docs/RESEARCH.md): build validated on guest
+  checkout, server-side pricing, modifier architecture, 4-stage tracker.
+  Acted on: double-submit guard, recent-order link. Deferred to roadmap:
+  half-and-half, per-size topping pricing, SMS, delivery zones, allergens.
+- Customer e2e (Playwright, real Chromium): menu → customize (Large/Thin/
+  Pepperoni+Mushrooms = $20.24 ✓) → cart → checkout → confirmation #1002 ✓.
+- Handoff state plan: after operator e2e passes, delete the test operator row
+  and set `is_published=false` so the owner experiences pristine first-run
+  setup (/admin/setup → build menu → publish). Demo orders stay for the inbox.
