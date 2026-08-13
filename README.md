@@ -84,4 +84,19 @@ src/
   components/    cart context, storefront + admin UI
 ```
 
+## Roadmap
+
+Informed by industry research (see `docs/RESEARCH.md`), roughly in order:
+
+1. **Stripe payment capture** — the seam is ready (see above)
+2. **Half-and-half toppings & per-size topping pricing** — the most
+   pizza-specific gaps; both touch the pricing engine, build together
+3. **Scheduled orders** (ASAP vs later) and rush-aware prep-time estimates
+4. **SMS status notifications** — cuts "where's my order" calls
+5. **Delivery zones** (radius/ZIP validation, tiered fees)
+6. **Allergen/dietary tags & item photos** (schema already has `imageUrl`)
+7. **Customer accounts with saved addresses & one-tap reorder** — optional,
+   post-purchase (guest checkout stays the default)
+8. **Coupons/promo codes; printable kitchen tickets; audible new-order alert**
+
 See `NOTES.md` for the build log and decision record.

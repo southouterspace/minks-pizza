@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useMemo, useState, useTransition } from "react";
+import { useMemo, useRef, useState, useTransition } from "react";
 import { useCart } from "@/components/cart-context";
 import { formatCents, taxFromBps } from "@/lib/money";
 import { placeOrder } from "@/app/(store)/actions";
@@ -26,6 +26,7 @@ export function CheckoutForm({ config }: { config: CheckoutConfig }) {
   const router = useRouter();
   const { lines, subtotalCents, clear, ready } = useCart();
   const [pending, startTransition] = useTransition();
+  const submittedRef = useRef(false);
 
   const defaultType = config.pickupEnabled ? "pickup" : "delivery";
   const [orderType, setOrderType] = useState<"pickup" | "delivery">(defaultType);
@@ -83,6 +84,9 @@ export function CheckoutForm({ config }: { config: CheckoutConfig }) {
 
   const submit = (e: React.FormEvent) => {
     e.preventDefault();
+    // Guard against double-taps / repeat submits producing duplicate tickets.
+    if (pending || submittedRef.current) return;
+    submittedRef.current = true;
     setError(null);
     startTransition(async () => {
       const result = await placeOrder({
@@ -105,8 +109,14 @@ export function CheckoutForm({ config }: { config: CheckoutConfig }) {
       });
       if (result.ok) {
         clear();
+        try {
+          localStorage.setItem("minks-last-order", result.orderId);
+        } catch {
+          // ignore storage failures
+        }
         router.push(`/order/${result.orderId}`);
       } else {
+        submittedRef.current = false; // allow retry after a rejected order
         setError(result.error);
       }
     });
