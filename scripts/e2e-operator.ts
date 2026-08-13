@@ -21,17 +21,20 @@ async function main() {
   const shot = (name: string) =>
     page.screenshot({ path: `${SHOT_DIR}/${name}.png`, fullPage: false });
 
-  // 1. First-run setup
+  // 1. First-run setup (or login if the operator already exists)
   await page.goto(`${BASE}/admin`, { waitUntil: "networkidle" });
-  if (!page.url().includes("/admin/setup")) {
-    throw new Error(`Expected redirect to /admin/setup, got ${page.url()}`);
+  if (page.url().includes("/admin/setup")) {
+    await shot("a1-setup");
+    await page.fill('input[name="name"]', "Mink Operator");
+    await page.fill('input[name="email"]', EMAIL);
+    await page.fill('input[name="password"]', PASSWORD);
+    await page.click('button[type="submit"]');
+  } else if (page.url().includes("/admin/login")) {
+    await page.fill('input[name="email"]', EMAIL);
+    await page.fill('input[name="password"]', PASSWORD);
+    await page.click('button[type="submit"]');
   }
-  await shot("a1-setup");
-  await page.fill('input[name="name"]', "Mink Operator");
-  await page.fill('input[name="email"]', EMAIL);
-  await page.fill('input[name="password"]', PASSWORD);
-  await page.click('button[type="submit"]');
-  await page.waitForURL("**/admin", { timeout: 20_000 });
+  await page.waitForURL(/\/admin$/, { timeout: 20_000 });
   await shot("a2-orders-inbox");
 
   // 2. Orders inbox should show the seeded test orders; advance one status
@@ -48,10 +51,28 @@ async function main() {
   await page.waitForSelector("text=Specialty Pizzas");
   await shot("a4-menu");
 
-  // 4. Settings: verify publish switch exists
+  // 4. Settings: publish the store via the UI switch (the go-live moment)
   await page.click('a[href="/admin/settings"]');
-  await page.waitForSelector("text=Publish", { timeout: 15_000 });
+  await page.waitForSelector("text=Publish store", { timeout: 15_000 });
   await shot("a5-settings");
+  const publishSwitch = page.getByRole("switch", {
+    name: "Publish store",
+    exact: true,
+  });
+  if (await publishSwitch.count()) {
+    await publishSwitch.click();
+    // The switch relabels to "Unpublish store" once the toggle persists.
+    await page
+      .getByRole("switch", { name: "Unpublish store", exact: true })
+      .waitFor({ timeout: 15_000 });
+    await shot("a5b-published");
+  }
+
+  // 4b. Storefront should now show the live menu, not the coming-soon page
+  const storefront = await browser.newPage();
+  await storefront.goto(BASE, { waitUntil: "networkidle" });
+  await storefront.waitForSelector("text=Specialty Pizzas", { timeout: 15_000 });
+  await storefront.close();
 
   // 5. Sign out and log back in
   await page.click("text=Sign out");

@@ -63,13 +63,13 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
       const raw = localStorage.getItem(STORAGE_KEY);
       if (raw) {
         const parsed = JSON.parse(raw);
+        // eslint-disable-next-line react-hooks/set-state-in-effect -- hydration read
         if (Array.isArray(parsed)) setLines(parsed);
       }
     } catch {
       // corrupted cart — start fresh
     }
     hydrated.current = true;
-    // eslint-disable-next-line react-hooks/set-state-in-effect
     setReady(true);
   }, []);
 
