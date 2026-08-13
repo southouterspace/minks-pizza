@@ -12,9 +12,19 @@ Stripe will slot in (see [Stripe readiness](#stripe-readiness)).
 ## Stack
 
 - **Next.js 16** (App Router, Server Components, Server Actions), TypeScript
-- **Tailwind CSS v4** — minimal Vercel-style design system
+- **Tailwind CSS v4** + **shadcn/ui** (Base UI variant, Nova preset) — minimal
+  Vercel-style design system
 - **Neon Postgres** + **Drizzle ORM** (`@neondatabase/serverless` over HTTP)
 - **Auth**: email + password for the operator (bcrypt), jose-signed JWT session cookie
+
+### UI components
+
+Components live in `src/components/ui/` and are built on
+[Base UI](https://base-ui.com) primitives with the shadcn **Nova** preset.
+Component styles are the `.cn-*` classes in `src/styles/style-nova.css`, scoped
+by the `style-nova` class on `<html>`; design tokens live in
+`src/app/globals.css`. `components.json` records the configuration, so
+`npx shadcn@latest add <component>` will add more in the same style.
 
 ## Getting started
 

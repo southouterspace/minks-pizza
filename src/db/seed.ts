@@ -40,7 +40,7 @@ async function main() {
       deliveryPrepMinutes: 45,
       deliveryFeeCents: 399,
       deliveryMinimumCents: 1500,
-      taxRateBps: 0, // Oregon — no sales tax; operator can change
+      taxRateBps: 825, // TX 6.25% state + 2% local; operator can change
       isPublished: false,
       isAcceptingOrders: true,
     })
