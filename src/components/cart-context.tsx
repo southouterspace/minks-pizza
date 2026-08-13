@@ -55,17 +55,22 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
   const [ready, setReady] = useState(false);
   const hydrated = useRef(false);
 
+  // Hydrate from localStorage after mount — deliberate setState-in-effect so
+  // server and first client render agree (empty cart), avoiding hydration
+  // mismatches.
   useEffect(() => {
     try {
       const raw = localStorage.getItem(STORAGE_KEY);
       if (raw) {
         const parsed = JSON.parse(raw);
+        // eslint-disable-next-line react-hooks/set-state-in-effect
         if (Array.isArray(parsed)) setLines(parsed);
       }
     } catch {
       // corrupted cart — start fresh
     }
     hydrated.current = true;
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     setReady(true);
   }, []);
 

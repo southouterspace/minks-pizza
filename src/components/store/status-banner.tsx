@@ -18,7 +18,10 @@ export function StoreStatusBanner({
 }) {
   const [open, setOpen] = useState<boolean | null>(null);
 
+  // Deliberate post-mount computation: uses the viewer's local clock, which
+  // must not run during SSR (server timezone would mismatch the client).
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     setOpen(isOpenNow(hours));
     const t = setInterval(() => setOpen(isOpenNow(hours)), 60_000);
     return () => clearInterval(t);

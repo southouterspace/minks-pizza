@@ -7,8 +7,10 @@ import { useEffect, useState } from "react";
 export function RecentOrderLink() {
   const [orderId, setOrderId] = useState<string | null>(null);
 
+  // Deliberate post-mount read: localStorage doesn't exist during SSR.
   useEffect(() => {
     try {
+      // eslint-disable-next-line react-hooks/set-state-in-effect
       setOrderId(localStorage.getItem("minks-last-order"));
     } catch {
       // storage unavailable

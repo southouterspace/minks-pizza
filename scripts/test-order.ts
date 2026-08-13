@@ -1,10 +1,9 @@
 import { createOrder, OrderError } from "../src/lib/orders";
-import { db, menuItems, modifiers, itemModifierGroups, modifierGroups } from "../src/db";
+import { db, menuItems, modifiers, modifierGroups } from "../src/db";
 import { eq } from "drizzle-orm";
 
 async function main() {
   const [cheese] = await db.select().from(menuItems).where(eq(menuItems.name, "Cheese Pizza"));
-  const links = await db.select().from(itemModifierGroups).where(eq(itemModifierGroups.itemId, cheese.id));
   const groups = await db.select().from(modifierGroups);
   const mods = await db.select().from(modifiers);
   const groupByName = Object.fromEntries(groups.map(g => [g.name, g]));
