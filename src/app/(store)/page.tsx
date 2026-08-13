@@ -3,6 +3,7 @@ import { getSettings } from "@/lib/orders";
 import { MenuBrowser } from "@/components/store/menu-browser";
 import { ComingSoon } from "@/components/store/coming-soon";
 import { StoreStatusBanner } from "@/components/store/status-banner";
+import { RecentOrderLink } from "@/components/store/recent-order-link";
 import { formatTime, DAY_NAMES } from "@/lib/hours";
 
 export const dynamic = "force-dynamic";
@@ -42,6 +43,9 @@ export default async function StorePage() {
             {settings.deliveryEnabled ? (
               <span>Delivery · ~{settings.deliveryPrepMinutes} min</span>
             ) : null}
+          </div>
+          <div className="mt-3">
+            <RecentOrderLink />
           </div>
         </div>
       </section>
