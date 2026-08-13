@@ -1,32 +1,53 @@
 import { cn } from "@/lib/utils";
 
+export type StoreMarkSource = {
+  name: string;
+  logoUrl: string | null;
+  logoUploadedAt: Date | null;
+};
+
+/** Uploaded logo wins over an external URL; null means show the initial. */
+export function resolveLogoSrc(store: {
+  logoUrl: string | null;
+  logoUploadedAt: Date | null;
+}): string | null {
+  if (store.logoUploadedAt) {
+    return `/api/logo?v=${store.logoUploadedAt.getTime()}`;
+  }
+  return store.logoUrl;
+}
+
 /**
- * The store's visual mark: the uploaded logo when there is one, otherwise a
- * circle with the store's initial. Used in the storefront header, the
- * coming-soon page and the admin sidebar so they never drift apart.
+ * The store's visual mark: the logo when one is set, otherwise a circle with
+ * the store's initial. Shared by the storefront header, the coming-soon page
+ * and the admin sidebar so they can't drift apart.
+ *
+ * The logo is rendered at its natural shape — no rounding or cropping — so
+ * crests and wordmarks aren't clipped into a circle.
  */
 export function StoreMark({
   name,
   logoUrl,
+  logoUploadedAt,
   className,
   textClassName,
-}: {
-  name: string;
-  logoUrl: string | null;
-  /** Sizing for the mark itself, e.g. "size-8". */
+}: StoreMarkSource & {
+  /** Sizing box for the mark, e.g. "size-8" or "h-10 w-auto". */
   className?: string;
   /** Font sizing for the fallback initial. */
   textClassName?: string;
 }) {
-  if (logoUrl) {
+  const src = resolveLogoSrc({ logoUrl, logoUploadedAt });
+
+  if (src) {
     return (
-      // The logo is an operator-supplied data: or remote URL, so a plain <img>
-      // avoids next/image remote-pattern configuration.
+      // Operator-supplied image of unknown origin — a plain <img> avoids
+      // next/image remote-pattern configuration.
       // eslint-disable-next-line @next/next/no-img-element
       <img
-        src={logoUrl}
+        src={src}
         alt={name}
-        className={cn("shrink-0 rounded-full object-contain", className)}
+        className={cn("shrink-0 object-contain", className)}
       />
     );
   }

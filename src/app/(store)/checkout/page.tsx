@@ -15,6 +15,7 @@ export default async function CheckoutPage() {
         name={settings.name}
         phone={settings.phone}
         logoUrl={settings.logoUrl}
+        logoUploadedAt={settings.logoUploadedAt}
       />
     );
   }

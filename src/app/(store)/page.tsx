@@ -17,6 +17,7 @@ export default async function StorePage() {
         name={settings.name}
         phone={settings.phone}
         logoUrl={settings.logoUrl}
+        logoUploadedAt={settings.logoUploadedAt}
       />
     );
   }

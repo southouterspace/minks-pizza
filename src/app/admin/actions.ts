@@ -13,6 +13,7 @@ import {
   modifiers,
   operators,
   orders,
+  storeLogo,
   storeSettings,
   type DayHours,
 } from "@/db";
@@ -612,17 +613,14 @@ export async function deleteModifier(formData: FormData): Promise<void> {
 const TIME_RE = /^\d{2}:\d{2}$/;
 
 /**
- * Accepts only an https URL or an inline image data URL, so a hostile value
- * can't turn the logo into a `javascript:` or other active-content URL.
+ * Only an https URL is accepted, so a hostile value can't turn the logo into a
+ * `javascript:` or other active-content URL. Uploads don't come through here —
+ * they POST to /api/admin/logo.
  */
 function logoUrlOrNull(formData: FormData): string | null {
   const raw = textField(formData, "logoUrl");
   if (!raw) return null;
-  if (/^data:image\/(png|jpeg|webp|gif|svg\+xml);base64,[A-Za-z0-9+/=]+$/.test(raw)) {
-    return raw;
-  }
-  if (/^https:\/\/\S+$/i.test(raw)) return raw;
-  return null;
+  return /^https:\/\/\S+$/i.test(raw) ? raw : null;
 }
 
 export async function saveSettings(formData: FormData): Promise<void> {
@@ -646,10 +644,18 @@ export async function saveSettings(formData: FormData): Promise<void> {
     });
   }
 
+  const logoUrl = logoUrlOrNull(formData);
+  // A pasted URL replaces an upload — the storefront prefers the upload, so
+  // leaving it in place would silently ignore what the operator just saved.
+  if (logoUrl) {
+    await db.delete(storeLogo).where(eq(storeLogo.id, 1));
+  }
+
   const values = {
     name: textField(formData, "name") || "My Pizzeria",
     tagline: textOrNull(formData, "tagline"),
-    logoUrl: logoUrlOrNull(formData),
+    logoUrl,
+    ...(logoUrl ? { logoUploadedAt: null } : {}),
     phone: textOrNull(formData, "phone"),
     email: textOrNull(formData, "email"),
     addressLine1: textOrNull(formData, "addressLine1"),

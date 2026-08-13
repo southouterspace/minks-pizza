@@ -11,92 +11,77 @@ import {
   FieldLabel,
 } from "@/components/ui/field";
 
-/** Longest edge of the stored logo, in pixels. */
-const MAX_EDGE = 512;
-/** Refuse anything that would bloat the settings row / server action payload. */
-const MAX_STORED_BYTES = 400_000;
-
-/**
- * Downscale an image file to a self-contained data URL.
- *
- * Inlining the logo keeps the platform dependency-free — no S3/Blob bucket to
- * provision — at the cost of a larger settings row, which is why it's capped.
- */
-function fileToDataUrl(file: File): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onerror = () => reject(new Error("Could not read that file."));
-    reader.onload = () => {
-      const img = new Image();
-      img.onerror = () => reject(new Error("That file isn't a valid image."));
-      img.onload = () => {
-        const scale = Math.min(1, MAX_EDGE / Math.max(img.width, img.height));
-        const canvas = document.createElement("canvas");
-        canvas.width = Math.max(1, Math.round(img.width * scale));
-        canvas.height = Math.max(1, Math.round(img.height * scale));
-
-        const ctx = canvas.getContext("2d");
-        if (!ctx) return reject(new Error("Couldn't process that image."));
-        ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
-
-        // WebP keeps transparency and is much smaller than PNG; fall back to
-        // PNG on the rare browser that can't encode it.
-        let out = canvas.toDataURL("image/webp", 0.92);
-        if (!out.startsWith("data:image/webp")) {
-          out = canvas.toDataURL("image/png");
-        }
-        resolve(out);
-      };
-      img.src = String(reader.result);
-    };
-    reader.readAsDataURL(file);
-  });
-}
-
-export function LogoField({ initialLogoUrl }: { initialLogoUrl: string | null }) {
+export function LogoField({
+  initialLogoUrl,
+  initialUploadedUrl,
+}: {
+  /** Externally hosted logo, if the operator pasted a URL. */
+  initialLogoUrl: string | null;
+  /** `/api/logo?v=…` when an uploaded logo exists. */
+  initialUploadedUrl: string | null;
+}) {
+  const [uploadedUrl, setUploadedUrl] = useState(initialUploadedUrl);
   const [logoUrl, setLogoUrl] = useState(initialLogoUrl ?? "");
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const fileInput = useRef<HTMLInputElement>(null);
 
-  const onPick = async (file: File | undefined) => {
+  const preview = uploadedUrl || logoUrl;
+
+  const upload = async (file: File | undefined) => {
     if (!file) return;
     setError(null);
     setBusy(true);
     try {
-      const dataUrl = await fileToDataUrl(file);
-      if (dataUrl.length > MAX_STORED_BYTES) {
-        setError(
-          "That image is too detailed to inline. Try a simpler or smaller logo, or paste a hosted image URL instead.",
-        );
-      } else {
-        setLogoUrl(dataUrl);
-      }
+      const body = new FormData();
+      body.append("file", file);
+      const res = await fetch("/api/admin/logo", { method: "POST", body });
+      const json = (await res.json()) as { url?: string; error?: string };
+      if (!res.ok) throw new Error(json.error ?? "Upload failed.");
+      setUploadedUrl(json.url ?? null);
+      setLogoUrl("");
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Couldn't read that image.");
+      setError(err instanceof Error ? err.message : "Upload failed.");
     } finally {
       setBusy(false);
       if (fileInput.current) fileInput.current.value = "";
     }
   };
 
-  const isData = logoUrl.startsWith("data:");
+  const remove = async () => {
+    setError(null);
+    setBusy(true);
+    try {
+      if (uploadedUrl) {
+        const res = await fetch("/api/admin/logo", { method: "DELETE" });
+        if (!res.ok) throw new Error("Couldn't remove the logo.");
+      }
+      setUploadedUrl(null);
+      setLogoUrl("");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Couldn't remove the logo.");
+    } finally {
+      setBusy(false);
+    }
+  };
 
   return (
     <Field>
       <FieldLabel htmlFor="logo-url">Logo</FieldLabel>
 
-      {/* The value actually submitted with the settings form. */}
-      <input type="hidden" name="logoUrl" value={logoUrl} />
+      {/* Only the external URL travels with the settings form; uploads go
+          straight to /api/admin/logo so they aren't limited by the server
+          action body size. */}
+      <input type="hidden" name="logoUrl" value={uploadedUrl ? "" : logoUrl} />
 
       <div className="flex items-start gap-4">
-        <div className="flex size-16 shrink-0 items-center justify-center overflow-hidden rounded-lg border border-border bg-muted">
-          {logoUrl ? (
-            // Data/remote URL of unknown host — plain img avoids next/image
-            // remote-pattern config.
+        <div className="flex size-20 shrink-0 items-center justify-center overflow-hidden rounded-md border border-border bg-muted">
+          {preview ? (
+            // Operator-supplied image of unknown origin — a plain <img> avoids
+            // next/image remote-pattern configuration.
             // eslint-disable-next-line @next/next/no-img-element
             <img
-              src={logoUrl}
+              src={preview}
               alt="Current logo"
               className="size-full object-contain"
             />
@@ -115,17 +100,15 @@ export function LogoField({ initialLogoUrl }: { initialLogoUrl: string | null })
               onClick={() => fileInput.current?.click()}
             >
               <ImageUp />
-              {busy ? "Processing…" : "Upload image"}
+              {busy ? "Uploading…" : uploadedUrl ? "Replace image" : "Upload image"}
             </Button>
-            {logoUrl ? (
+            {preview ? (
               <Button
                 type="button"
                 variant="ghost"
                 size="sm"
-                onClick={() => {
-                  setLogoUrl("");
-                  setError(null);
-                }}
+                disabled={busy}
+                onClick={remove}
               >
                 <Trash2 />
                 Remove
@@ -136,9 +119,9 @@ export function LogoField({ initialLogoUrl }: { initialLogoUrl: string | null })
           <input
             ref={fileInput}
             type="file"
-            accept="image/*"
+            accept="image/png,image/jpeg,image/webp,image/gif,image/svg+xml"
             className="hidden"
-            onChange={(e) => onPick(e.target.files?.[0])}
+            onChange={(e) => upload(e.target.files?.[0])}
           />
 
           <Input
@@ -146,17 +129,17 @@ export function LogoField({ initialLogoUrl }: { initialLogoUrl: string | null })
             type="text"
             inputMode="url"
             placeholder="…or paste an image URL (https://…)"
-            value={isData ? "" : logoUrl}
-            disabled={isData}
+            value={uploadedUrl ? "" : logoUrl}
+            disabled={Boolean(uploadedUrl)}
             onChange={(e) => setLogoUrl(e.target.value.trim())}
           />
         </div>
       </div>
 
       <FieldDescription>
-        {isData
-          ? "Uploaded image stored with your store settings. Remove it to paste a hosted URL instead."
-          : "Shown in the storefront header and on the coming-soon page. Uploads are resized to 512px; square images look best."}
+        {uploadedUrl
+          ? "Uploaded and saved. Shown at its natural shape in the storefront header and coming-soon page."
+          : "Shown in the storefront header and on the coming-soon page. PNG, JPEG, WebP, GIF or SVG, up to 4 MB."}
       </FieldDescription>
       {error ? <FieldError errors={[{ message: error }]} /> : null}
     </Field>

@@ -61,12 +61,14 @@ export const storeSettings = pgTable("store_settings", {
   id: integer("id").primaryKey(), // always 1
   name: text("name").notNull().default("My Pizzeria"),
   tagline: text("tagline"),
-  /**
-   * Store logo shown instead of the initial badge. Either an https URL or a
-   * self-contained data: URL (the admin uploader downscales and inlines the
-   * image, so no object storage is required).
-   */
+  /** Externally hosted logo (https URL). Ignored when an upload exists. */
   logoUrl: text("logo_url"),
+  /**
+   * Set when an uploaded logo lives in `store_logo`. Kept here (rather than
+   * joining) so the storefront can build the asset URL — and cache-bust it —
+   * without ever pulling the image bytes into a page query.
+   */
+  logoUploadedAt: timestamp("logo_uploaded_at", { withTimezone: true }),
   phone: text("phone"),
   email: text("email"),
   addressLine1: text("address_line1"),
@@ -84,6 +86,21 @@ export const storeSettings = pgTable("store_settings", {
   taxRateBps: integer("tax_rate_bps").notNull().default(0), // e.g. 875 = 8.75%
   isPublished: boolean("is_published").notNull().default(false),
   isAcceptingOrders: boolean("is_accepting_orders").notNull().default(true),
+  updatedAt: timestamp("updated_at", { withTimezone: true })
+    .notNull()
+    .defaultNow(),
+});
+
+/**
+ * The uploaded store logo, in its own table so the image bytes are never
+ * dragged into the `store_settings` reads that happen on every page render.
+ * Base64 rather than bytea to keep the serverless HTTP driver on plain text.
+ */
+export const storeLogo = pgTable("store_logo", {
+  id: integer("id").primaryKey(), // always 1
+  contentType: text("content_type").notNull(),
+  data: text("data").notNull(), // base64
+  byteSize: integer("byte_size").notNull(),
   updatedAt: timestamp("updated_at", { withTimezone: true })
     .notNull()
     .defaultNow(),

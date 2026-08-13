@@ -32,6 +32,7 @@ const DEFAULTS = {
   name: "My Pizzeria",
   tagline: null as string | null,
   logoUrl: null as string | null,
+  logoUploadedAt: null as Date | null,
   phone: null as string | null,
   email: null as string | null,
   addressLine1: null as string | null,
@@ -126,7 +127,14 @@ export default async function SettingsPage({
           <FieldLegend className="w-full border-b border-border pb-2 text-sm!">
             Store info
           </FieldLegend>
-          <LogoField initialLogoUrl={settings.logoUrl} />
+          <LogoField
+            initialLogoUrl={settings.logoUrl}
+            initialUploadedUrl={
+              settings.logoUploadedAt
+                ? `/api/logo?v=${settings.logoUploadedAt.getTime()}`
+                : null
+            }
+          />
           <div className="grid gap-4 sm:grid-cols-2">
             <Field>
               <FieldLabel htmlFor="s-name">Store name</FieldLabel>
