@@ -60,15 +60,37 @@ A fully functioning online pizza ordering platform:
 - [x] Drizzle schema + migration pushed to Neon
 - [x] Seed script (demo menu: classic pizzeria categories/items/modifiers)
 - [x] Operator auth lib (bcrypt + jose sessions)
-- [ ] Admin dashboard (delegated to subagent: setup/login, orders inbox, menu CRUD, modifiers, settings + publish toggle)
+- [x] Admin dashboard (built by subagent: setup/login, orders inbox with legal
+  status transitions, menu CRUD with 86-toggle/reorder, modifier groups with
+  radio-default semantics, settings with publish + pause switches)
 - [x] Storefront: menu, item customization dialog, cart (localStorage)
 - [x] Checkout: details + validation + order creation (Stripe-ready seam)
 - [x] Order confirmation/status page with live polling
 - [x] Order pipeline test: pricing exact (subtotal 4048¢ case), missing-required-modifier and delivery-minimum rejections verified against live DB
 - [x] README
-- [ ] Admin flow review + typecheck + lint after subagent lands
-- [ ] Full e2e smoke test in browser (operator + customer)
-- [ ] Final push
+- [x] Admin flow review (auth coverage: 22 requireOperator calls across
+  protected actions; legal status-transition map verified) + tsc + eslint clean
+- [x] Operator e2e (Playwright): first-run setup → orders inbox → confirm order
+  → menu page → settings → **publish via UI switch → storefront went live** →
+  sign out → re-login. PASSED
+- [x] Customer e2e re-verified on the published store; mobile (375px)
+  screenshots verified (bottom-sheet dialog works well)
+- [x] Production build passes; prod server smoke-tested (all routes 200)
+- [x] Handoff state reset: operators table emptied, is_published=false —
+  owner gets the pristine /admin/setup → build menu → publish journey.
+  Demo orders #1001–#1002 left in the inbox intentionally.
+- [x] Final push
+
+## Gotchas hit (for future sessions)
+
+- Playwright `getByRole(name:)` is substring-matching: "Publish store" also
+  matched the "Unpublish store" switch — use `exact: true`.
+- Next dev-tools floating indicator overlapped the admin sidebar footer and
+  intercepted e2e clicks → `devIndicators: false` in next.config.ts.
+- `create-next-app`'s root `src/app/page.tsx` silently shadows a route-group
+  `(store)/page.tsx` for `/`.
+- Pre-installed Chromium requires `executablePath: /opt/pw-browsers/chromium`
+  (version pin mismatch with the npm playwright package).
 
 ## Decisions & findings
 
