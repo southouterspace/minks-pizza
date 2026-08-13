@@ -63,7 +63,6 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
       const raw = localStorage.getItem(STORAGE_KEY);
       if (raw) {
         const parsed = JSON.parse(raw);
-        // eslint-disable-next-line react-hooks/set-state-in-effect
         if (Array.isArray(parsed)) setLines(parsed);
       }
     } catch {
