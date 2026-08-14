@@ -61,6 +61,26 @@ npm run dev
    **Accepting orders** switch pauses ordering without unpublishing.
 5. **Orders** (`/admin`) — live inbox that auto-refreshes; move orders through
    `new → confirmed → preparing → ready → completed` (or cancel).
+6. **Team** (`/admin/team`) — add or remove operator accounts, and change your
+   own password. See [Operator accounts](#operator-accounts) below.
+
+#### Operator accounts
+
+`/admin/setup` is a **first-run-only** page: it creates the very first operator
+and then locks itself permanently — both the page and the server action bail out
+to `/admin/login` once any operator exists. There is no public sign-up, because
+an open sign-up on `/admin` would let any visitor create an admin account on a
+live store.
+
+Every subsequent account is created from **Team** by someone already signed in.
+The creator sets an initial password and passes it on out of band; the new
+operator can replace it from the same page. Two things to know:
+
+- **There are no roles.** Every operator has full access to the menu, orders and
+  settings.
+- **You cannot remove your own account.** That restriction is what guarantees at
+  least one operator always exists — at zero accounts `/admin/setup` would
+  unlock itself and the store could be claimed by anyone.
 
 ### Customer (`/`)
 
@@ -92,7 +112,7 @@ src/
   db/            schema.ts (Drizzle), seed.ts, index.ts (client)
   lib/           menu.ts, orders.ts (pricing + creation), auth.ts, validation.ts
   app/(store)/   customer storefront (menu, cart, checkout, order status)
-  app/admin/     operator dashboard (orders, menu, modifiers, settings)
+  app/admin/     operator dashboard (orders, menu, modifiers, settings, team)
   components/    cart context, storefront + admin UI
 ```
 

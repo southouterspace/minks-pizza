@@ -168,6 +168,46 @@ StrictMode; a race in production). It now gates on the `ready` **state**, which
 can't be true until the render that carries the restored lines. Client-side
 navigation hid this from the e2e — only a hard refresh reproduced it.
 
+## Session 3 — Team management (multi-operator)
+
+**Ask:** "How does a new user sign up for admin access?" → there was no answer.
+`/admin/setup` creates the first operator then locks itself forever, and it was
+the *only* code path that ever inserted into `operators`. So a second admin was
+impossible without a manual SQL write.
+
+**Built:** `/admin/team` — list operators, add one, remove one, change your own
+password.
+
+- `addOperator` / `removeOperator` / `changeOwnPassword` in
+  `src/app/admin/actions.ts`, all behind `requireOperator()`.
+- `setupSchema` became the shared `operatorSchema`, and the min-8 rule became
+  `passwordSchema`, so first-run setup and Team validate identically.
+
+**Design decisions and why:**
+
+- **No self-removal.** This is the load-bearing invariant, not a UX nicety: you
+  can only delete an account that isn't yours, so the count can never reach
+  zero. At zero, `operatorExists()` flips false, `/admin/setup` unlocks, and
+  anyone on the internet can claim the store. A separate "don't delete the last
+  operator" check would be redundant — the self-check already implies it.
+- **No roles.** Every operator gets full access. Documented loudly in the UI and
+  README rather than half-implemented.
+- **Creator sets an initial password**, rendered as `type="text"` so it can be
+  read aloud/copied to hand over. That means the creator knows it — which is why
+  "Change your password" ships in the same screen. Without it the feature would
+  be unsound. Email invites were rejected for v1: they need a verified Resend
+  domain and a token table.
+- **Duplicate email** is caught two ways: a friendly message from the caught
+  insert (the unique index on `email` is the only constraint it can trip), and
+  emails lowercased on the way in to match how `loginOperator` looks them up.
+  `redirect()` is called *outside* the try — it signals by throwing, so a
+  `catch` would swallow it.
+
+**Tested:** `scripts/e2e-team.ts`, 12 assertions — add, duplicate rejection
+(including case-insensitivity), sign-in as the new operator, wrong-current-
+password rejection, password change, sign-in with the new password, removal,
+and the removed account no longer authenticating.
+
 ## Gotchas hit (for future sessions)
 
 - Playwright `getByRole(name:)` is substring-matching: "Publish store" also
@@ -178,6 +218,17 @@ navigation hid this from the e2e — only a hard refresh reproduced it.
   `(store)/page.tsx` for `/`.
 - Pre-installed Chromium requires `executablePath: /opt/pw-browsers/chromium`
   (version pin mismatch with the npm playwright package).
+- `.env` files are **not** shell scripts. `set -a; . ./.env.e2e` on a Neon URL
+  containing `?a=1&b=2` backgrounds the assignment at the `&` and silently drops
+  the variable — the app then fell through to `.env.local` (production) and the
+  test "failed" for the wrong reason. Quote the values.
+- Playwright: `page.locator("div", { has: … }).last()` returns the *innermost*
+  matching div, which was a sibling of the button under test — so a
+  "no Remove button here" assertion passed vacuously. Anchor row-scoped queries
+  to an explicit `data-testid` instead.
+- Destructive e2e (creating/removing operator accounts) must not run against the
+  production database. `mcp__Neon__create_branch` makes an isolated copy in
+  seconds; point `MINKS_DATABASE_URL` at it and delete the branch afterwards.
 
 ## Decisions & findings
 
