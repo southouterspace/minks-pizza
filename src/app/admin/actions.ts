@@ -87,10 +87,15 @@ function revalidateModifiers(): void {
 // Auth: first-run setup, login, logout
 // ---------------------------------------------------------------------------
 
-const setupSchema = z.object({
+const passwordSchema = z
+  .string()
+  .min(8, "Password must be at least 8 characters")
+  .max(200);
+
+const operatorSchema = z.object({
   name: z.string().trim().min(1, "Name is required").max(120),
   email: z.email("Enter a valid email").max(200),
-  password: z.string().min(8, "Password must be at least 8 characters").max(200),
+  password: passwordSchema,
 });
 
 export async function setupOperator(
@@ -99,7 +104,7 @@ export async function setupOperator(
 ): Promise<AuthFormState> {
   if (await operatorExists()) redirect("/admin/login");
 
-  const parsed = setupSchema.safeParse({
+  const parsed = operatorSchema.safeParse({
     name: formData.get("name"),
     email: textField(formData, "email").toLowerCase(),
     password: formData.get("password"),
@@ -154,6 +159,101 @@ export async function loginOperator(
 export async function logout(): Promise<void> {
   await destroySession();
   redirect("/admin/login");
+}
+
+// ---------------------------------------------------------------------------
+// Team: operator accounts
+//
+// Every operator has full admin access — there are no roles. Adding someone
+// here hands them the whole dashboard.
+// ---------------------------------------------------------------------------
+
+export async function addOperator(
+  _prev: AuthFormState,
+  formData: FormData,
+): Promise<AuthFormState> {
+  await requireOperator();
+
+  const parsed = operatorSchema.safeParse({
+    name: formData.get("name"),
+    // Lowercased to match loginOperator, which looks accounts up that way.
+    email: textField(formData, "email").toLowerCase(),
+    password: formData.get("password"),
+  });
+  if (!parsed.success) {
+    return {
+      error:
+        parsed.error.issues[0]?.message ?? "Please check the form and retry.",
+    };
+  }
+
+  try {
+    await db.insert(operators).values({
+      name: parsed.data.name,
+      email: parsed.data.email,
+      passwordHash: await hashPassword(parsed.data.password),
+    });
+  } catch {
+    // The unique index on email is the only constraint this insert can trip.
+    return { error: "That email already has an account." };
+  }
+
+  // Outside the try: redirect() signals by throwing, so a catch would eat it.
+  revalidatePath("/admin/team");
+  redirect("/admin/team?notice=added");
+}
+
+/**
+ * Removes another operator. Refusing self-removal is what guarantees at least
+ * one account always exists — drop to zero and `/admin/setup` unlocks itself,
+ * letting anyone on the internet claim the store.
+ */
+export async function removeOperator(formData: FormData): Promise<void> {
+  const current = await requireOperator();
+  const id = idField(formData, "operatorId");
+  if (id === current.id) redirect("/admin/team?notice=self-remove");
+
+  await db.delete(operators).where(eq(operators.id, id));
+  revalidatePath("/admin/team");
+  redirect("/admin/team?notice=removed");
+}
+
+/**
+ * Lets an operator replace the password someone else chose for them at
+ * creation time. Requires the current password so a borrowed session can't
+ * lock the real owner out.
+ */
+export async function changeOwnPassword(
+  _prev: AuthFormState,
+  formData: FormData,
+): Promise<AuthFormState> {
+  const current = await requireOperator();
+
+  const currentPassword = formData.get("currentPassword");
+  if (typeof currentPassword !== "string" || currentPassword.length === 0) {
+    return { error: "Enter your current password." };
+  }
+  const parsed = passwordSchema.safeParse(formData.get("newPassword"));
+  if (!parsed.success) {
+    return {
+      error: parsed.error.issues[0]?.message ?? "Check the new password.",
+    };
+  }
+
+  const [row] = await db
+    .select({ passwordHash: operators.passwordHash })
+    .from(operators)
+    .where(eq(operators.id, current.id));
+  if (!row || !(await verifyPassword(currentPassword, row.passwordHash))) {
+    return { error: "That's not your current password." };
+  }
+
+  await db
+    .update(operators)
+    .set({ passwordHash: await hashPassword(parsed.data) })
+    .where(eq(operators.id, current.id));
+
+  redirect("/admin/team?notice=password");
 }
 
 // ---------------------------------------------------------------------------

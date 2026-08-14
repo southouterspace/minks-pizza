@@ -2,7 +2,13 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { ClipboardList, Settings, SlidersHorizontal, UtensilsCrossed } from "lucide-react";
+import {
+  ClipboardList,
+  Settings,
+  SlidersHorizontal,
+  Users,
+  UtensilsCrossed,
+} from "lucide-react";
 import { cn } from "@/lib/utils";
 
 const LINKS = [
@@ -15,6 +21,7 @@ const LINKS = [
     icon: SlidersHorizontal,
   },
   { href: "/admin/settings", label: "Settings", exact: false, icon: Settings },
+  { href: "/admin/team", label: "Team", exact: false, icon: Users },
 ];
 
 export function AdminNavLinks({
