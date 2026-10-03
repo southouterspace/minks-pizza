@@ -24,6 +24,7 @@ import {
   entryFlags,
   matchShift,
   planClock,
+  punchProblem,
   shiftConflicts,
   shiftCostCents,
   shiftPaidMinutes,
@@ -198,6 +199,18 @@ test("a punch belongs to the store-local day it started on", () => {
   // 9 PM–1 AM in New York is 01:00–05:00 UTC the next day.
   const entry = punch("2026-10-06", "01:00:00", "05:00:00", 1500);
   assert.equal(computeWeek([entry], FEDERAL, NY, NOW).days[0].date, "2026-10-05");
+});
+
+test("punchProblem rejects impossible hand-entered punches", () => {
+  const d = (hhmm: string) => at(`2026-10-05T${hhmm}:00Z`);
+  const brk = (from: string, to: string | null, paid = false) => ({ startedAt: d(from), endedAt: to ? d(to) : null, paid });
+  assert.equal(punchProblem(d("09:00"), d("17:00"), [brk("12:00", "12:30")], NOW), null);
+  assert.equal(punchProblem(d("09:00"), d("09:00"), [], NOW), "Clock-out must be after clock-in.");
+  assert.equal(punchProblem(d("09:00"), null, [], d("08:00")), "Clock-in can't be in the future.");
+  assert.equal(punchProblem(d("09:00"), d("17:00"), [brk("08:30", "09:30")], NOW), "Breaks must fall inside the punch.");
+  assert.equal(punchProblem(d("09:00"), d("17:00"), [brk("12:00", "12:30"), brk("12:15", "12:45")], NOW), "Breaks overlap.");
+  assert.equal(punchProblem(d("09:00"), d("17:00"), [brk("12:00", null)], NOW), "End every break before the clock-out.");
+  assert.equal(punchProblem(d("09:00"), null, [brk("12:00", null)], d("12:10")), null);
 });
 
 // --- clock state machine ------------------------------------------------------

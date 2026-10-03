@@ -283,6 +283,28 @@ export function computeWeek(
   };
 }
 
+/** Why a hand-entered punch can't be saved, or null when it can. */
+export function punchProblem(
+  clockInAt: Date,
+  clockOutAt: Date | null,
+  breaks: PayBreak[],
+  now: Date,
+): string | null {
+  if (clockInAt > now) return "Clock-in can't be in the future.";
+  if (clockOutAt !== null && clockOutAt <= clockInAt) return "Clock-out must be after clock-in.";
+  if (clockOutAt !== null && clockOutAt > now) return "Clock-out can't be in the future.";
+  const end = clockOutAt ?? now;
+  const sorted = breaks.toSorted((a, b) => a.startedAt.getTime() - b.startedAt.getTime());
+  for (const [i, b] of sorted.entries()) {
+    if (b.endedAt === null && clockOutAt !== null) return "End every break before the clock-out.";
+    if (b.endedAt !== null && b.endedAt < b.startedAt) return "A break ends before it starts.";
+    if (b.startedAt < clockInAt || (b.endedAt ?? end) > end) return "Breaks must fall inside the punch.";
+    const next = sorted[i + 1];
+    if (next && next.startedAt < (b.endedAt ?? end)) return "Breaks overlap.";
+  }
+  return null;
+}
+
 // ---------------------------------------------------------------------------
 // Timesheet exceptions
 // ---------------------------------------------------------------------------
