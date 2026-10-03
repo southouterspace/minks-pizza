@@ -35,6 +35,7 @@ import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Separator } from "@/components/ui/separator";
 import { Textarea } from "@/components/ui/textarea";
+import { describeChoice } from "@/lib/toppings";
 
 export const dynamic = "force-dynamic";
 
@@ -125,7 +126,7 @@ export default async function OrderDetailPage({ params }: PageProps<"/admin/orde
                       </div>
                       {line.modifiers.length > 0 ? (
                         <p className="mt-0.5 text-xs text-muted-foreground">
-                          {line.modifiers.map((m) => `${m.groupName}: ${m.modifierName}`).join(" · ")}
+                          {line.modifiers.map((m) => `${m.groupName}: ${describeChoice(m.modifierName, m)}`).join(" · ")}
                         </p>
                       ) : null}
                       {line.notes ? (

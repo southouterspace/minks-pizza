@@ -3,6 +3,7 @@ import { formatCents } from "@/lib/money";
 import { PAYMENT_METHOD_LABEL } from "@/lib/order-workflow";
 import type { OrderDetail } from "@/lib/order-queries";
 import { formatDateTime } from "./ui";
+import { describeChoice } from "@/lib/toppings";
 
 export function addressLine(o: OrderDetail): string | null {
   if (o.orderType !== "delivery" || !o.addressLine1) return null;
@@ -63,7 +64,7 @@ export function PrintTicket({ order, timeZone }: { order: OrderDetail; timeZone:
           </p>
           {line.modifiers.map((m) => (
             <p key={`${m.groupName}-${m.modifierName}`} className="pl-3">
-              {m.modifierName}
+              {describeChoice(m.modifierName, m)}
             </p>
           ))}
           {line.notes ? <p className="pl-3 italic">* {line.notes}</p> : null}
