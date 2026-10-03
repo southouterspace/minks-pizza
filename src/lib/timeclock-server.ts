@@ -22,6 +22,7 @@ import {
   matchShift,
   planClock,
   punchProblem,
+  remainingShiftMinutes,
   ROLE_LABEL,
   shiftConflicts,
   shiftCostCents,
@@ -277,11 +278,10 @@ export async function getKioskView(employee: KioskEmployee, cfg: StaffConfig, no
   ]);
 
   const pay = computeWeek(weekEntries.map(toPayEntry), cfg.rules, tz, now);
-  const linked = open?.shiftId ? shiftRows.find((s) => s.id === open.shiftId) : undefined;
-  const remainingOfCurrent = linked ? Math.max(0, Math.round((linked.endsAt.getTime() - now.getTime()) / MINUTE)) : 0;
-  const stillAhead = shiftRows
-    .filter((s) => s.startsAt > now && s.startsAt < week.to && s.startsAt >= week.from)
-    .reduce((sum, s) => sum + shiftPaidMinutes(s), 0);
+  const stillAhead = remainingShiftMinutes(
+    shiftRows.filter((s) => s.startsAt >= week.from && s.startsAt < week.to),
+    now,
+  );
 
   return {
     employee: { id: employee.id, name: employee.name, roles: employee.roles.map((r) => r.role) },
@@ -294,7 +294,7 @@ export async function getKioskView(employee: KioskEmployee, cfg: StaffConfig, no
         return d > today && d <= addDays(today, 7);
       })
       .map(toKioskShift),
-    week: { paidMinutes: pay.totals.paidMinutes, projectedMinutes: pay.totals.paidMinutes + remainingOfCurrent + stillAhead },
+    week: { paidMinutes: pay.totals.paidMinutes, projectedMinutes: pay.totals.paidMinutes + stillAhead },
     current: open ? entryMinutes(toPayEntry(open), now) : null,
     timeOff: offRows.map((t) => ({
       id: t.id,
@@ -1102,9 +1102,10 @@ export async function getOverview(cfg: StaffConfig, now = new Date()): Promise<O
 
   const otRisk = sheet
     .map((row) => {
-      const ahead = weekShifts
-        .filter(({ shift }) => shift.employeeId === row.employee.id && shift.startsAt > now)
-        .reduce((n, { shift }) => n + shiftPaidMinutes(shift), 0);
+      const ahead = remainingShiftMinutes(
+        weekShifts.filter(({ shift }) => shift.employeeId === row.employee.id).map(({ shift }) => shift),
+        now,
+      );
       return { employeeId: row.employee.id, name: row.employee.name, projectedMinutes: row.pay.totals.paidMinutes + ahead };
     })
     .filter((r) => r.projectedMinutes > cfg.rules.otWeeklyMinutes - OT_RISK_MARGIN_MINUTES)

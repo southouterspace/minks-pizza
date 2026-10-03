@@ -25,6 +25,7 @@ import {
   matchShift,
   planClock,
   punchProblem,
+  remainingShiftMinutes,
   shiftConflicts,
   shiftCostCents,
   shiftPaidMinutes,
@@ -288,6 +289,15 @@ test("shift paid minutes and labor cost", () => {
   const s = shiftOn("2026-10-06", "16:00", "22:00", 1, 30);
   assert.equal(shiftPaidMinutes(s), 330);
   assert.equal(shiftCostCents(s, 1500), 8250);
+});
+
+test("remaining scheduled minutes count the rest of a shift under way", () => {
+  const lunch = shiftOn("2026-10-06", "10:00", "14:00", 1, 30);
+  const dinner = shiftOn("2026-10-06", "16:00", "22:00", 2, 30);
+  const at1230 = zonedInstant("2026-10-06", "12:30", NY);
+  assert.equal(remainingShiftMinutes([lunch, dinner], at1230), 90 + 330);
+  assert.equal(remainingShiftMinutes([lunch, dinner], zonedInstant("2026-10-06", "09:00", NY)), 210 + 330);
+  assert.equal(remainingShiftMinutes([lunch, dinner], zonedInstant("2026-10-06", "23:00", NY)), 0);
 });
 
 // --- matching punches to shifts and early clock-in ----------------------------

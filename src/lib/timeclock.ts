@@ -407,6 +407,17 @@ export function shiftCostCents(shift: Omit<ShiftTimes, "id">, rateCents: number)
   return Math.round((shiftPaidMinutes(shift) * rateCents) / 60);
 }
 
+/** Scheduled minutes still to come: whole shifts ahead, and the rest of any under way. */
+export function remainingShiftMinutes(shifts: Omit<ShiftTimes, "id">[], now: Date): number {
+  return shifts
+    .filter((s) => s.endsAt > now)
+    .reduce(
+      (sum, s) =>
+        sum + (s.startsAt > now ? shiftPaidMinutes(s) : Math.floor((s.endsAt.getTime() - now.getTime()) / MINUTE)),
+      0,
+    );
+}
+
 export const SHIFT_CONFLICTS = ["overlap", "time_off", "time_off_pending", "unavailable", "overtime"] as const;
 export type ShiftConflict = (typeof SHIFT_CONFLICTS)[number];
 

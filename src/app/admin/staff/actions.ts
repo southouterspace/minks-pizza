@@ -7,9 +7,17 @@ import { z } from "zod";
 import { db, employeeRoles, employees, shifts, timeEntries } from "@/db";
 import { requireOperator } from "@/lib/auth";
 import { checkbox, dollarsToCents, idField, textField } from "@/lib/form-data";
-import { JOB_ROLES, type JobRole, type WeeklyAvailability, type Weekday } from "@/lib/timeclock";
-import { generatePin, isUniqueViolation, pinDigest } from "@/lib/timeclock-server";
-import { hhmmSchema, localDateSchema } from "@/lib/zoned";
+import { JOB_ROLES, ROLE_LABEL, type JobRole, type WeeklyAvailability, type Weekday } from "@/lib/timeclock";
+import {
+  copyPreviousWeek,
+  generatePin,
+  getStaffConfig,
+  isUniqueViolation,
+  pinDigest,
+  publishWeek,
+  resolveWeek,
+} from "@/lib/timeclock-server";
+import { hhmmSchema, localDateSchema, shiftInstants } from "@/lib/zoned";
 
 export type StaffFormState = { error?: string; savedId?: number; pin?: string; notice?: string };
 
@@ -167,4 +175,82 @@ export async function removeEmployeePin(fd: FormData): Promise<void> {
   await db.update(employees).set({ pinDigest: null, updatedAt: new Date() }).where(eq(employees.id, id));
   revalidateStaff();
   redirect(`/admin/staff/employees/${id}?notice=pin-removed`);
+}
+
+// ---------------------------------------------------------------------------
+// Schedule
+// ---------------------------------------------------------------------------
+
+const MAX_SHIFT_MINUTES = 16 * 60;
+
+const shiftSchema = z.object({
+  role: z.enum(JOB_ROLES, "Pick a role."),
+  date: localDateSchema,
+  start: hhmmSchema,
+  end: hhmmSchema,
+  unpaidBreakMinutes: z.coerce.number().int().min(0).max(240),
+  notes: z.string().trim().max(500),
+});
+
+/**
+ * Creates or edits a shift. New shifts are drafts until the week is
+ * published; an edit keeps the shift's published state, so staff see the
+ * change at once.
+ */
+export async function saveShift(_prev: StaffFormState, fd: FormData): Promise<StaffFormState> {
+  await requireOperator();
+  const parsed = shiftSchema.safeParse({
+    role: textField(fd, "role"),
+    date: textField(fd, "date"),
+    start: textField(fd, "start"),
+    end: textField(fd, "end"),
+    unpaidBreakMinutes: textField(fd, "unpaidBreakMinutes") || "0",
+    notes: textField(fd, "notes"),
+  });
+  if (!parsed.success) return { error: "Check the date, times and break." };
+  const { role, date, start, end, unpaidBreakMinutes, notes } = parsed.data;
+  const employeeId = textField(fd, "employeeId") === "" ? null : idField(fd, "employeeId");
+  if (employeeId !== null) {
+    const [has] = await db
+      .select({ id: employeeRoles.id })
+      .from(employeeRoles)
+      .where(and(eq(employeeRoles.employeeId, employeeId), eq(employeeRoles.role, role)));
+    if (!has) return { error: `They don't work as ${ROLE_LABEL[role]}. Add the role on their profile first.` };
+  }
+  const { timezone } = await getStaffConfig();
+  const { startsAt, endsAt } = shiftInstants(date, start, end, timezone);
+  const minutes = (endsAt.getTime() - startsAt.getTime()) / 60_000;
+  if (minutes > MAX_SHIFT_MINUTES) return { error: "A shift can be at most 16 hours." };
+  if (unpaidBreakMinutes >= minutes) return { error: "The break is longer than the shift." };
+
+  const values = { employeeId, role, startsAt, endsAt, unpaidBreakMinutes, notes: notes || null, updatedAt: new Date() };
+  const shiftId = textField(fd, "shiftId") === "" ? null : idField(fd, "shiftId");
+  if (shiftId === null) await db.insert(shifts).values(values);
+  else await db.update(shifts).set(values).where(eq(shifts.id, shiftId));
+  revalidateStaff();
+  return { notice: "Saved.", savedId: shiftId ?? undefined };
+}
+
+export async function deleteShift(fd: FormData): Promise<void> {
+  await requireOperator();
+  await db.delete(shifts).where(eq(shifts.id, idField(fd, "shiftId")));
+  revalidateStaff();
+}
+
+export async function copyLastWeek(fd: FormData): Promise<void> {
+  await requireOperator();
+  const cfg = await getStaffConfig();
+  const week = resolveWeek(textField(fd, "week"), cfg);
+  const copied = await copyPreviousWeek(week, cfg);
+  revalidateStaff();
+  redirect(`/admin/staff/schedule?week=${week}&copied=${copied}`);
+}
+
+export async function publishSchedule(fd: FormData): Promise<void> {
+  await requireOperator();
+  const cfg = await getStaffConfig();
+  const week = resolveWeek(textField(fd, "week"), cfg);
+  const published = await publishWeek(week, cfg);
+  revalidateStaff();
+  redirect(`/admin/staff/schedule?week=${week}&published=${published}`);
 }
