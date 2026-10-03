@@ -286,7 +286,7 @@ async function main() {
     customerName: "Penny Promo",
     customerPhone: `+1 ${PHONE_DOTS}`,
     tipCents: 0,
-    lines: [{ itemId: knots.id, quantity: 6, modifierIds: [] }],
+    lines: [{ itemId: knots.id, quantity: 6, modifiers: [] }],
     promoCodes: ["e2e-pizza"],
     expectedTotalCents: 3112,
   });
@@ -315,7 +315,7 @@ async function main() {
       customerName: "Racer",
       customerPhone: phone,
       tipCents: 0,
-      lines: [{ itemId: knots.id, quantity: 1, modifierIds: [] }],
+      lines: [{ itemId: knots.id, quantity: 1, modifiers: [] }],
       promoCodes: [code],
     });
   const raceOrders: string[] = [];
@@ -397,7 +397,7 @@ async function main() {
     customerName: "Comp Check",
     customerPhone: "5550102003",
     tipCents: 0,
-    lines: [{ itemId: knots.id, quantity: 1, modifierIds: [] }],
+    lines: [{ itemId: knots.id, quantity: 1, modifiers: [] }],
     promoCodes: ["E2E-COMP"],
   });
   const afterCompLedger = afterComp.ok ? await ledger(afterComp.orderId) : [];
@@ -435,7 +435,7 @@ async function main() {
     customerName: "Late Larry",
     customerPhone: "5550109999",
     tipCents: 0,
-    lines: [{ itemId: knots.id, quantity: 6, modifierIds: [] }],
+    lines: [{ itemId: knots.id, quantity: 6, modifiers: [] }],
     promoCodes: ["E2E-PIZZA"],
     expectedTotalCents: 3112,
   });

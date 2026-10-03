@@ -1,6 +1,7 @@
 import "server-only";
 import { and, asc, desc, eq, gte, inArray, isNull, or, sql } from "drizzle-orm";
 import { db, orderItems, orders, storeSettings } from "@/db";
+import { syncStockOuts } from "@/lib/inventory";
 import { RECALLABLE } from "@/lib/order-workflow";
 import type { Actor } from "@/lib/order-writes";
 import {

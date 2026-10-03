@@ -9,17 +9,21 @@ import {
   useState,
 } from "react";
 import { toast } from "sonner";
+import { z } from "zod";
 import { displayCode, normalizeCode } from "@/lib/promo-code";
+import { DEFAULT_CHOICE, type Placement, type Portion } from "@/lib/toppings";
+import { cartModifierSchema, type CartLineInput } from "@/lib/validation";
 
 export type CartModifier = {
   id: number;
   groupName: string;
   modifierName: string;
   priceDeltaCents: number;
+  placement?: Placement;
+  portion?: Portion;
 };
 
 export type CartLine = {
-  /** Stable key: item + sorted modifier ids + notes. Same config merges. */
   key: string;
   itemId: number;
   itemName: string;
@@ -65,9 +69,51 @@ function withCode(codes: string[], code: string): string[] {
   return [...codes, display].slice(-MAX_CODES);
 }
 
+/** What the server prices: ids and topping choices only, never the client's prices. */
+export function toCartLineInput(line: CartLine): CartLineInput {
+  return {
+    itemId: line.itemId,
+    quantity: line.quantity,
+    modifiers: line.modifiers.map((m) => ({ id: m.id, placement: m.placement, portion: m.portion })),
+    notes: line.notes,
+  };
+}
+
 function lineKey(line: Omit<CartLine, "key">): string {
-  const mods = [...line.modifiers.map((m) => m.id)].sort((a, b) => a - b);
+  const mods = [...line.modifiers]
+    .sort((a, b) => a.id - b.id)
+    .map((m) => {
+      const placement = m.placement ?? DEFAULT_CHOICE.placement;
+      const portion = m.portion ?? DEFAULT_CHOICE.portion;
+      return placement === DEFAULT_CHOICE.placement && portion === DEFAULT_CHOICE.portion
+        ? `${m.id}`
+        : `${m.id}/${placement}/${portion}`;
+    });
   return `${line.itemId}:${mods.join(",")}:${line.notes ?? ""}`;
+}
+
+const storedLineSchema = z.object({
+  itemId: z.number().int().positive(),
+  itemName: z.string(),
+  unitPriceCents: z.number().int(),
+  quantity: z.number().int().min(1),
+  modifiers: z.array(
+    cartModifierSchema.extend({
+      groupName: z.string(),
+      modifierName: z.string(),
+      priceDeltaCents: z.number().int(),
+    }),
+  ),
+  notes: z.string().optional(),
+});
+
+function parseStoredCart(raw: string): CartLine[] {
+  const parsed: unknown = JSON.parse(raw);
+  if (!Array.isArray(parsed)) return [];
+  return parsed.flatMap((entry) => {
+    const line = storedLineSchema.safeParse(entry);
+    return line.success ? [{ ...line.data, key: lineKey(line.data) }] : [];
+  });
 }
 
 export function CartProvider({
@@ -89,11 +135,8 @@ export function CartProvider({
   useEffect(() => {
     try {
       const raw = localStorage.getItem(STORAGE_KEY);
-      if (raw) {
-        const parsed = JSON.parse(raw);
-        // eslint-disable-next-line react-hooks/set-state-in-effect -- hydration read
-        if (Array.isArray(parsed)) setLines(parsed);
-      }
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- hydration read
+      if (raw) setLines(parseStoredCart(raw));
     } catch {
       // corrupted cart — start fresh
     }

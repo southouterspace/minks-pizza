@@ -4,6 +4,7 @@ import { Check, Flame, MessageSquareWarning } from "lucide-react";
 import {
   formatElapsed,
   itemsFor,
+  SECTION_LABEL,
   stageOf,
   ticketLine,
   timerLevel,
@@ -15,6 +16,7 @@ import {
   type TimerLevel,
 } from "@/lib/kds";
 import { fulfillmentLabel, type Fulfillment } from "@/lib/orders";
+import { PizzaGlyph } from "@/components/pizza-glyph";
 import { cn } from "@/lib/utils";
 
 const HEADER_TONE: Record<TimerLevel, string> = {
@@ -45,37 +47,6 @@ export function TypeChip({ fulfillment }: { fulfillment: Fulfillment }) {
       )}
     >
       {fulfillmentLabel(fulfillment)}
-    </span>
-  );
-}
-
-function ModList({ mods }: { mods: TicketMod[] }) {
-  return mods.map((m, i) => (
-    <span
-      key={i}
-      className={cn(
-        "block",
-        m.kind === "remove" && "font-extrabold text-red-400 uppercase",
-        m.kind === "amount" && "font-extrabold text-amber-300 uppercase",
-        m.kind === "option" && "text-zinc-300",
-      )}
-    >
-      {m.kind === "add" ? `+ ${m.label}` : m.label}
-    </span>
-  ));
-}
-
-function HalfBlock({ side, mods }: { side: "Left" | "Right"; mods: TicketMod[] }) {
-  if (mods.length === 0) return null;
-  return (
-    <span
-      data-testid={`kds-half-${side.toLowerCase()}`}
-      className="mt-1 block rounded border-2 border-dashed border-zinc-500 px-1.5 py-1"
-    >
-      <span className="block text-xs font-black tracking-widest text-zinc-400 uppercase">
-        {side} half
-      </span>
-      <ModList mods={mods} />
     </span>
   );
 }
@@ -115,6 +86,26 @@ function OvenClock({ ovenAt, now, ovenMinutes }: { ovenAt: string; now: number; 
   );
 }
 
+function ModList({ mods, className }: { mods: TicketMod[]; className?: string }) {
+  return (
+    <span className={cn("block min-w-0 flex-1 space-y-0.5 text-base leading-snug", className)}>
+      {mods.map((m, i) => (
+        <span
+          key={i}
+          className={cn(
+            "block",
+            m.kind === "remove" && "font-extrabold text-red-400 uppercase",
+            m.kind === "amount" && "font-extrabold text-amber-300",
+            m.kind === "option" && "text-zinc-300",
+          )}
+        >
+          {m.kind === "add" ? `+ ${m.label}` : m.label}
+        </span>
+      ))}
+    </span>
+  );
+}
+
 function ItemRow({
   item,
   now,
@@ -127,7 +118,7 @@ function ItemRow({
   onTap: () => void;
 }) {
   const stage = stageOf(item);
-  const { size, crust, whole, left, right } = ticketLine(item.modifiers);
+  const { size, crust, mods, toppings } = ticketLine(item.modifiers);
   return (
     <li>
       <button
@@ -166,13 +157,23 @@ function ItemRow({
               {item.name}
             </span>
             <SizeCrust size={size} crust={crust} />
-            {whole.length + left.length + right.length > 0 ? (
-              <span className="mt-1 block space-y-0.5 text-base leading-snug">
-                <ModList mods={whole} />
-                <HalfBlock side="Left" mods={left} />
-                <HalfBlock side="Right" mods={right} />
+            {toppings.length > 0 ? (
+              <span className="mt-1.5 block space-y-1" data-testid={`kds-toppings-${item.id}`}>
+                {toppings.map((section) => (
+                  <span key={section.placement} className="flex items-start gap-2">
+                    <span
+                      data-placement={section.placement}
+                      className="mt-0.5 inline-flex w-20 shrink-0 items-center gap-1 rounded bg-zinc-700 px-1.5 py-0.5 text-xs font-black tracking-wider uppercase"
+                    >
+                      <PizzaGlyph placement={section.placement} className="size-3.5" />
+                      {SECTION_LABEL[section.placement]}
+                    </span>
+                    <ModList mods={section.mods} />
+                  </span>
+                ))}
               </span>
             ) : null}
+            {mods.length > 0 ? <ModList mods={mods} className="mt-1" /> : null}
             {item.notes ? (
               <span className="mt-1 flex items-start gap-1 rounded bg-yellow-300 px-1.5 py-1 text-sm font-bold text-zinc-950">
                 <MessageSquareWarning className="mt-0.5 size-4 shrink-0" aria-hidden="true" />

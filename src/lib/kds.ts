@@ -5,7 +5,7 @@
  */
 import type { OrderStatus } from "@/lib/order-workflow";
 import type { Fulfillment, OrderSource } from "@/lib/orders";
-import type { LineModifier } from "@/lib/pricing";
+import { PLACEMENTS, type LineModifier, type Placement } from "@/lib/pricing";
 
 export const KITCHEN_STATIONS = ["pizza", "kitchen", "counter"] as const;
 export type KitchenStation = (typeof KITCHEN_STATIONS)[number];
@@ -198,16 +198,20 @@ export function formatElapsed(ms: number): string {
 
 export type TicketMod = { label: string; kind: "add" | "remove" | "amount" | "option" };
 
+/** Half toppings sit in their own blocks so a half can't be misread. */
+export type ToppingSection = { placement: Placement; mods: TicketMod[] };
+
 export type TicketLine = {
   /** Size and crust lead the ticket: they decide which dough ball to grab. */
   size: string | null;
   crust: string | null;
-  /** Whole-pie toppings and every other option, in entry order. */
-  whole: TicketMod[];
-  /** Half toppings, in their own blocks so a half can't be misread. */
-  left: TicketMod[];
-  right: TicketMod[];
+  /** Every option that is not a placed topping, in entry order. */
+  mods: TicketMod[];
+  /** Placed toppings in WHOLE / L / R order, empty placements left out. */
+  toppings: ToppingSection[];
 };
+
+export const SECTION_LABEL: Record<Placement, string> = { whole: "Whole", left: "L", right: "R" };
 
 function placedMod(m: Extract<LineModifier, { kind: "placed" }>): TicketMod {
   switch (m.amount) {
@@ -223,19 +227,25 @@ function placedMod(m: Extract<LineModifier, { kind: "placed" }>): TicketMod {
 }
 
 export function ticketLine(modifiers: LineModifier[]): TicketLine {
-  const line: TicketLine = { size: null, crust: null, whole: [], left: [], right: [] };
+  let size: string | null = null;
+  let crust: string | null = null;
+  const mods: TicketMod[] = [];
+  const byPlacement: Record<Placement, TicketMod[]> = { whole: [], left: [], right: [] };
   for (const m of modifiers) {
     if (m.kind === "placed") {
-      line[m.placement].push(placedMod(m));
-    } else if (m.role === "size" && line.size === null) {
-      line.size = m.modifierName;
-    } else if (m.role === "crust" && line.crust === null) {
-      line.crust = m.modifierName;
+      byPlacement[m.placement].push(placedMod(m));
+    } else if (m.role === "size" && size === null) {
+      size = m.modifierName;
+    } else if (m.role === "crust" && crust === null) {
+      crust = m.modifierName;
     } else {
-      line.whole.push({ label: `${m.groupName}: ${m.modifierName}`, kind: "option" });
+      mods.push({ label: `${m.groupName}: ${m.modifierName}`, kind: "option" });
     }
   }
-  return line;
+  const toppings = PLACEMENTS.map((placement) => ({ placement, mods: byPlacement[placement] })).filter(
+    (s) => s.mods.length > 0,
+  );
+  return { size, crust, mods, toppings };
 }
 
 // ---------------------------------------------------------------------------

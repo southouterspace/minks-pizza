@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { X } from "lucide-react";
-import { useCart } from "@/components/cart-context";
+import { toCartLineInput, useCart } from "@/components/cart-context";
 import { previewCheckout, type QuoteView } from "@/app/(store)/actions";
 import { normalizeCode } from "@/lib/promo-code";
 import { Button } from "@/components/ui/button";
@@ -36,12 +36,7 @@ export function useCheckoutQuote(
     promoCodes,
     rewardId,
     withRewards,
-    lines: lines.map((l) => ({
-      itemId: l.itemId,
-      quantity: l.quantity,
-      modifierIds: l.modifiers.map((m) => m.id),
-      notes: l.notes,
-    })),
+    lines: lines.map(toCartLineInput),
   });
 
   useEffect(() => {

@@ -15,6 +15,7 @@ import {
   type AnyPgColumn,
 } from "drizzle-orm/pg-core";
 import { relations, sql } from "drizzle-orm";
+import { COUNT_KINDS, INVENTORY_MOVE_KINDS, WASTE_REASONS } from "../lib/inventory-domain";
 import {
   COURIER_PROVIDERS,
   COURIER_STATUSES,
@@ -24,6 +25,7 @@ import {
 import { KITCHEN_STATIONS } from "../lib/kds";
 import { GROUP_ROLES, HALF_TOPPING_RULES, type LineModifier } from "../lib/pricing";
 import { POS_ACCESS_LEVELS } from "../lib/pos-access";
+import { BASE_UNITS } from "../lib/units";
 import { DEFAULT_TIMEZONE } from "../lib/zoned";
 import {
   DEFAULT_TIERS,
@@ -88,6 +90,10 @@ export const discountTargetEnum = pgEnum("discount_target", DISCOUNT_TARGETS);
 
 export const discountSourceEnum = pgEnum("discount_source", DISCOUNT_SOURCES);
 
+export const baseUnitEnum = pgEnum("base_unit", BASE_UNITS);
+export const inventoryMoveKindEnum = pgEnum("inventory_move_kind", INVENTORY_MOVE_KINDS);
+export const wasteReasonEnum = pgEnum("waste_reason", WASTE_REASONS);
+export const countKindEnum = pgEnum("count_kind", COUNT_KINDS);
 /** Where an order was placed: our storefront, the counter, or a delivery marketplace. */
 export const orderSourceEnum = pgEnum("order_source", ORDER_SOURCES);
 
@@ -155,8 +161,16 @@ export const storeSettings = pgTable("store_settings", {
   /** Kitchen display: oven bake countdown for a pie (minutes). */
   kdsOvenMinutes: integer("kds_oven_minutes").notNull().default(7),
   halfToppingRule: halfToppingRuleEnum("half_topping_rule").notNull().default("average"),
-  /** Price of an "extra" portion as a multiple of the topping price (20000 = 2×). */
+  /** Price of a half-pie topping as a share of its whole-pie price (5000 = half), under the average rule. */
+  halfToppingPriceBps: integer("half_topping_price_bps").notNull().default(5000),
+  /** Price of an "extra" portion as a multiple of the topping price (20000 = 2×), unless the modifier names its own. */
   extraToppingBps: integer("extra_topping_bps").notNull().default(20_000),
+  /** Recipe usage of a half-pie, light and extra portion as a share of a regular whole-pie one. */
+  halfPortionBps: integer("half_portion_bps").notNull().default(5000),
+  lightPortionBps: integer("light_portion_bps").notNull().default(5000),
+  extraPortionBps: integer("extra_portion_bps").notNull().default(15000),
+  /** Margin report flags items below this share of price. */
+  minMarginBps: integer("min_margin_bps").notNull().default(7000),
   /** Discounts above this need a manager. */
   discountApprovalCents: integer("discount_approval_cents").notNull().default(500),
   ovenCapacityPies: integer("oven_capacity_pies").notNull().default(6),
@@ -258,6 +272,7 @@ export const modifiers = pgTable("modifiers", {
     .references(() => modifierGroups.id, { onDelete: "cascade" }),
   name: text("name").notNull(),
   priceDeltaCents: integer("price_delta_cents").notNull().default(0),
+  extraPriceDeltaCents: integer("extra_price_delta_cents"),
   isDefault: boolean("is_default").notNull().default(false),
   isAvailable: boolean("is_available").notNull().default(true),
   sortOrder: integer("sort_order").notNull().default(0),
@@ -441,6 +456,8 @@ export const orderItems = pgTable(
     lineTotalCents: integer("line_total_cents").notNull(),
     modifiers: jsonb("modifiers").$type<LineModifier[]>().notNull(),
     notes: text("notes"),
+    /** Food cost at the recipe's unit costs, stamped while the order is completed. */
+    costCents: integer("cost_cents"),
     /**
      * Kitchen station snapshot, copied from the category at order time so
      * re-routing a category never reshuffles tickets already on the line.
@@ -526,6 +543,110 @@ export const orderEvents = pgTable(
   },
   (t) => [index("order_events_order_id_created_at_idx").on(t.orderId, t.createdAt)],
 );
+
+export const ingredients = pgTable("ingredients", {
+  id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+  name: text("name").notNull(),
+  baseUnit: baseUnitEnum("base_unit").notNull(),
+  unitCostMillicents: integer("unit_cost_millicents").notNull().default(0),
+  storageArea: text("storage_area").notNull().default("Walk-in"),
+  shelfOrder: integer("shelf_order").notNull().default(0),
+  lowStockAtMilli: integer("low_stock_at_milli"),
+  outAtMilli: integer("out_at_milli"),
+  isActive: boolean("is_active").notNull().default(true),
+  createdAt: timestamp("created_at", { withTimezone: true })
+    .notNull()
+    .defaultNow(),
+});
+
+export const ingredientPacks = pgTable("ingredient_packs", {
+  id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+  ingredientId: integer("ingredient_id")
+    .notNull()
+    .references(() => ingredients.id, { onDelete: "cascade" }),
+  name: text("name").notNull(),
+  baseQtyMilli: integer("base_qty_milli").notNull(),
+});
+
+export const recipeLines = pgTable(
+  "recipe_lines",
+  {
+    id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+    menuItemId: integer("menu_item_id").references(() => menuItems.id, { onDelete: "cascade" }),
+    modifierId: integer("modifier_id").references(() => modifiers.id, { onDelete: "cascade" }),
+    sizeModifierId: integer("size_modifier_id").references(() => modifiers.id, {
+      onDelete: "cascade",
+    }),
+    ingredientId: integer("ingredient_id")
+      .notNull()
+      .references(() => ingredients.id, { onDelete: "restrict" }),
+    qtyMilli: integer("qty_milli").notNull(),
+  },
+  (t) => [
+    check("recipe_lines_one_owner", sql`num_nonnulls(${t.menuItemId}, ${t.modifierId}) = 1`),
+    // Not UNIQUE NULLS NOT DISTINCT: drizzle-kit 0.31 can't read that back, so
+    // every push offered to truncate recipe_lines to re-add it. It can't
+    // compare expressions either, so it rebuilds this index on each push,
+    // which is harmless.
+    uniqueIndex("recipe_lines_owner_size_ingredient").on(
+      sql`coalesce(${t.menuItemId}, 0)`,
+      sql`coalesce(${t.modifierId}, 0)`,
+      sql`coalesce(${t.sizeModifierId}, 0)`,
+      t.ingredientId,
+    ),
+  ],
+);
+
+export const inventoryCounts = pgTable("inventory_counts", {
+  id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+  kind: countKindEnum("kind").notNull(),
+  operatorId: integer("operator_id").references(() => operators.id, { onDelete: "set null" }),
+  createdAt: timestamp("created_at", { withTimezone: true })
+    .notNull()
+    .defaultNow(),
+});
+
+/** Append-only ledger: on hand is the sum of qty_milli. Rows are never updated or deleted. */
+export const inventoryMoves = pgTable(
+  "inventory_moves",
+  {
+    id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+    ingredientId: integer("ingredient_id")
+      .notNull()
+      .references(() => ingredients.id, { onDelete: "restrict" }),
+    kind: inventoryMoveKindEnum("kind").notNull(),
+    qtyMilli: integer("qty_milli").notNull(),
+    unitCostMillicents: integer("unit_cost_millicents").notNull(),
+    orderId: uuid("order_id").references(() => orders.id, { onDelete: "set null" }),
+    countId: integer("count_id").references(() => inventoryCounts.id, { onDelete: "cascade" }),
+    wasteReason: wasteReasonEnum("waste_reason"),
+    vendor: text("vendor"),
+    operatorId: integer("operator_id").references(() => operators.id, { onDelete: "set null" }),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (t) => [
+    index("inventory_moves_ingredient_id_id_idx").on(t.ingredientId, t.id),
+    index("inventory_moves_order_id_idx").on(t.orderId),
+  ],
+);
+
+/**
+ * One row per ingredient the system auto-86'd, remembering what it turned
+ * off so restocking turns exactly that back on. An operator re-enabling an
+ * item leaves the row, so later sales don't 86 it again.
+ */
+export const stockOuts = pgTable("stock_outs", {
+  ingredientId: integer("ingredient_id")
+    .primaryKey()
+    .references(() => ingredients.id, { onDelete: "cascade" }),
+  menuItemIds: integer("menu_item_ids").array().notNull(),
+  modifierIds: integer("modifier_ids").array().notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true })
+    .notNull()
+    .defaultNow(),
+});
 
 // ---------------------------------------------------------------------------
 // Promotions

@@ -29,7 +29,7 @@ export default async function NewItemPage() {
       <h1 className="text-xl font-semibold tracking-tight">New item</h1>
       <p className="mt-1 text-sm text-muted-foreground">
         Add a dish to your menu. You can attach modifier groups for sizes,
-        crusts, and toppings.
+        crusts, and toppings. Its recipe can be added once it is saved.
       </p>
       <div className="mt-6">
         <ItemForm

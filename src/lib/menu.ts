@@ -7,21 +7,28 @@ import {
   modifierGroups,
   modifiers,
 } from "@/db";
+import { getSettings } from "@/lib/orders";
+import type { ToppingPriceSettings } from "@/lib/toppings";
 
 export type ModifierView = {
   id: number;
   name: string;
   priceDeltaCents: number;
+  extraPriceDeltaCents: number | null;
   isDefault: boolean;
 };
 
-export type ModifierGroupView = {
+type GroupFields = {
   id: number;
   name: string;
   minSelect: number;
   maxSelect: number | null;
   modifiers: ModifierView[];
 };
+
+export type ModifierGroupView =
+  | (GroupFields & { kind: "choice" | "size" })
+  | (GroupFields & { kind: "toppings"; pricing: ToppingPriceSettings });
 
 export type MenuItemView = {
   id: number;
@@ -92,10 +99,11 @@ export async function getPublicMenu(): Promise<CategoryView[]> {
         .orderBy(asc(modifiers.sortOrder), asc(modifiers.id))
     : [];
 
+  const { halfToppingPriceBps } = await getSettings();
+
   const groupView = new Map<number, ModifierGroupView>(
-    groups.map((g) => [
-      g.id,
-      {
+    groups.map((g) => {
+      const fields: GroupFields = {
         id: g.id,
         name: g.name,
         minSelect: g.minSelect,
@@ -106,10 +114,17 @@ export async function getPublicMenu(): Promise<CategoryView[]> {
             id: m.id,
             name: m.name,
             priceDeltaCents: m.priceDeltaCents,
+            extraPriceDeltaCents: m.extraPriceDeltaCents,
             isDefault: m.isDefault,
           })),
-      },
-    ]),
+      };
+      return [
+        g.id,
+        g.kind === "toppings"
+          ? { ...fields, kind: g.kind, pricing: { halfToppingPriceBps } }
+          : { ...fields, kind: g.kind },
+      ];
+    }),
   );
 
   return cats

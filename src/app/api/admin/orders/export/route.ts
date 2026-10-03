@@ -1,19 +1,9 @@
 import { paymentState } from "@/lib/orders";
 import { getCurrentOperator } from "@/lib/auth";
+import { csvResponse } from "@/lib/csv";
 import { exportOrders, parseOrderFilters } from "@/lib/order-queries";
 
 export const dynamic = "force-dynamic";
-
-/**
- * RFC 4180 field: quoted when it holds a comma, quote or line break. A
- * leading =, +, - or @ gets a ' so spreadsheets don't run it as a formula.
- */
-function csvField(value: string | number | null): string {
-  if (value === null) return "";
-  let s = String(value);
-  if (typeof value === "string" && /^[=+\-@\t\r]/.test(s)) s = `'${s}`;
-  return /[",\r\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
-}
 
 const dollars = (cents: number) => (cents / 100).toFixed(2);
 
@@ -66,19 +56,10 @@ export async function GET(request: Request): Promise<Response> {
           .slice(0, 16)
       : null;
 
-  const lines = [
-    COLUMNS.map(([header]) => csvField(header)).join(","),
-    ...rows.map((o) =>
-      COLUMNS.map(([, value]) => csvField(value(o, localTime))).join(","),
-    ),
-  ];
-
   const stamp = new Date().toLocaleDateString("sv-SE", { timeZone: timezone });
-  return new Response(`${lines.join("\r\n")}\r\n`, {
-    headers: {
-      "Content-Type": "text/csv; charset=utf-8",
-      "Content-Disposition": `attachment; filename="orders-${stamp}.csv"`,
-      "Cache-Control": "no-store",
-    },
-  });
+  return csvResponse(
+    `orders-${stamp}.csv`,
+    COLUMNS.map(([header]) => header),
+    rows.map((o) => COLUMNS.map(([, value]) => value(o, localTime))),
+  );
 }

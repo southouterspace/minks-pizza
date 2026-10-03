@@ -91,7 +91,7 @@ const ON_ENTER: Partial<Record<OrderStatus, (orderId: string) => BatchItem<"pg">
  * `also` adds assignments to the same update. Spread into a `db.batch`; the
  * first result is the move's logged rows.
  */
-export function transitionStatements(args: {
+export async function transitionStatements(args: {
   orderId: string;
   from: readonly OrderStatus[];
   to: OrderStatus;
@@ -117,7 +117,11 @@ export function transitionStatements(args: {
     note: args.note ?? args.cancelReason ?? null,
     actor: args.actor,
   });
-  return [move, ...(ON_ENTER[args.to]?.(args.orderId) ?? [])] as const;
+  const stock =
+    args.to === "completed" || args.from.includes("completed")
+      ? [inventorySyncStatement(await planOrderUsage(args.orderId))]
+      : [];
+  return [move, ...(ON_ENTER[args.to]?.(args.orderId) ?? []), ...stock] as const;
 }
 
 /** The admin's manual move along the forward table (today only ready → completed). */
