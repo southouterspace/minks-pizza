@@ -38,6 +38,7 @@ import {
   type DrawerEventKind,
   type FirePlan,
   type Fulfillment,
+  type KitchenStatus,
   type OrderMutation,
   type OrderView,
   type ReportFacts,
@@ -54,6 +55,7 @@ import {
   type PricingPolicy,
 } from "@/lib/pricing";
 import { checkPin } from "@/lib/pin";
+import { DEFAULT_TIMEZONE } from "@/lib/store-time";
 import type { StaffContext } from "@/lib/staff";
 
 type Statement = BatchItem<"pg">;
@@ -79,6 +81,15 @@ export async function getSettings() {
 }
 
 type Settings = Awaited<ReturnType<typeof getSettings>>;
+
+/** Name and timezone for admin pages, which render before the store is configured. */
+export async function getStoreBasics(): Promise<{ name: string; timezone: string }> {
+  const [row] = await db
+    .select({ name: storeSettings.name, timezone: storeSettings.timezone })
+    .from(storeSettings)
+    .where(eq(storeSettings.id, 1));
+  return row ?? { name: "My Pizzeria", timezone: DEFAULT_TIMEZONE };
+}
 
 function policyOf(s: Settings): PricingPolicy {
   return { halfToppingRule: s.halfToppingRule, extraToppingBps: s.extraToppingBps };
@@ -445,6 +456,17 @@ function toView(o: OrderRow, staff: Record<number, string>): OrderView {
 export async function getOrderView(id: string): Promise<OrderView | null> {
   const row = await findOrder(id);
   return row ? (await toViews([row]))[0] : null;
+}
+
+/** Orders in these kitchen states, newest first, for the admin inbox. */
+export async function listOrderViews(statuses: KitchenStatus[]): Promise<OrderView[]> {
+  return toViews(
+    await db.query.orders.findMany({
+      where: inArray(orders.status, statuses),
+      with: withFacts,
+      orderBy: [desc(orders.placedAt)],
+    }),
+  );
 }
 
 export async function getOpenShift() {
@@ -1055,12 +1077,14 @@ function within(col: Parameters<typeof gte>[0], scope: ReportScope) {
   return and(gte(col, scope.from), scope.to ? lt(col, scope.to) : undefined);
 }
 
+/** The tenders a report counts. */
+export function tendersIn(scope: ReportScope) {
+  return scope.kind === "shift" ? eq(tenders.shiftId, scope.shiftId) : within(tenders.createdAt, scope);
+}
+
 /** Ids of every order a report covers: placed in the window, or paid or refunded in it. */
 export function reportOrderIds(scope: ReportScope) {
-  const tendered = db
-    .select({ id: tenders.orderId })
-    .from(tenders)
-    .where(scope.kind === "shift" ? eq(tenders.shiftId, scope.shiftId) : within(tenders.createdAt, scope));
+  const tendered = db.select({ id: tenders.orderId }).from(tenders).where(tendersIn(scope));
   return db
     .select({ id: orders.id })
     .from(orders)
@@ -1075,7 +1099,7 @@ export async function loadReportFacts(scope: ReportScope): Promise<ReportFacts> 
       .select({ t: tenders, order: ref })
       .from(tenders)
       .innerJoin(orders, eq(orders.id, tenders.orderId))
-      .where(scope.kind === "shift" ? eq(tenders.shiftId, scope.shiftId) : within(tenders.createdAt, scope)),
+      .where(tendersIn(scope)),
     db
       .select()
       .from(drawerEvents)

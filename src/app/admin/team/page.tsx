@@ -10,7 +10,8 @@ import {
   ChangePasswordForm,
   ChangePinForm,
 } from "@/components/admin/team-forms";
-import { formatDateTime } from "@/components/admin/ui";
+import { getStoreBasics } from "@/lib/orders-server";
+import { formatStoreDateTime } from "@/lib/store-time";
 import { Badge } from "@/components/ui/badge";
 import { Card } from "@/components/ui/card";
 import {
@@ -54,7 +55,8 @@ export default async function TeamPage({
   const current = await requireOperator();
   const notice = NOTICES[String((await searchParams).notice ?? "")];
 
-  const [rows, staff] = await Promise.all([
+  const [{ timezone: tz }, rows, staff] = await Promise.all([
+    getStoreBasics(),
     db
       .select({
         id: operators.id,
@@ -168,7 +170,7 @@ export default async function TeamPage({
                   </p>
                 </div>
                 <p className="text-xs text-muted-foreground">
-                  Added {formatDateTime(row.createdAt)}
+                  Added {formatStoreDateTime(row.createdAt, tz)}
                 </p>
                 {/* No self-removal: it's what keeps at least one account alive. */}
                 {isYou ? null : (

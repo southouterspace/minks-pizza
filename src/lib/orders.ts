@@ -141,6 +141,14 @@ export function channelLabel(channel: Channel, orderType: Fulfillment["kind"]): 
   return orderType === "dine_in" ? "Dine-in" : CHANNEL_LABEL[channel];
 }
 
+/** "Pepperoni (left half)", "extra Onions", "Size: Large 14\"". */
+export function modifierLabel(m: LineModifier): string {
+  if (m.kind === "option") return `${m.groupName}: ${m.modifierName}`;
+  const amount = m.amount === "regular" ? "" : `${m.amount} `;
+  const half = m.placement === "whole" ? "" : ` (${m.placement} half)`;
+  return `${amount}${m.modifierName}${half}`;
+}
+
 // ---------------------------------------------------------------------------
 // Mutations and the role policy
 // ---------------------------------------------------------------------------
@@ -253,9 +261,8 @@ export function orderHistory(o: OrderView): HistoryEntry[] {
     const line = o.lines.find((l) => l.lineId === lineId);
     return line ? `${line.quantity} × ${line.name}` : "the check";
   };
-  const entries: HistoryEntry[] = [
-    { at: o.placedAt, who: name(o.createdBy), approvedBy: null, text: `Placed (${CHANNEL_LABEL[o.channel]})` },
-  ];
+  const placed: HistoryEntry = { at: o.placedAt, who: name(o.createdBy), approvedBy: null, text: `Placed (${CHANNEL_LABEL[o.channel]})` };
+  const entries: HistoryEntry[] = [];
   const firedAt = [...new Set(o.lines.flatMap((l) => (l.firedAt ? [l.firedAt] : [])))];
   for (const at of firedAt) {
     const fired = o.lines.filter((l) => l.firedAt === at);
@@ -292,7 +299,9 @@ export function orderHistory(o: OrderView): HistoryEntry[] {
           : `Refunded ${amount} ${method} (${t.reason ?? "no reason"})`,
     });
   }
-  return entries.sort((a, b) => a.at.localeCompare(b.at));
+  // Placed leads even when a line's fire stamp sorts a few ms earlier: lines
+  // are stamped with the app server's clock, placed_at with the database's.
+  return [placed, ...entries.sort((a, b) => a.at.localeCompare(b.at))];
 }
 
 // ---------------------------------------------------------------------------
@@ -564,7 +573,10 @@ export function salesReport(facts: ReportFacts): SalesReport {
  */
 export function reconcileDrawer(
   shift: ShiftCount,
-  facts: Pick<ReportFacts, "tenders" | "drawerEvents">,
+  facts: {
+    tenders: Pick<ReportFacts["tenders"][number], "direction" | "method" | "amountCents" | "tipCents">[];
+    drawerEvents: Pick<ReportFacts["drawerEvents"][number], "kind" | "cents">[];
+  },
 ): DrawerReconciliation {
   let cash = shift.startingBankCents;
   let card = 0;

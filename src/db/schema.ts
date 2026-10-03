@@ -13,6 +13,7 @@ import {
 import { relations, sql } from "drizzle-orm";
 import { KITCHEN_STATIONS } from "../lib/kds";
 import { GROUP_ROLES, HALF_TOPPING_RULES, type LineModifier } from "../lib/pricing";
+import { DEFAULT_TIMEZONE } from "../lib/store-time";
 
 // ---------------------------------------------------------------------------
 // Enums
@@ -125,7 +126,7 @@ export const storeSettings = pgTable("store_settings", {
   /** The POS drops back to the PIN pad after this long. */
   posLockSeconds: integer("pos_lock_seconds").notNull().default(120),
   /** IANA zone: where report days start and end, and how times print. */
-  timezone: text("timezone").notNull().default("America/Chicago"),
+  timezone: text("timezone").notNull().default(DEFAULT_TIMEZONE),
   isPublished: boolean("is_published").notNull().default(false),
   isAcceptingOrders: boolean("is_accepting_orders").notNull().default(true),
   updatedAt: timestamp("updated_at", { withTimezone: true })

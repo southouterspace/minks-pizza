@@ -4,6 +4,9 @@
  * IANA timezone setting.
  */
 
+/** Mink's is in Texas. */
+export const DEFAULT_TIMEZONE = "America/Chicago";
+
 /** A "YYYY-MM-DD" calendar date in the store's timezone. */
 export type StoreDate = string;
 
@@ -71,6 +74,13 @@ export function storeDayRange(date: StoreDate, tz: string): { from: Date; to: Da
 export function storeDateOf(at: Date, tz: string): StoreDate {
   const w = wallClock(at, tz);
   return `${w.y}-${String(w.mo).padStart(2, "0")}-${String(w.d).padStart(2, "0")}`;
+}
+
+/** "2026-10-03 14:45" in the store's zone: sortable, for CSV. */
+export function formatStoreTimestamp(at: Date, tz: string): string {
+  const w = wallClock(at, tz);
+  const p = (n: number) => String(n).padStart(2, "0");
+  return `${w.y}-${p(w.mo)}-${p(w.d)} ${p(w.h)}:${p(w.mi)}`;
 }
 
 /** "Oct 3, 2:45 PM" in the store's zone. */
