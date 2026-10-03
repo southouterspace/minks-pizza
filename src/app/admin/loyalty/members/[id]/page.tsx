@@ -2,7 +2,7 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import { ArrowLeft } from "lucide-react";
 import { requireOperator } from "@/lib/auth";
-import { LEDGER_KIND_RULES, formatMultiplier, formatPhone } from "@/lib/loyalty";
+import { LEDGER_KIND_RULES, formatMultiplier, formatPhone, formatPointsDelta } from "@/lib/loyalty";
 import { getLoyaltySettings, getMember, memberLedger, memberStatus } from "@/lib/loyalty-server";
 import {
   addMissingOrder,
@@ -13,6 +13,7 @@ import {
 } from "../../actions";
 import { FormNotice } from "@/components/admin/form-notice";
 import { formatDateTime } from "@/components/admin/ui";
+import { getSettings } from "@/lib/orders";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Field, FieldLabel } from "@/components/ui/field";
@@ -35,7 +36,7 @@ export default async function LoyaltyMemberPage({ params, searchParams }: PagePr
   const member = Number.isInteger(id) ? await getMember(id) : null;
   if (!member) notFound();
   const sp = await searchParams;
-  const [settings, ledger] = await Promise.all([getLoyaltySettings(), memberLedger(member.id, 200)]);
+  const [settings, store, ledger] = await Promise.all([getLoyaltySettings(), getSettings(), memberLedger(member.id, 200)]);
   const status = await memberStatus(member, settings);
 
   return (
@@ -48,7 +49,7 @@ export default async function LoyaltyMemberPage({ params, searchParams }: PagePr
         <div>
           <h2 className="text-lg font-semibold">{member.name ?? "No name"}</h2>
           <p className="text-sm text-muted-foreground">
-            {formatPhone(member.phone)} · joined {formatDateTime(member.createdAt)} ·{" "}
+            {formatPhone(member.phone)} · joined {formatDateTime(member.createdAt, store.timezone)} ·{" "}
             {member.verifiedAt ? "verified by text" : "not verified yet"}
           </p>
         </div>
@@ -154,7 +155,7 @@ export default async function LoyaltyMemberPage({ params, searchParams }: PagePr
                     {e.note ? <span className="text-muted-foreground"> · {e.note}</span> : null}
                   </span>
                   <span className="block text-xs text-muted-foreground">
-                    {formatDateTime(e.createdAt)}
+                    {formatDateTime(e.createdAt, store.timezone)}
                     {e.orderNumber ? ` · Order #${e.orderNumber}` : ""}
                   </span>
                 </span>
@@ -167,8 +168,7 @@ export default async function LoyaltyMemberPage({ params, searchParams }: PagePr
                     </form>
                   ) : null}
                   <span className={cn("font-medium tabular-nums", e.points > 0 ? "text-success" : "text-muted-foreground")}>
-                    {e.points > 0 ? "+" : "−"}
-                    {Math.abs(e.points).toLocaleString()}
+                    {formatPointsDelta(e.points)}
                   </span>
                 </span>
               </div>

@@ -3,6 +3,7 @@ import { requireOperator } from "@/lib/auth";
 import { formatPhone, tierFor } from "@/lib/loyalty";
 import { getLoyaltySettings, searchMembers } from "@/lib/loyalty-server";
 import { formatDateTime } from "@/components/admin/ui";
+import { getSettings } from "@/lib/orders";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -20,7 +21,7 @@ export const dynamic = "force-dynamic";
 export default async function LoyaltyMembersPage({ searchParams }: PageProps<"/admin/loyalty/members">) {
   await requireOperator();
   const q = String((await searchParams).q ?? "").slice(0, 60);
-  const [settings, members] = await Promise.all([getLoyaltySettings(), searchMembers(q)]);
+  const [settings, store, members] = await Promise.all([getLoyaltySettings(), getSettings(), searchMembers(q)]);
   const tiered = settings.tiers.length > 1;
 
   return (
@@ -63,7 +64,7 @@ export default async function LoyaltyMembersPage({ searchParams }: PageProps<"/a
                     {m.lifetimePoints.toLocaleString()}
                   </TableCell>
                   <TableCell className="hidden text-muted-foreground md:table-cell">
-                    {formatDateTime(m.lastActivityAt)}
+                    {formatDateTime(m.lastActivityAt, store.timezone)}
                   </TableCell>
                 </TableRow>
               ))}

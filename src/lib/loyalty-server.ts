@@ -29,9 +29,13 @@ import {
   expiryDue,
   localYearMonth,
   rewardEffectSchema,
+  rewardDiscount,
   rewardPrice,
   tierProgress,
+  toPublicReward,
+  type DiscountLine,
   type LedgerKind,
+  type PublicReward,
   type RewardEffect,
   type RewardPrice,
 } from "@/lib/loyalty";
@@ -157,6 +161,16 @@ export async function listRewards({ activeOnly }: { activeOnly: boolean }) {
 export async function getReward(id: number): Promise<LoyaltyReward | null> {
   const [row] = await db.select().from(loyaltyRewards).where(eq(loyaltyRewards.id, id));
   return row ? parseReward(row) : null;
+}
+
+export type RewardOption = { reward: PublicReward; fitsCart: boolean };
+
+/** The active catalog as a checkout offers it: each reward and whether this cart qualifies. */
+export async function rewardOptions(lines: DiscountLine[], timezone: string): Promise<RewardOption[]> {
+  return (await listRewards({ activeOnly: true })).map((r) => ({
+    reward: toPublicReward(r, timezone),
+    fitsCart: rewardDiscount(r.effect, lines).ok,
+  }));
 }
 
 export function listPromotions() {
@@ -608,17 +622,6 @@ export async function auditBalances(): Promise<{ members: number; mismatches: Ba
 // ---------------------------------------------------------------------------
 // Operator reporting
 // ---------------------------------------------------------------------------
-
-/** What one point is worth, judged by the cheapest reward to reach. */
-export function centsPerPoint(rewards: LoyaltyReward[]): number | null {
-  const cheapest = rewards
-    .filter((r) => r.isActive)
-    .toSorted((a, b) => a.price.cost - b.price.cost)[0];
-  if (!cheapest) return null;
-  const value =
-    cheapest.effect.kind === "amount_off" ? cheapest.effect.amountOffCents : cheapest.effect.maxValueCents;
-  return value / cheapest.price.cost;
-}
 
 export async function programStats() {
   const { rows } = await db.execute<{

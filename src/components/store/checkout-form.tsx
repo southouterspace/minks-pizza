@@ -30,6 +30,7 @@ import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { Separator } from "@/components/ui/separator";
 import { Textarea } from "@/components/ui/textarea";
 import { cn } from "@/lib/utils";
+import { RewardSummary } from "@/components/store/reward-row";
 
 export type CheckoutConfig = {
   storeName: string;
@@ -599,40 +600,28 @@ function LoyaltyPanel({
           <RadioGroupItem value="none" />
           No reward this time
         </label>
-        {(preview?.rewards ?? []).map((r) => {
-          const disabled = r.pointsShort > 0 || !r.fitsCart;
+        {(preview?.rewards ?? []).map(({ reward, fitsCart }) => {
+          const short = reward.cost - member.pointsBalance;
+          const disabled = short > 0 || !fitsCart;
           return (
             <label
-              key={r.id}
+              key={reward.id}
               className={cn(
-                "flex items-center gap-3 px-4 py-3 text-sm",
-                disabled ? "cursor-not-allowed text-muted-foreground" : "cursor-pointer",
+                "flex items-center gap-3 px-4 py-3",
+                disabled ? "cursor-not-allowed opacity-60" : "cursor-pointer",
               )}
             >
-              <RadioGroupItem value={String(r.id)} disabled={disabled} />
-              <span className="min-w-0 flex-1">
-                <span className="block font-medium">{r.name}</span>
-                <span className="block text-xs text-muted-foreground">
-                  {r.pointsShort > 0
-                    ? `${r.pointsShort.toLocaleString()} more points`
-                    : !r.fitsCart
-                      ? `Add a qualifying item to use this${r.description ? `: ${r.description}` : ""}`
-                      : r.description}
-                </span>
-                {r.increase ? (
-                  <span className="block text-xs text-warning">
-                    Price going up to {r.increase.cost.toLocaleString()} on{" "}
-                    {new Date(r.increase.on).toLocaleDateString("en-US", { month: "short", day: "numeric" })}
-                  </span>
-                ) : null}
-              </span>
-              <span className="shrink-0 text-right tabular-nums text-xs text-muted-foreground">
-                {r.pointsCost.toLocaleString()} pts
-                <span className="block">
-                  {r.upTo ? "up to " : ""}
-                  {formatCents(r.valueCents).replace(".00", "")} value
-                </span>
-              </span>
+              <RadioGroupItem value={String(reward.id)} disabled={disabled} />
+              <RewardSummary
+                reward={reward}
+                note={
+                  short > 0
+                    ? `${short.toLocaleString()} more points`
+                    : !fitsCart
+                      ? `Add a qualifying item to use this${reward.description ? `: ${reward.description}` : ""}`
+                      : undefined
+                }
+              />
             </label>
           );
         })}

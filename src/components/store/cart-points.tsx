@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { Gift } from "lucide-react";
 import { previewCheckout } from "@/app/(store)/actions";
 import type { CartLine } from "@/components/cart-context";
+import { ProgressBar } from "@/components/store/reward-row";
 
 export type CartLoyalty = {
   balance: number | null;
@@ -43,19 +44,7 @@ export function CartPoints({ lines, loyalty }: { lines: CartLine[]; loyalty: Car
       </p>
       {after !== null && nextReward ? (
         <div className="mt-3 space-y-1.5">
-          <div
-            role="progressbar"
-            aria-label={`Progress to ${nextReward.name}`}
-            aria-valuemin={0}
-            aria-valuemax={100}
-            aria-valuenow={Math.round(Math.min(1, after / nextReward.cost) * 100)}
-            className="h-2 overflow-hidden rounded-full bg-muted"
-          >
-            <div
-              className="h-full rounded-full bg-primary"
-              style={{ width: `${Math.max(2, Math.min(1, after / nextReward.cost) * 100)}%` }}
-            />
-          </div>
+          <ProgressBar fraction={after / nextReward.cost} label={`Progress to ${nextReward.name}`} />
           <p className="text-xs text-muted-foreground" data-testid="cart-next-reward">
             {after >= nextReward.cost
               ? `This order gets you to ${nextReward.name}.`

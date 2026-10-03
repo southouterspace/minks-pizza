@@ -2,10 +2,9 @@
 
 import { z } from "zod";
 import { cartLineSchema, checkoutSchema } from "@/lib/validation";
-import { createOrder, OrderError, quoteOrder } from "@/lib/orders";
+import { createOrder, getSettings, OrderError, quoteOrder } from "@/lib/orders";
 import { getCurrentMember } from "@/lib/member-auth";
-import { rewardDiscount, rewardValueCents } from "@/lib/loyalty";
-import { listRewards } from "@/lib/loyalty-server";
+import { rewardOptions, type RewardOption } from "@/lib/loyalty-server";
 
 export type PlaceOrderResult =
   | { ok: true; orderId: string }
@@ -59,17 +58,7 @@ export type CheckoutPreview =
       promoName: string | null;
       rewardError: string | null;
       /** Signed-in members only: each active reward and whether it fits this cart. */
-      rewards: {
-        id: number;
-        name: string;
-        description: string | null;
-        pointsCost: number;
-        valueCents: number;
-        upTo: boolean;
-        increase: { cost: number; on: string } | null;
-        pointsShort: number;
-        fitsCart: boolean;
-      }[];
+      rewards: RewardOption[];
     }
   | { ok: false; error: string };
 
@@ -77,22 +66,9 @@ export async function previewCheckout(input: unknown): Promise<CheckoutPreview> 
   const parsed = previewSchema.safeParse(input);
   if (!parsed.success) return { ok: false, error: "Invalid cart." };
   try {
-    const member = await getCurrentMember();
+    const [member, store] = await Promise.all([getCurrentMember(), getSettings()]);
     const q = await quoteOrder(parsed.data, member);
-    const rewards =
-      member && q.loyalty
-        ? (await listRewards({ activeOnly: true })).map((r) => ({
-            id: r.id,
-            name: r.name,
-            description: r.description,
-            pointsCost: r.price.cost,
-            valueCents: rewardValueCents(r.effect),
-            upTo: r.effect.kind === "free_item",
-            increase: r.price.increase && { cost: r.price.increase.cost, on: r.price.increase.on.toISOString() },
-            pointsShort: Math.max(0, r.price.cost - member.pointsBalance),
-            fitsCart: rewardDiscount(r.effect, q.lines).ok,
-          }))
-        : [];
+    const rewards = member && q.loyalty ? await rewardOptions(q.lines, store.timezone) : [];
     return {
       ok: true,
       rewards,

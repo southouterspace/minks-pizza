@@ -7,14 +7,15 @@ import {
   LEDGER_KIND_RULES,
   formatMultiplier,
   formatPhone,
-  formatPriceIncrease,
+  formatPointsDelta,
   localYearMonth,
   MONTHS,
   nextBirthdayGrant,
   orderPointsStatus,
   pointsSafeUntil,
   PRICE_PROTECTION_DAYS,
-  rewardValueCents,
+  toPublicReward,
+  type PublicReward,
   SIGNUP_MIN_NET_CENTS,
 } from "@/lib/loyalty";
 import {
@@ -27,7 +28,6 @@ import {
   memberStatus,
   refreshMember,
   type LoyaltyMember,
-  type LoyaltyReward,
   type LoyaltySettings,
 } from "@/lib/loyalty-server";
 import { formatCents } from "@/lib/money";
@@ -35,6 +35,7 @@ import { signOut } from "./actions";
 import { ComingSoon } from "@/components/store/coming-soon";
 import { BirthdayForm } from "@/components/store/birthday-form";
 import { CopyLink } from "@/components/store/copy-link";
+import { ProgressBar, RewardProgress, RewardSummary } from "@/components/store/reward-row";
 import { DeleteAccountButton } from "@/components/store/delete-account-button";
 import { RewardsSignIn } from "@/components/store/rewards-sign-in";
 import { Badge } from "@/components/ui/badge";
@@ -45,33 +46,6 @@ import { cn } from "@/lib/utils";
 export const metadata: Metadata = { title: "Rewards" };
 export const dynamic = "force-dynamic";
 
-
-function Progress({ fraction, label }: { fraction: number; label: string }) {
-  return (
-    <div
-      role="progressbar"
-      aria-label={label}
-      aria-valuemin={0}
-      aria-valuemax={100}
-      aria-valuenow={Math.round(fraction * 100)}
-      className="h-2 overflow-hidden rounded-full bg-muted"
-    >
-      <div className="h-full rounded-full bg-primary" style={{ width: `${Math.max(2, fraction * 100)}%` }} />
-    </div>
-  );
-}
-
-function RewardCost({ reward }: { reward: LoyaltyReward }) {
-  const value = formatCents(rewardValueCents(reward.effect)).replace(".00", "");
-  return (
-    <span className="block text-right">
-      {reward.price.cost.toLocaleString()} pts
-      <span className="block text-xs">
-        {reward.effect.kind === "free_item" ? `up to ${value}` : value} value
-      </span>
-    </span>
-  );
-}
 
 function HowItWorks({ loyalty, className }: { loyalty: LoyaltySettings; className?: string }) {
   return (
@@ -109,7 +83,7 @@ export default async function RewardsPage({ searchParams }: PageProps<"/rewards"
   const ref = typeof params.ref === "string" ? params.ref.slice(0, 20) : null;
   const [signedIn, rewards, promo] = await Promise.all([
     getCurrentMember(),
-    listRewards({ activeOnly: true }),
+    listRewards({ activeOnly: true }).then((rs) => rs.map((r) => toPublicReward(r, store.timezone))),
     currentPromotion(store.timezone),
   ]);
 
@@ -124,7 +98,7 @@ export default async function RewardsPage({ searchParams }: PageProps<"/rewards"
       {signedIn ? (
         <MemberView member={signedIn} loyalty={loyalty} rewards={rewards} timezone={store.timezone} />
       ) : (
-        <PitchView loyalty={loyalty} rewards={rewards} timezone={store.timezone} next={next} referralCode={ref} />
+        <PitchView loyalty={loyalty} rewards={rewards} next={next} referralCode={ref} />
       )}
     </div>
   );
@@ -133,13 +107,11 @@ export default async function RewardsPage({ searchParams }: PageProps<"/rewards"
 function PitchView({
   loyalty,
   rewards,
-  timezone,
   next,
   referralCode,
 }: {
   loyalty: LoyaltySettings;
-  rewards: LoyaltyReward[];
-  timezone: string;
+  rewards: PublicReward[];
   next: string;
   referralCode: string | null;
 }) {
@@ -162,19 +134,8 @@ function PitchView({
         <h2 className="mt-10 text-sm font-semibold">Rewards</h2>
         <ul className="mt-3 divide-y divide-border rounded-xl border border-border">
           {rewards.map((r) => (
-            <li key={r.id} className="flex items-center justify-between gap-4 px-4 py-3">
-              <span className="min-w-0">
-                <span className="block text-sm font-medium">{r.name}</span>
-                {r.description ? (
-                  <span className="block text-xs text-muted-foreground">{r.description}</span>
-                ) : null}
-                {r.price.increase ? (
-                  <span className="block text-xs text-warning">{formatPriceIncrease(r.price.increase, timezone)}</span>
-                ) : null}
-              </span>
-              <span className="shrink-0 text-sm tabular-nums text-muted-foreground">
-                <RewardCost reward={r} />
-              </span>
+            <li key={r.id} className="px-4 py-3">
+              <RewardSummary reward={r} />
             </li>
           ))}
         </ul>
@@ -236,7 +197,7 @@ async function MemberView({
 }: {
   member: LoyaltyMember;
   loyalty: LoyaltySettings;
-  rewards: LoyaltyReward[];
+  rewards: PublicReward[];
   timezone: string;
 }) {
   const member = (await refreshMember(signedIn.id)) ?? signedIn;
@@ -294,7 +255,7 @@ async function MemberView({
           </div>
           {status.next ? (
             <>
-              <Progress fraction={status.fraction} label={`Progress to ${status.next.name}`} />
+              <ProgressBar fraction={status.fraction} label={`Progress to ${status.next.name}`} />
               <p className="text-xs text-muted-foreground">
                 {status.next.name} earns {formatMultiplier(status.next.multiplierBps)} points. Tiers count points earned on
                 orders in the last 12 months.
@@ -310,36 +271,12 @@ async function MemberView({
       <section>
         <h2 className="text-sm font-semibold">Rewards</h2>
         <ul className="mt-3 divide-y divide-border rounded-xl border border-border" data-testid="reward-ladder">
-          {rewards.map((r) => {
-            const cost = r.price.cost;
-            const ready = member.pointsBalance >= cost;
-            return (
-              <li key={r.id} className="space-y-2 px-4 py-3">
-                <div className="flex items-center justify-between gap-4">
-                  <span className="min-w-0">
-                    <span className="block text-sm font-medium">{r.name}</span>
-                    {r.description ? (
-                      <span className="block text-xs text-muted-foreground">{r.description}</span>
-                    ) : null}
-                    {r.price.increase ? (
-                      <span className="block text-xs text-warning" data-testid="price-increase">
-                        {formatPriceIncrease(r.price.increase, timezone)}
-                      </span>
-                    ) : null}
-                  </span>
-                  <span className="shrink-0 text-sm tabular-nums text-muted-foreground">
-                    <RewardCost reward={r} />
-                  </span>
-                </div>
-                <Progress fraction={Math.min(1, member.pointsBalance / cost)} label={`Progress to ${r.name}`} />
-                <p className={cn("text-xs", ready ? "font-medium text-success" : "text-muted-foreground")}>
-                  {ready
-                    ? "Ready to redeem at checkout"
-                    : `${(cost - member.pointsBalance).toLocaleString()} points to go`}
-                </p>
-              </li>
-            );
-          })}
+          {rewards.map((r) => (
+            <li key={r.id} className="space-y-2 px-4 py-3">
+              <RewardSummary reward={r} />
+              <RewardProgress reward={r} balance={member.pointsBalance} />
+            </li>
+          ))}
         </ul>
         <Link href="/" className="mt-3 inline-block text-sm font-medium underline underline-offset-4">
           Order now
@@ -439,7 +376,7 @@ async function MemberView({
                     {e.createdAt.toLocaleDateString("en-US", {
                       month: "short",
                       day: "numeric",
-                      ...(e.createdAt.getFullYear() !== year ? { year: "numeric" } : {}),
+                      ...(localYearMonth(e.createdAt, timezone).year !== year ? { year: "numeric" } : {}),
                       timeZone: timezone,
                     })}
                     {e.orderId && e.orderNumber ? (
@@ -453,8 +390,7 @@ async function MemberView({
                   </span>
                 </span>
                 <span className={cn("shrink-0 font-medium tabular-nums", e.points > 0 ? "text-success" : "text-muted-foreground")}>
-                  {e.points > 0 ? "+" : "−"}
-                  {Math.abs(e.points).toLocaleString()}
+                  {formatPointsDelta(e.points)}
                 </span>
               </li>
             ))}

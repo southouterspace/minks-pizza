@@ -5,9 +5,12 @@ import {
   applyReward,
   birthdayGrantDue,
   birthdaySchema,
+  centsPerPoint,
   earnPoints,
   expiryDue,
   formatMultiplier,
+  nextReward,
+  toPublicReward,
   formatPhone,
   nextBirthdayGrant,
   normalizePhone,
@@ -345,5 +348,59 @@ describe("price protection", () => {
     const again = repriceReward(raised, 500, new Date("2026-10-11T12:00:00Z"));
     assert.equal(again.previousPointsCost, 300);
     assert.equal(rewardPrice(again, new Date("2026-10-11T12:00:00Z")).cost, 300);
+  });
+});
+
+describe("toPublicReward", () => {
+  it("shows today's price, the value, and an increase dated on the store's calendar", () => {
+    const reward = {
+      id: 4,
+      name: "Free large pizza",
+      description: "Any pizza up to $22.",
+      effect: { kind: "free_item" as const, categoryIds: [1], maxValueCents: 2200 },
+      // 03:00 UTC on Dec 2 is still Dec 1 in Chicago.
+      price: { cost: 1500, increase: { cost: 1800, on: new Date("2026-12-02T03:00:00Z") } },
+    };
+    assert.deepEqual(toPublicReward(reward, TZ), {
+      id: 4,
+      name: "Free large pizza",
+      description: "Any pizza up to $22.",
+      cost: 1500,
+      valueLabel: "up to $22 value",
+      increaseLabel: "Price going up to 1,800 on Dec 1",
+    });
+  });
+  it("keeps cents in an amount that has them", () => {
+    const reward = {
+      id: 1,
+      name: "$2.50 off",
+      description: null,
+      effect: { kind: "amount_off" as const, amountOffCents: 250 },
+      price: { cost: 250, increase: null },
+    };
+    assert.equal(toPublicReward(reward, TZ).valueLabel, "$2.50 value");
+  });
+});
+
+describe("nextReward", () => {
+  const ladder = [{ cost: 1500 }, { cost: 300 }, { cost: 700 }];
+  it("is the cheapest reward the balance hasn't reached", () => {
+    assert.deepEqual(nextReward(ladder, 300), { cost: 700 });
+  });
+  it("is null once every reward is in reach", () => {
+    assert.equal(nextReward(ladder, 1500), null);
+  });
+});
+
+describe("centsPerPoint", () => {
+  it("values a point by the cheapest reward", () => {
+    const rewards = [
+      { effect: { kind: "free_item" as const, categoryIds: [1], maxValueCents: 2200 }, price: { cost: 1500 } },
+      { effect: { kind: "amount_off" as const, amountOffCents: 300 }, price: { cost: 300 } },
+    ];
+    assert.equal(centsPerPoint(rewards), 1);
+  });
+  it("is null with no rewards", () => {
+    assert.equal(centsPerPoint([]), null);
   });
 });

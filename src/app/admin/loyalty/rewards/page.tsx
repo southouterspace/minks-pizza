@@ -1,7 +1,9 @@
 import { asc } from "drizzle-orm";
 import { categories, db } from "@/db";
 import { requireOperator } from "@/lib/auth";
+import { formatStoreDate } from "@/lib/loyalty";
 import { listRewards } from "@/lib/loyalty-server";
+import { getSettings } from "@/lib/orders";
 import { deleteReward } from "../actions";
 import { ConfirmButton } from "@/components/admin/confirm-button";
 import { FormNotice } from "@/components/admin/form-notice";
@@ -14,7 +16,8 @@ export const dynamic = "force-dynamic";
 export default async function LoyaltyRewardsPage({ searchParams }: PageProps<"/admin/loyalty/rewards">) {
   await requireOperator();
   const sp = await searchParams;
-  const [rewards, cats] = await Promise.all([
+  const [store, rewards, cats] = await Promise.all([
+    getSettings(),
     listRewards({ activeOnly: false }),
     db.select({ id: categories.id, name: categories.name }).from(categories).orderBy(asc(categories.sortOrder)),
   ]);
@@ -36,7 +39,7 @@ export default async function LoyaltyRewardsPage({ searchParams }: PageProps<"/a
               {r.price.increase ? (
                 <span className="text-xs font-normal text-muted-foreground">
                   Customers pay {r.price.cost.toLocaleString()} until{" "}
-                  {r.price.increase.on.toLocaleDateString("en-US", { month: "short", day: "numeric" })}
+                  {formatStoreDate(r.price.increase.on, store.timezone)}
                 </span>
               ) : null}
             </CardTitle>

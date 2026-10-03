@@ -3,6 +3,7 @@
  * storefront, the admin and the tests share one definition of every rule.
  */
 import { z } from "zod";
+import { formatCents } from "@/lib/money";
 import { dayOfWeek, localDateOf } from "@/lib/zoned";
 
 export const LEDGER_KINDS = [
@@ -166,6 +167,11 @@ export function tierProgress(qualifyingPoints: number, tiers: LoyaltyTier[]): Ti
   };
 }
 
+/** "+1,200", "−300" */
+export function formatPointsDelta(points: number): string {
+  return `${points > 0 ? "+" : "−"}${Math.abs(points).toLocaleString()}`;
+}
+
 /** "2x", "1.25x" */
 export function formatMultiplier(bps: number): string {
   return `${Number((bps / 10_000).toFixed(2))}x`;
@@ -275,6 +281,12 @@ export function rewardValueCents(effect: RewardEffect): number {
   return effect.kind === "amount_off" ? effect.amountOffCents : effect.maxValueCents;
 }
 
+/** What one point is worth, judged by the cheapest reward to reach. */
+export function centsPerPoint(rewards: { effect: RewardEffect; price: { cost: number } }[]): number | null {
+  const cheapest = rewards.toSorted((a, b) => a.price.cost - b.price.cost)[0];
+  return cheapest ? rewardValueCents(cheapest.effect) / cheapest.price.cost : null;
+}
+
 // ---------------------------------------------------------------------------
 // Price protection
 // ---------------------------------------------------------------------------
@@ -306,12 +318,44 @@ export function rewardPrice(r: RewardPricing, now: Date): RewardPrice {
   return { cost: protectedPrice, increase: { cost: r.pointsCost, on: r.priceProtectedUntil! } };
 }
 
-export function formatPriceIncrease(
-  increase: { cost: number; on: Date },
+/** "Dec 2" on the store's calendar. */
+export function formatStoreDate(at: Date, timezone: string): string {
+  return at.toLocaleDateString("en-US", { month: "short", day: "numeric", timeZone: timezone });
+}
+
+/** A reward as customers see it: today's price, its value, any scheduled increase. */
+export type PublicReward = {
+  id: number;
+  name: string;
+  description: string | null;
+  cost: number;
+  /** "$3 value", "up to $22 value" */
+  valueLabel: string;
+  /** "Price going up to 400 on Dec 2", dated on the store's calendar. */
+  increaseLabel: string | null;
+};
+
+export function toPublicReward(
+  reward: { id: number; name: string; description: string | null; effect: RewardEffect; price: RewardPrice },
   timezone: string,
-): string {
-  const on = increase.on.toLocaleDateString("en-US", { month: "short", day: "numeric", timeZone: timezone });
-  return `Price going up to ${increase.cost.toLocaleString()} on ${on}`;
+): PublicReward {
+  const value = formatCents(rewardValueCents(reward.effect)).replace(/\.00$/, "");
+  const { increase } = reward.price;
+  return {
+    id: reward.id,
+    name: reward.name,
+    description: reward.description,
+    cost: reward.price.cost,
+    valueLabel: `${reward.effect.kind === "free_item" ? "up to " : ""}${value} value`,
+    increaseLabel: increase
+      ? `Price going up to ${increase.cost.toLocaleString()} on ${formatStoreDate(increase.on, timezone)}`
+      : null,
+  };
+}
+
+/** The cheapest reward still out of reach, for "N points to go" nudges. */
+export function nextReward<R extends { cost: number }>(rewards: R[], balance: number): R | null {
+  return rewards.filter((r) => r.cost > balance).toSorted((a, b) => a.cost - b.cost)[0] ?? null;
 }
 
 /**

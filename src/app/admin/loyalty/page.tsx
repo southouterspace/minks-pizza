@@ -1,12 +1,8 @@
 import Link from "next/link";
 import { TriangleAlert } from "lucide-react";
 import { requireOperator } from "@/lib/auth";
-import {
-  centsPerPoint,
-  getLoyaltySettings,
-  listRewards,
-  programStats,
-} from "@/lib/loyalty-server";
+import { centsPerPoint } from "@/lib/loyalty";
+import { getLoyaltySettings, listRewards, programStats } from "@/lib/loyalty-server";
 import { formatCents } from "@/lib/money";
 import { smsConfigured } from "@/lib/sms";
 import { toggleLoyaltyEnabled } from "./actions";
