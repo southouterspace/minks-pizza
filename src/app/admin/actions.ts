@@ -12,7 +12,6 @@ import {
   modifierGroups,
   modifiers,
   operators,
-  orders,
   storeLogo,
   storeSettings,
   type DayHours,
@@ -25,7 +24,21 @@ import {
   requireOperator,
   verifyPassword,
 } from "@/lib/auth";
+import { STORE_TIMEZONES } from "@/lib/hours";
 import { KITCHEN_STATIONS, type KitchenStation } from "@/lib/kds";
+import {
+  CANCEL_REASONS,
+  ORDER_STATUSES,
+  PAYMENT_METHODS,
+} from "@/lib/order-workflow";
+import {
+  addOrderNote,
+  adjustPromisedTime,
+  recordPayment,
+  transitionOrder,
+  type Actor,
+  type OrderActionResult,
+} from "@/lib/order-writes";
 
 export type AuthFormState = { error?: string };
 
@@ -73,6 +86,11 @@ function dollarsToCents(fd: FormData, name: string): number {
 /** Kitchen-display routing for a category; blank or unknown → "kitchen". */
 function stationField(fd: FormData): KitchenStation {
   return z.enum(KITCHEN_STATIONS).catch("kitchen").parse(textField(fd, "station"));
+}
+
+function timezoneField(fd: FormData): string {
+  const zones = STORE_TIMEZONES.map((tz) => tz.value);
+  return z.enum(zones).catch("America/Chicago").parse(textField(fd, "timezone"));
 }
 
 function directionField(fd: FormData): "up" | "down" {
@@ -266,45 +284,66 @@ export async function changeOwnPassword(
 // Orders
 // ---------------------------------------------------------------------------
 
-const STATUS_TRANSITIONS: Record<string, readonly string[]> = {
-  new: ["confirmed", "canceled"],
-  confirmed: ["preparing", "canceled"],
-  preparing: ["ready"],
-  ready: ["completed"],
-  completed: [],
-  canceled: [],
-};
+export type OrderActionState = { error?: string };
 
-const orderStatusSchema = z.enum([
-  "confirmed",
-  "preparing",
-  "ready",
-  "completed",
-  "canceled",
-]);
+async function operatorActor(): Promise<Actor> {
+  const operator = await requireOperator();
+  return { name: operator.name, operatorId: operator.id };
+}
 
-export async function updateOrderStatus(formData: FormData): Promise<void> {
-  await requireOperator();
-  const orderId = z.uuid().parse(textField(formData, "orderId"));
-  const status = orderStatusSchema.parse(textField(formData, "status"));
+function orderActionState(result: OrderActionResult): OrderActionState {
+  revalidatePath("/admin", "layout");
+  return result.ok ? {} : { error: result.reason };
+}
 
-  const [order] = await db
-    .select({ id: orders.id, status: orders.status })
-    .from(orders)
-    .where(eq(orders.id, orderId));
-  if (!order) return;
-  if (!STATUS_TRANSITIONS[order.status]?.includes(status)) return;
+const orderIdField = (fd: FormData) => z.uuid().parse(textField(fd, "orderId"));
 
-  const now = new Date();
-  await db
-    .update(orders)
-    .set({
-      status,
-      updatedAt: now,
-      ...(status === "ready" ? { readyAt: now } : {}),
-    })
-    .where(eq(orders.id, orderId));
-  revalidatePath("/admin");
+export async function moveOrder(formData: FormData): Promise<OrderActionState> {
+  const actor = await operatorActor();
+  const to = z.enum(ORDER_STATUSES).exclude(["canceled"]).parse(textField(formData, "to"));
+  return orderActionState(
+    await transitionOrder({ orderId: orderIdField(formData), to, actor }),
+  );
+}
+
+export async function cancelOrder(formData: FormData): Promise<OrderActionState> {
+  const actor = await operatorActor();
+  const reason = z.enum(CANCEL_REASONS).safeParse(textField(formData, "reason"));
+  if (!reason.success) return { error: "Pick a reason for canceling." };
+  const detail = textField(formData, "detail").slice(0, 300);
+  return orderActionState(
+    await transitionOrder({
+      orderId: orderIdField(formData),
+      to: "canceled",
+      actor,
+      cancelReason: detail ? `${reason.data}: ${detail}` : reason.data,
+    }),
+  );
+}
+
+export async function adjustPromisedTimeAction(formData: FormData): Promise<OrderActionState> {
+  const actor = await operatorActor();
+  const minutes = z.coerce.number().int().min(-60).max(120).parse(textField(formData, "minutes"));
+  return orderActionState(
+    await adjustPromisedTime({ orderId: orderIdField(formData), minutes, actor }),
+  );
+}
+
+export async function recordPaymentAction(formData: FormData): Promise<OrderActionState> {
+  const actor = await operatorActor();
+  const method = z.enum(PAYMENT_METHODS).parse(textField(formData, "method"));
+  return orderActionState(
+    await recordPayment({ orderId: orderIdField(formData), method, actor }),
+  );
+}
+
+export async function addOrderNoteAction(formData: FormData): Promise<OrderActionState> {
+  const actor = await operatorActor();
+  const note = textField(formData, "note").slice(0, 500);
+  if (!note) return { error: "Write a note first." };
+  return orderActionState(
+    await addOrderNote({ orderId: orderIdField(formData), note, actor }),
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -790,6 +829,7 @@ export async function saveSettings(formData: FormData): Promise<void> {
     deliveryFeeCents: dollarsToCents(formData, "deliveryFee"),
     deliveryMinimumCents: dollarsToCents(formData, "deliveryMinimum"),
     taxRateBps: Math.round(taxPercent * 100),
+    timezone: timezoneField(formData),
     updatedAt: new Date(),
   };
 

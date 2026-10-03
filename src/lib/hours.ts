@@ -10,6 +10,22 @@ export const DAY_NAMES = [
   "Saturday",
 ];
 
+/** US zones offered in Settings; the store's day for stats and history. */
+export const STORE_TIMEZONES = [
+  { value: "America/New_York", label: "Eastern" },
+  { value: "America/Chicago", label: "Central" },
+  { value: "America/Denver", label: "Mountain" },
+  { value: "America/Phoenix", label: "Arizona (no DST)" },
+  { value: "America/Los_Angeles", label: "Pacific" },
+  { value: "America/Anchorage", label: "Alaska" },
+  { value: "Pacific/Honolulu", label: "Hawaii" },
+] as const;
+
+/** "6:45 PM" on the store's clock. */
+export function formatClock(d: Date, timeZone: string): string {
+  return d.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit", timeZone });
+}
+
 export function formatTime(hhmm: string): string {
   const [h, m] = hhmm.split(":").map(Number);
   const suffix = h >= 12 ? "PM" : "AM";

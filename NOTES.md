@@ -251,6 +251,100 @@ handoff with database state checked at every step, recall, Undo, bump-bar
 keys, a new order appearing live, the cancel alert, and the offline banner
 appearing and clearing.
 
+## Session 5 — Order management
+
+**Ask:** Toast-grade admin order management: a live board, history with
+search and export, a detail page with an audit trail, promised times, cancel
+reasons, payment recording, printing, day stats and a new-order alert.
+
+**Built:** see README → Order management.
+
+- **One lifecycle table.** `src/lib/order-workflow.ts` (pure) owns
+  `TRANSITIONS`, `NEXT_ACTION`, `STATUS_META`, `CANCEL_REASONS`, `isLate`,
+  `minutesUntil` and `statusTimestamps`. The schema builds its enums from the
+  same tuples. The old copies in `admin/actions.ts` and `order-card.tsx` are
+  deleted, and the KDS moves status only through it. Cancel is now allowed
+  from preparing and ready too (an order can go wrong at any point before
+  handoff). KDS recall stays a separate `RECALLABLE` edge, the only way an
+  order goes backwards, and `statusTimestamps("preparing")` clears
+  `readyAt`/`completedAt` so a recalled order isn't reported as ready.
+- **Audit trail in the same statement as the change.** Every write in
+  `src/lib/order-writes.ts` is one data-modifying CTE: lock the order
+  `for update` only if the guard (`status in (...)`, `payment_status =
+  'pending'`, …) still holds, update it, insert the `order_events` row from
+  what the update returned. The brief asked for an update + insert in one
+  `db.batch`; a batch can't make the insert depend on whether the update
+  matched, and a follow-up insert after `.returning()` could be lost if the
+  second request failed. The CTE gives both: no double-apply when two
+  tablets (or KDS + admin) tap at once, and never a change without its row.
+  `fromStatus` comes from the locked row, so it is exact even for the KDS's
+  multi-source moves (`new|confirmed → preparing`). The statements are
+  plain `db.execute` items, so the KDS still batches them with its item
+  updates in one transaction. Drizzle's insert-select builder can't express
+  this (it requires every column including the identity, and duplicates
+  nested CTEs), hence the SQL template.
+- **The guard is the current status, not the button the operator saw.**
+  `transitionOrder` reads the status, checks `canTransition`, then updates
+  `where status = <that>`. A stale tap from a second tablet is refused with
+  "Order is already confirmed." rather than silently moving the order a
+  further step.
+- **The store's day.** `store_settings.timezone` (Settings select, US zones).
+  "Today" and history date ranges compare `(placed_at at time zone tz)::date`
+  in Postgres, which handles DST. Server-rendered times pass the zone
+  explicitly; before this, admin timestamps rendered in the server's zone
+  (UTC on Vercel).
+- **Net sales = item subtotals of non-canceled orders.** Tax, tips and
+  delivery fees aren't sales (Toast's definition). Average ticket is net
+  sales over those orders. "Late now" is computed with `isLate` over the
+  live orders rather than duplicated in SQL.
+- **Late means the food is still owed.** `isLate` is true only for
+  new/confirmed/preparing past `promisedAt`; a ready order waiting for
+  pickup isn't late.
+- **Checkout** sets `promisedAt` = placedAt + prep minutes and writes the
+  `placed` event (actor "Customer") in the same batch as the order lines.
+  Orders from before the migration have neither; the detail timeline shows a
+  synthetic "Order placed" for them.
+- **New-order alert.** "Seen" is derived, not tracked in an effect: orders
+  present on first render are acknowledged, any `new` order not in that set
+  is unseen, and a tap or key acknowledges the current ones. The chime plays
+  once per order id. The AudioContext is created on the first tap because
+  browsers block audio before a gesture; the title flash works either way.
+- **Action feedback runs in the submit handler.** The first cut kept the
+  result in `useActionState`. A successful move re-renders the board and
+  remounts the card in another lane, so that state vanished and the second
+  tablet's refusal toast never showed. The e2e caught it.
+- **History is a GET form**, so the URL is the state and the CSV link reuses
+  the same query. CSV fields are RFC 4180 quoted, and values starting with
+  `= + - @` get a leading `'` so a spreadsheet won't run them as formulas.
+- **Fixed in passing:** `AutoRefresh` called `router.refresh()` inside a
+  `setState` updater (React warned "Cannot update Router while rendering").
+- **Not built:** refunds (the status exists, nothing sets it), editing items
+  on a placed order, per-operator roles.
+
+**Tested** against a throwaway Neon branch (`ep-purple-unit`):
+
+- `scripts/test-order-workflow.ts`, 7 tests against literal values:
+  the full transition table, every legal move and nothing else, `isLate`
+  edges, `minutesUntil` rounding, `statusTimestamps` per destination.
+- `scripts/e2e-orders.ts`, 60 checks: promised time and placed event at
+  checkout; confirm → preparing → ready → complete on the board with the
+  database, lanes and one event per move checked; +10 min moves
+  `promisedAt` by exactly 600 s; cancel with a reason writes
+  `cancelReason`, `canceledAt` and the event, and the tracker shows it;
+  the title flashes on an arriving order (not on first load), mute persists
+  and a tap acknowledges; two signed-in tablets tap Confirm and it applies
+  once with a toast on the second; history search by name, formatted and
+  bare phone digits and order number; status filter; CSV export content,
+  quoting and 401 when signed out; payment and note events; a KDS recall
+  writes a "Kitchen display · …" event and clears the timestamps; the
+  timeline lists all of it in order; lanes stack and nothing scrolls
+  sideways at 375 px. Screenshots of board, history and detail at desktop
+  and 375 px, plus the print ticket.
+- `scripts/e2e-kds.ts` still passes (26 checks) with the KDS writing
+  through the logged transitions.
+- The e2e creates and deletes its own operator. On a database that already
+  has operators, `e2e-kds.ts` needs `kitchen@minks.example` to exist.
+
 ## Gotchas hit (for future sessions)
 
 - Playwright `getByRole(name:)` is substring-matching: "Publish store" also
@@ -274,6 +368,13 @@ appearing and clearing.
   instead of reading it once.
 - Screenshots taken right after a tab click can catch `transition-colors`
   halfway, so two tabs look selected. Check `aria-pressed`, not pixels.
+- Scripts can't import a module with `import "server-only"`: the package
+  only exists inside Next's bundler. To call `order-writes.ts` or `order-queries.ts` from tsx,
+  point `NODE_PATH` at a directory holding an empty `server-only` package.
+- A hydration-mismatch warning about `caret-color: transparent` on the
+  history search input showed up only in e2e runs that take screenshots
+  (Playwright hides the caret for them). Loading and searching without
+  screenshots logs nothing.
 - Destructive e2e (creating/removing operator accounts) must not run against the
   production database. `mcp__Neon__create_branch` makes an isolated copy in
   seconds; point `MINKS_DATABASE_URL` at it and delete the branch afterwards.

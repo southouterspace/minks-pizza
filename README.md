@@ -59,12 +59,66 @@ npm run dev
    fee/minimum, tax rate — and the **Publish** switch that takes the storefront
    live (before that, customers see a coming-soon page). A separate
    **Accepting orders** switch pauses ordering without unpublishing.
-5. **Orders** (`/admin`) — live inbox that auto-refreshes; move orders through
-   `new → confirmed → preparing → ready → completed` (or cancel).
+5. **Orders** (`/admin`) — the live board. See [Order management](#order-management) below.
 6. **Kitchen display** (`/kitchen`) — the full-screen KDS for the line. See
    [Kitchen display](#kitchen-display-kds) below.
 7. **Team** (`/admin/team`) — add or remove operator accounts, and change your
    own password. See [Operator accounts](#operator-accounts) below.
+
+#### Order management
+
+**Orders board** (`/admin`). A strip of today's numbers (orders, net sales,
+average ticket, average placed-to-ready time, orders late right now), then
+three lanes: **New**, **In kitchen** (confirmed and preparing) and **Ready**.
+Each card shows the order number, customer, type, items, total, how long ago
+it was placed and the promised time, which turns red with a **Late** flag
+once it passes. The primary button moves the order one step along
+`new → confirmed → preparing → ready → completed`; **+5** and **+10** push the
+promised time; **Cancel** asks for a reason. The board refreshes every 15
+seconds. When a new order arrives the tab chimes and its title flashes
+"(1) New order" until someone taps the page; **Chime on/off** is remembered
+per device. Browsers only allow sound after the first tap on the page.
+
+Two tablets tapping the same button apply it once: the second tap gets
+"Order is already confirmed." Every move is checked against one table of
+legal transitions (`src/lib/order-workflow.ts`) that the kitchen display uses
+too.
+
+**History** (`/admin/orders`). Search by order number, customer name, email
+or phone (digits only, so `246-8135` finds `(555) 246-8135`), and filter by
+status, type and a date range in the store's time zone. The URL carries the
+filters, so a search can be bookmarked or shared. **Export CSV** downloads the
+same rows (up to 5,000).
+
+**Order detail** (`/admin/orders/<id>`). Customer with tap-to-call, items with
+modifiers and notes, totals, and the promised time. From here you can
+advance or cancel, push the promised time (−5 to +15 min), record payment as
+cash, card or other, and add internal notes. The **timeline** lists
+everything that happened to the order with who did it and when: the
+customer placing it, each operator action, and each status change the
+kitchen display made (shown as "Kitchen display · <operator>"). **Print
+ticket** prints an 80 mm receipt without the admin chrome.
+
+**Promised time.** Checkout quotes placed time + the pickup or delivery prep
+minutes from Settings. The customer's tracker shows "Ready around 6:45 PM"
+while the order is cooking and the cancel reason if it was canceled.
+
+**Time zone.** Settings → Time zone decides when the store's day starts for
+the board numbers and history dates, and the clock that promised times are
+shown in. Default: Central.
+
+##### Deploying the order-management schema
+
+Additive: two enums, an `order_events` table, five nullable `orders` columns
+and `store_settings.timezone` with a default. Migrate before deploying the
+code:
+
+```bash
+MINKS_DATABASE_URL=<production url> npm run db:push
+```
+
+Orders placed before the migration have no promised time and no audit rows;
+their timeline starts with a synthetic "Order placed".
 
 #### Operator accounts
 
@@ -185,9 +239,13 @@ minimums, and recomputes every price at order time.
 src/
   db/            schema.ts (Drizzle), seed.ts, index.ts (client)
   lib/           menu.ts, orders.ts (pricing + creation), auth.ts, validation.ts,
+                 order-workflow.ts (order lifecycle rules, pure),
+                 order-writes.ts (logged status/ETA/payment/note writes),
+                 order-queries.ts (board, history search, export, detail, day stats),
                  kds.ts (kitchen display rules, pure), kds-server.ts (queries + actions)
   app/(store)/   customer storefront (menu, cart, checkout, order status)
-  app/admin/     operator dashboard (orders, menu, modifiers, settings, team)
+  app/admin/     operator dashboard (orders board, history + detail, menu,
+                 modifiers, settings, team); CSV export in app/api/admin/orders
   app/kitchen/   kitchen display (KDS); data via app/api/kds
   components/    cart context, storefront + admin UI
 ```
@@ -205,7 +263,8 @@ Informed by industry research (see `docs/RESEARCH.md`), roughly in order:
 6. **Allergen/dietary tags & item photos** (schema already has `imageUrl`)
 7. **Customer accounts with saved addresses & one-tap reorder** — optional,
    post-purchase (guest checkout stays the default)
-8. **Coupons/promo codes; printable kitchen tickets**
+8. **Coupons/promo codes**; refunds (the `refunded` payment status exists but
+   nothing sets it yet)
 9. **KDS follow-ups** (from `docs/kds-research.md`): half-and-half pizzas end
    to end (ordering, pricing and a left/right ticket layout, the most-requested
    pizza KDS feature); a kitchen-only role so the display tablet doesn't carry

@@ -28,12 +28,13 @@ export async function GET(): Promise<Response> {
 
 /** Applies one action and answers with the fresh snapshot, saving a poll. */
 export async function POST(request: Request): Promise<Response> {
-  if (!(await getCurrentOperator())) return unauthorized();
+  const operator = await getCurrentOperator();
+  if (!operator) return unauthorized();
   const parsed = actionSchema.safeParse(await request.json().catch(() => null));
   if (!parsed.success) {
     return Response.json({ error: "Invalid action." }, { status: 400 });
   }
-  await applyKdsAction(parsed.data);
+  await applyKdsAction(parsed.data, operator);
   return Response.json(await getKdsSnapshot(), {
     headers: { "Cache-Control": "no-store" },
   });
