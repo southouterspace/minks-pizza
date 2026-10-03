@@ -1,7 +1,7 @@
 /**
  * Operator-flow smoke test against a running dev server:
- * first-run setup → dashboard → menu edit → settings/publish → orders inbox
- * status transitions.
+ * first-run setup → orders inbox (channel + payment state) → menu →
+ * settings/publish → sign out and back in.
  *
  * Run: npx tsx --env-file=.env.local scripts/e2e-operator.ts
  * Precondition: no operator row exists yet (first-run state).
@@ -37,18 +37,19 @@ async function main() {
   await page.waitForURL(/\/admin$/, { timeout: 20_000 });
   await shot("a2-orders-inbox");
 
-  // 2. Orders inbox lists orders; advance one status.
+  // 2. Orders inbox lists orders with channel and payment state. Kitchen
+  // status is driven by the KDS, so the inbox has no status buttons.
   // Match any order number rather than a fixed prefix — order numbers grow,
   // and completed/canceled ones live in a collapsed "Recent" section.
   await page
     .locator("text=/#\\d{4,}/")
     .first()
     .waitFor({ state: "attached", timeout: 30_000 });
-  const confirmBtn = page.locator('button:has-text("Confirm")').first();
-  if (await confirmBtn.count()) {
-    await confirmBtn.click();
-    await page.waitForTimeout(1500);
-    await shot("a3-after-confirm");
+  const inbox = await page.locator("main").innerText();
+  if (!/\b(Online|Phone|Walk-in|Dine-in)\b/.test(inbox)) throw new Error("No channel badge in the inbox");
+  if (!/\b(Unpaid|Part paid|Paid|Refunded)\b/.test(inbox)) throw new Error("No payment state in the inbox");
+  if (await page.locator('button:has-text("Confirm")').count()) {
+    throw new Error("The removed Confirm step is still in the inbox");
   }
 
   // 3. Menu management: toggle availability of an item, then back
