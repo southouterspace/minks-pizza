@@ -14,9 +14,13 @@ import {
   PAYMENT_METHODS,
 } from "@/lib/order-workflow";
 import { getOrderDetail, getStoreTimezone } from "@/lib/order-queries";
+import { compPresets } from "@/lib/promotion-admin";
 import {
   ActionForm,
   AdvanceButton,
+  ApplyDiscountDialog,
+  RemoveDiscountButton,
+  type DiscountPreset,
   CancelOrderDialog,
   EtaButtons,
   PrintButton,
@@ -45,13 +49,22 @@ export default async function OrderDetailPage({ params }: PageProps<"/admin/orde
   const { id } = await params;
   if (!/^[0-9a-f-]{36}$/i.test(id)) notFound();
 
-  const [order, timeZone] = await Promise.all([getOrderDetail(id), getStoreTimezone()]);
+  const [order, timeZone, promos] = await Promise.all([getOrderDetail(id), getStoreTimezone(), compPresets()]);
   if (!order) notFound();
 
   const now = new Date();
   const late = isLate(order.promisedAt, order.status, now);
   const address = addressLine(order);
   const open = NEXT_ACTION[order.status] || canTransition(order.status, "canceled");
+  const discountable =
+    order.paymentStatus === "pending" && order.status !== "canceled" && order.status !== "completed";
+  const presets: DiscountPreset[] = promos.flatMap((p): DiscountPreset[] =>
+    p.reward.type === "order_percent"
+      ? [{ promotionId: p.id, label: p.name, kind: "percent", value: p.reward.percentBps / 100 }]
+      : p.reward.type === "order_amount"
+        ? [{ promotionId: p.id, label: p.name, kind: "amount", value: p.reward.amountCents / 100 }]
+        : [],
+  );
 
   return (
     <div className="print:m-0">
@@ -195,6 +208,30 @@ export default async function OrderDetailPage({ params }: PageProps<"/admin/orde
                         minutes={[-5, 5, 10, 15]}
                       />
                     </div>
+                  </div>
+                ) : null}
+
+                {order.discounts.length > 0 || discountable ? (
+                  <div className="space-y-2" data-testid="discounts">
+                    <p className="text-sm font-medium">Discounts</p>
+                    {order.discounts.length ? (
+                      <ul className="space-y-1 text-sm">
+                        {order.discounts.map((d) => (
+                          <li key={d.id} className="flex items-center justify-between gap-2">
+                            <span className="min-w-0">
+                              <span className="block truncate">{d.label}</span>
+                              <span className="text-xs text-muted-foreground">
+                                {d.source === "comp" ? "Staff discount" : "Promotion"} · −{formatCents(d.amountCents)}
+                              </span>
+                            </span>
+                            {discountable && d.source === "comp" ? (
+                              <RemoveDiscountButton orderId={order.id} discountId={d.id} label={d.label} />
+                            ) : null}
+                          </li>
+                        ))}
+                      </ul>
+                    ) : null}
+                    {discountable ? <ApplyDiscountDialog orderId={order.id} presets={presets} /> : null}
                   </div>
                 ) : null}
 

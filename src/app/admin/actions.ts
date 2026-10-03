@@ -34,6 +34,8 @@ import {
 import {
   addOrderNote,
   adjustPromisedTime,
+  applyDiscount,
+  removeDiscount,
   recordPayment,
   transitionOrder,
   type Actor,
@@ -343,6 +345,33 @@ export async function addOrderNoteAction(formData: FormData): Promise<OrderActio
   if (!note) return { error: "Write a note first." };
   return orderActionState(
     await addOrderNote({ orderId: orderIdField(formData), note, actor }),
+  );
+}
+
+export async function applyDiscountAction(formData: FormData): Promise<OrderActionState> {
+  const actor = await operatorActor();
+  const reason = textField(formData, "reason").slice(0, 120);
+  if (!reason) return { error: "Say why: the reason shows on the receipt." };
+  const value = Number.parseFloat(textField(formData, "value"));
+  const kind = textField(formData, "kind");
+  if (!Number.isFinite(value) || value <= 0) return { error: "Enter an amount above zero." };
+  if (kind === "percent" && value > 100) return { error: "Percent must be 1–100." };
+  const promotionId = z.coerce.number().int().positive().nullable().catch(null).parse(textOrNull(formData, "promotionId"));
+  return orderActionState(
+    await applyDiscount({
+      orderId: orderIdField(formData),
+      amount: kind === "percent" ? { percentBps: Math.round(value * 100) } : { cents: Math.round(value * 100) },
+      label: reason,
+      promotionId,
+      actor,
+    }),
+  );
+}
+
+export async function removeDiscountAction(formData: FormData): Promise<OrderActionState> {
+  const actor = await operatorActor();
+  return orderActionState(
+    await removeDiscount({ orderId: orderIdField(formData), discountId: idField(formData, "discountId"), actor }),
   );
 }
 

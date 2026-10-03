@@ -2,6 +2,7 @@ import { formatClock } from "@/lib/hours";
 import { formatCents } from "@/lib/money";
 import { PAYMENT_METHOD_LABEL } from "@/lib/order-workflow";
 import type { OrderDetail } from "@/lib/order-queries";
+import { cn } from "@/lib/utils";
 import { formatDateTime } from "./ui";
 
 export function addressLine(o: OrderDetail): string | null {
@@ -14,16 +15,17 @@ export function addressLine(o: OrderDetail): string | null {
 export function Totals({ order, className }: { order: OrderDetail; className?: string }) {
   const rows: [string, number][] = [
     ["Subtotal", order.subtotalCents],
+    ...order.discounts.map((d) => [d.label, -d.amountCents] as [string, number]),
     ["Tax", order.taxCents],
     ...(order.deliveryFeeCents > 0 ? [["Delivery fee", order.deliveryFeeCents] as [string, number]] : []),
     ...(order.tipCents > 0 ? [["Tip", order.tipCents] as [string, number]] : []),
   ];
   return (
     <dl className={className}>
-      {rows.map(([label, cents]) => (
-        <div key={label} className="flex justify-between gap-6">
+      {rows.map(([label, cents], i) => (
+        <div key={`${i}-${label}`} className={cn("flex justify-between gap-6", cents < 0 && "text-success print:text-black")} data-testid={cents < 0 ? "detail-discount" : undefined}>
           <dt className="text-muted-foreground print:text-black">{label}</dt>
-          <dd className="tabular-nums">{formatCents(cents)}</dd>
+          <dd className="tabular-nums">{cents < 0 ? `−${formatCents(-cents)}` : formatCents(cents)}</dd>
         </div>
       ))}
       <div className="flex justify-between gap-6 border-t pt-1.5 font-semibold">

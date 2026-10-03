@@ -1,6 +1,9 @@
 import "server-only";
 import { and, eq, inArray, sql, type SQL } from "drizzle-orm";
-import { db, orderEvents, orders } from "@/db";
+import { db, orderDiscounts, orderEvents, orders } from "@/db";
+import { formatCents } from "@/lib/money";
+import { getSettings } from "@/lib/orders";
+import { customerKeyFromPhone, discountedTotals } from "@/lib/promotions";
 import {
   canTransition,
   COOKING_STATUSES,
@@ -26,11 +29,15 @@ const STALE = "This order changed on another screen. Refresh and try again.";
  * not at all. Returns the logged rows: none means the guard did not match
  * (another screen got there first). Drizzle's insert-select builder cannot
  * express a data-modifying CTE, hence the SQL template.
+ *
+ * `ledger`, when given, is one more data-modifying statement over `prev`
+ * (a discount row in or out); the update only runs when it touched a row.
  */
 function loggedUpdate(args: {
   orderId: string;
   where: SQL;
   set: SQL;
+  ledger?: SQL;
   type: OrderEventType;
   toStatus?: OrderStatus;
   note?: string | null;
@@ -44,9 +51,10 @@ function loggedUpdate(args: {
       from ${orders}
       where ${orders.id} = ${args.orderId} and ${args.where}
       for update
-    ), moved as (
+    )${args.ledger ? sql`, ledger as (${args.ledger})` : sql``}, moved as (
       update ${orders} set ${args.set}, updated_at = ${now}::timestamptz
-      from prev where ${orders.id} = prev.id
+      from prev${args.ledger ? sql`, (select 1 from ledger limit 1) as touched` : sql``}
+      where ${orders.id} = prev.id
       returning prev.id, prev.status
     )
     insert into ${orderEvents}
@@ -184,3 +192,104 @@ export async function addOrderNote(args: {
   return { ok: true };
 }
 
+
+const DISCOUNT_LOCKED = "Discounts can only change while the order is open and payment is still pending.";
+
+/**
+ * A discount row in or out, with tax and total recomputed in the same
+ * statement. Tax uses the store's current rate. The guard includes the
+ * discount total read here, so two screens editing at once can't both win.
+ */
+async function changeDiscount(args: {
+  orderId: string;
+  actor: Actor;
+  compute: (order: typeof orders.$inferSelect, rows: (typeof orderDiscounts.$inferSelect)[]) =>
+    | { error: string }
+    | { ledger: SQL; discounts: { amountCents: number; target: "items" | "delivery" }[]; note: string };
+}): Promise<OrderActionResult> {
+  const [order, settings] = await Promise.all([
+    db.query.orders.findFirst({ where: eq(orders.id, args.orderId), with: { discounts: true } }),
+    getSettings(),
+  ]);
+  if (!order) return { ok: false, reason: "Order not found." };
+  if (order.paymentStatus !== "pending" || order.status === "canceled" || order.status === "completed") {
+    return { ok: false, reason: DISCOUNT_LOCKED };
+  }
+  const change = args.compute(order, order.discounts);
+  if ("error" in change) return { ok: false, reason: change.error };
+  const totals = discountedTotals({
+    subtotalCents: order.subtotalCents,
+    deliveryFeeCents: order.deliveryFeeCents,
+    tipCents: order.tipCents,
+    taxRateBps: settings.taxRateBps,
+    discounts: change.discounts,
+  });
+  const { rows } = await loggedUpdate({
+    orderId: args.orderId,
+    where: sql`${orders.paymentStatus} = 'pending' and ${orders.status} not in ('canceled', 'completed') and ${orders.discountCents} = ${order.discountCents}`,
+    ledger: change.ledger,
+    set: sql`discount_cents = ${totals.discountCents}, tax_cents = ${totals.taxCents}, total_cents = ${totals.totalCents}`,
+    type: "discount",
+    note: change.note,
+    actor: args.actor,
+    now: new Date(),
+  });
+  return rows.length > 0 ? { ok: true } : { ok: false, reason: STALE };
+}
+
+/** An operator comp: a fixed amount or a percent of what is left of the items. */
+export async function applyDiscount(args: {
+  orderId: string;
+  amount: { cents: number } | { percentBps: number };
+  label: string;
+  promotionId: number | null;
+  actor: Actor;
+}): Promise<OrderActionResult> {
+  return changeDiscount({
+    orderId: args.orderId,
+    actor: args.actor,
+    compute: (order, rows) => {
+      const itemsLeft =
+        order.subtotalCents - rows.filter((r) => r.target === "items").reduce((n, r) => n + r.amountCents, 0);
+      const cents =
+        "cents" in args.amount
+          ? Math.min(args.amount.cents, itemsLeft)
+          : Math.min(itemsLeft, Math.floor((itemsLeft * args.amount.percentBps + 5_000) / 10_000));
+      if (cents <= 0) return { error: "Nothing left on the items to discount." };
+      return {
+        ledger: sql`
+          insert into ${orderDiscounts} (order_id, promotion_id, label, amount_cents, target, customer_key, source, operator_id)
+          select id, ${args.promotionId}::integer, ${args.label}, ${cents}::integer, 'items', ${customerKeyFromPhone(order.customerPhone) ?? ""},
+            'comp', ${args.actor.operatorId}::integer
+          from prev
+          returning id`,
+        discounts: [...rows, { amountCents: cents, target: "items" as const }],
+        note: `−${formatCents(cents)} · ${args.label}`,
+      };
+    },
+  });
+}
+
+export async function removeDiscount(args: {
+  orderId: string;
+  discountId: number;
+  actor: Actor;
+}): Promise<OrderActionResult> {
+  return changeDiscount({
+    orderId: args.orderId,
+    actor: args.actor,
+    compute: (_order, rows) => {
+      const row = rows.find((r) => r.id === args.discountId);
+      if (!row) return { error: "That discount is already gone." };
+      if (row.source !== "comp") return { error: "Only staff discounts can be removed here." };
+      return {
+        ledger: sql`
+          delete from ${orderDiscounts}
+          where ${orderDiscounts.id} = ${row.id} and ${orderDiscounts.orderId} = (select id from prev)
+          returning ${orderDiscounts.id}`,
+        discounts: rows.filter((r) => r.id !== row.id),
+        note: `Removed −${formatCents(row.amountCents)} · ${row.label}`,
+      };
+    },
+  });
+}
