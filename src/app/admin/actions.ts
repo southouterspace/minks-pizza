@@ -25,6 +25,7 @@ import {
   requireOperator,
   verifyPassword,
 } from "@/lib/auth";
+import { KITCHEN_STATIONS, type KitchenStation } from "@/lib/kds";
 
 export type AuthFormState = { error?: string };
 
@@ -67,6 +68,11 @@ function dollarsToCents(fd: FormData, name: string): number {
   const n = Number.parseFloat(raw);
   if (Number.isNaN(n) || n < 0) throw new Error(`Invalid ${name}`);
   return Math.round(n * 100);
+}
+
+/** Kitchen-display routing for a category; blank or unknown → "kitchen". */
+function stationField(fd: FormData): KitchenStation {
+  return z.enum(KITCHEN_STATIONS).catch("kitchen").parse(textField(fd, "station"));
 }
 
 function directionField(fd: FormData): "up" | "down" {
@@ -289,9 +295,14 @@ export async function updateOrderStatus(formData: FormData): Promise<void> {
   if (!order) return;
   if (!STATUS_TRANSITIONS[order.status]?.includes(status)) return;
 
+  const now = new Date();
   await db
     .update(orders)
-    .set({ status, updatedAt: new Date() })
+    .set({
+      status,
+      updatedAt: now,
+      ...(status === "ready" ? { readyAt: now } : {}),
+    })
     .where(eq(orders.id, orderId));
   revalidatePath("/admin");
 }
@@ -312,6 +323,7 @@ export async function createCategory(formData: FormData): Promise<void> {
   await db.insert(categories).values({
     name,
     description: textOrNull(formData, "description"),
+    station: stationField(formData),
     sortOrder: (last?.sortOrder ?? -1) + 1,
   });
   revalidateMenu();
@@ -324,7 +336,11 @@ export async function updateCategory(formData: FormData): Promise<void> {
   if (!name) throw new Error("Category name is required");
   await db
     .update(categories)
-    .set({ name, description: textOrNull(formData, "description") })
+    .set({
+      name,
+      description: textOrNull(formData, "description"),
+      station: stationField(formData),
+    })
     .where(eq(categories.id, categoryId));
   revalidateMenu();
 }
@@ -768,6 +784,9 @@ export async function saveSettings(formData: FormData): Promise<void> {
     deliveryEnabled: checkbox(formData, "deliveryEnabled"),
     pickupPrepMinutes: intField(formData, "pickupPrepMinutes", 20),
     deliveryPrepMinutes: intField(formData, "deliveryPrepMinutes", 45),
+    kdsWarnMinutes: Math.max(1, intField(formData, "kdsWarnMinutes", 10)),
+    kdsLateMinutes: Math.max(1, intField(formData, "kdsLateMinutes", 15)),
+    kdsOvenMinutes: Math.max(1, intField(formData, "kdsOvenMinutes", 7)),
     deliveryFeeCents: dollarsToCents(formData, "deliveryFee"),
     deliveryMinimumCents: dollarsToCents(formData, "deliveryMinimum"),
     taxRateBps: Math.round(taxPercent * 100),

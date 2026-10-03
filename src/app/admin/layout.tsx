@@ -1,7 +1,7 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 import { eq } from "drizzle-orm";
-import { ExternalLink } from "lucide-react";
+import { ChefHat, ExternalLink } from "lucide-react";
 import { db, storeSettings } from "@/db";
 import { getCurrentOperator } from "@/lib/auth";
 import { AdminNavLinks } from "@/components/admin/nav-links";
@@ -52,6 +52,13 @@ export default async function AdminLayout({ children }: LayoutProps<"/admin">) {
         <div className="flex-1 overflow-y-auto p-3">
           <AdminNavLinks orientation="vertical" />
           <Separator className="my-3" />
+          <Link
+            href="/kitchen"
+            className="flex items-center gap-2 rounded-lg px-3 py-2 text-sm text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+          >
+            <ChefHat className="size-4 shrink-0" aria-hidden="true" />
+            Kitchen display
+          </Link>
           <a
             href="/"
             target="_blank"
@@ -98,6 +105,13 @@ export default async function AdminLayout({ children }: LayoutProps<"/admin">) {
           </div>
           <div className="flex items-center gap-1 overflow-x-auto px-2 py-2">
             <AdminNavLinks orientation="horizontal" />
+            <Link
+              href="/kitchen"
+              className="flex items-center gap-2 rounded-lg px-2.5 py-1.5 text-sm whitespace-nowrap text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+            >
+              <ChefHat className="size-4 shrink-0" aria-hidden="true" />
+              Kitchen
+            </Link>
             <a
               href="/"
               target="_blank"

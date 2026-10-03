@@ -9,6 +9,7 @@ import {
   uuid,
 } from "drizzle-orm/pg-core";
 import { relations } from "drizzle-orm";
+import { KITCHEN_STATIONS } from "../lib/kds";
 
 // ---------------------------------------------------------------------------
 // Enums
@@ -24,6 +25,13 @@ export const orderStatusEnum = pgEnum("order_status", [
 ]);
 
 export const orderTypeEnum = pgEnum("order_type", ["pickup", "delivery"]);
+
+/**
+ * Where a category's items are made, for kitchen-display routing. `counter`
+ * items (drinks, packaged desserts) need no kitchen work: they show on the
+ * ticket for the expo but never hold an order back from "ready".
+ */
+export const kitchenStationEnum = pgEnum("kitchen_station", KITCHEN_STATIONS);
 
 export const paymentStatusEnum = pgEnum("payment_status", [
   "pending", // awaiting payment integration (Stripe) — v1 default
@@ -84,6 +92,12 @@ export const storeSettings = pgTable("store_settings", {
   deliveryFeeCents: integer("delivery_fee_cents").notNull().default(0),
   deliveryMinimumCents: integer("delivery_minimum_cents").notNull().default(0),
   taxRateBps: integer("tax_rate_bps").notNull().default(0), // e.g. 875 = 8.75%
+  /** Kitchen display: ticket timer turns amber at this age (minutes). */
+  kdsWarnMinutes: integer("kds_warn_minutes").notNull().default(10),
+  /** Kitchen display: ticket timer turns red at this age (minutes). */
+  kdsLateMinutes: integer("kds_late_minutes").notNull().default(15),
+  /** Kitchen display: oven bake countdown for a pie (minutes). */
+  kdsOvenMinutes: integer("kds_oven_minutes").notNull().default(7),
   isPublished: boolean("is_published").notNull().default(false),
   isAcceptingOrders: boolean("is_accepting_orders").notNull().default(true),
   updatedAt: timestamp("updated_at", { withTimezone: true })
@@ -114,6 +128,7 @@ export const categories = pgTable("categories", {
   id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
   name: text("name").notNull(),
   description: text("description"),
+  station: kitchenStationEnum("station").notNull().default("kitchen"),
   sortOrder: integer("sort_order").notNull().default(0),
   isActive: boolean("is_active").notNull().default(true),
   createdAt: timestamp("created_at", { withTimezone: true })
@@ -215,6 +230,8 @@ export const orders = pgTable("orders", {
   placedAt: timestamp("placed_at", { withTimezone: true })
     .notNull()
     .defaultNow(),
+  /** Set when the kitchen bumps the order (status → ready); cleared on recall. */
+  readyAt: timestamp("ready_at", { withTimezone: true }),
   updatedAt: timestamp("updated_at", { withTimezone: true })
     .notNull()
     .defaultNow(),
@@ -235,6 +252,15 @@ export const orderItems = pgTable("order_items", {
   lineTotalCents: integer("line_total_cents").notNull(),
   modifiers: jsonb("modifiers").$type<OrderItemModifier[]>().notNull(),
   notes: text("notes"),
+  /**
+   * Kitchen station snapshot, copied from the category at order time so
+   * re-routing a category never reshuffles tickets already on the line.
+   */
+  station: kitchenStationEnum("station").notNull().default("kitchen"),
+  /** Pizza line: set when the pie goes into the oven (make line → oven). */
+  ovenAt: timestamp("oven_at", { withTimezone: true }),
+  /** Set when the item is finished (pies: out of the oven, cut and boxed). */
+  doneAt: timestamp("done_at", { withTimezone: true }),
 });
 
 // ---------------------------------------------------------------------------

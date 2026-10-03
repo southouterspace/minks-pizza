@@ -4,6 +4,15 @@ import { asc } from "drizzle-orm";
 import { ArrowDown, ArrowUp, Plus, UtensilsCrossed } from "lucide-react";
 import { categories, db, menuItems } from "@/db";
 import { requireOperator } from "@/lib/auth";
+import {
+  KITCHEN_STATIONS,
+  STATION_LABEL,
+  type KitchenStation,
+} from "@/lib/kds";
+import {
+  NativeSelect,
+  NativeSelectOption,
+} from "@/components/ui/native-select";
 import { formatCents } from "@/lib/money";
 import {
   createCategory,
@@ -144,6 +153,10 @@ export default async function MenuPage() {
                 maxLength={500}
               />
             </Field>
+            <Field className="sm:w-44">
+              <FieldLabel htmlFor="new-cat-station">Kitchen station</FieldLabel>
+              <StationSelect id="new-cat-station" defaultValue="kitchen" />
+            </Field>
             <Button type="submit" className="shrink-0">
               Add category
             </Button>
@@ -174,6 +187,9 @@ export default async function MenuPage() {
               <CardHeader className="border-b pt-3 pb-3!">
                 <CardTitle className="flex flex-wrap items-center gap-2">
                   <span className="text-sm font-semibold">{category.name}</span>
+                  <span className="text-xs text-muted-foreground">
+                    {STATION_LABEL[category.station]}
+                  </span>
                   <span className="text-xs font-normal text-muted-foreground">
                     {items.length} {items.length === 1 ? "item" : "items"}
                   </span>
@@ -241,6 +257,15 @@ export default async function MenuPage() {
                               type="text"
                               maxLength={500}
                               defaultValue={category.description ?? ""}
+                            />
+                          </Field>
+                          <Field>
+                            <FieldLabel htmlFor={`cat-station-${category.id}`}>
+                              Kitchen station
+                            </FieldLabel>
+                            <StationSelect
+                              id={`cat-station-${category.id}`}
+                              defaultValue={category.station}
                             />
                           </Field>
                           <Button type="submit" className="w-full">
@@ -348,5 +373,23 @@ export default async function MenuPage() {
         })}
       </div>
     </div>
+  );
+}
+
+function StationSelect({
+  id,
+  defaultValue,
+}: {
+  id: string;
+  defaultValue: KitchenStation;
+}) {
+  return (
+    <NativeSelect id={id} name="station" defaultValue={defaultValue} className="w-full">
+      {KITCHEN_STATIONS.map((s) => (
+        <NativeSelectOption key={s} value={s}>
+          {STATION_LABEL[s]}
+        </NativeSelectOption>
+      ))}
+    </NativeSelect>
   );
 }
