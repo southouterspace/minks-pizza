@@ -141,7 +141,7 @@ export default async function OrderHistoryPage({ searchParams }: PageProps<"/adm
                   <TableHead className="hidden md:table-cell">Placed</TableHead>
                   <TableHead>Customer</TableHead>
                   <TableHead className="hidden sm:table-cell">Type</TableHead>
-                  <TableHead>Status</TableHead>
+                  <TableHead className="hidden sm:table-cell">Status</TableHead>
                   <TableHead className="hidden sm:table-cell">Payment</TableHead>
                   <TableHead className="pr-4 text-right">Total</TableHead>
                 </TableRow>
@@ -168,7 +168,7 @@ export default async function OrderHistoryPage({ searchParams }: PageProps<"/adm
                     <TableCell className="hidden text-muted-foreground sm:table-cell">
                       {o.orderType === "delivery" ? "Delivery" : "Pickup"}
                     </TableCell>
-                    <TableCell>
+                    <TableCell className="hidden sm:table-cell">
                       <StatusBadge status={o.status} />
                     </TableCell>
                     <TableCell className="hidden sm:table-cell">
@@ -176,6 +176,9 @@ export default async function OrderHistoryPage({ searchParams }: PageProps<"/adm
                     </TableCell>
                     <TableCell className="pr-4 text-right tabular-nums">
                       {formatCents(o.totalCents)}
+                      <span className="mt-1 block sm:hidden">
+                        <StatusBadge status={o.status} />
+                      </span>
                     </TableCell>
                   </TableRow>
                 ))}
