@@ -344,6 +344,54 @@ async function main() {
   check("VOID label shown", (await wingsRow.innerText()).includes("VOID"));
   await shot("kds-4b-halves-void");
 
+  const knots = counterLine(item("Garlic Knots (6)"), []);
+  const table = await submitOrder(
+    {
+      orderId: randomUUID(),
+      channel: "walk_in",
+      fulfillment: { kind: "dine_in", table: "12" },
+      customer: null,
+      notes: null,
+      fire: { kind: "now" },
+      promisedAt: null,
+      tipCents: 0,
+      lines: [
+        counterLine(item("Margherita"), [
+          { modifierId: pick("Size", 'Medium 12"'), placement: "whole" },
+          { modifierId: pick("Crust", "Hand Tossed"), placement: "whole" },
+        ]),
+        knots,
+      ],
+      tenders: [],
+    },
+    { kind: "pos", staff },
+  );
+  if (!table.ok) throw new Error(`dine-in order rejected: ${JSON.stringify(table)}`);
+  const childId = randomUUID();
+  const split = await mutateOrder({ orderId: table.order.id, mutation: { kind: "split_by_item", lineIds: [knots.lineId], newOrderId: childId } }, staff);
+  if (!split.ok) throw new Error(`split rejected: ${JSON.stringify(split)}`);
+  const childNumber = (await orderRow(childId)).orderNumber;
+  await page.getByTestId(`kds-ticket-${table.order.number}`).waitFor({ timeout: 10_000 });
+  check("a split table is one ticket on the line", (await page.getByTestId(`kds-ticket-${childNumber}`).count()) === 0);
+  await page.getByTestId(`kds-bump-${table.order.number}`).click();
+  check("bumping the split table readies both checks", (await statusIs(table.order.id, "ready")) && (await statusIs(childId, "ready")));
+  // A reload renders the server's snapshot, not the optimistic one.
+  await page.reload({ waitUntil: "networkidle" });
+  await page.getByTestId("kds-start").click();
+  await tab("Ready").click();
+  await page.getByTestId(`kds-ready-${table.order.number}`).waitFor({ timeout: 10_000 });
+  check(
+    "a split table is one card on the ready shelf",
+    (await page.getByTestId(`kds-ready-${table.order.number}`).count()) === 1 && (await page.getByTestId(`kds-ready-${childNumber}`).count()) === 0,
+  );
+  await page.getByTestId(`kds-handoff-${table.order.number}`).click();
+  check("handing off the card completes both checks", (await statusIs(table.order.id, "completed")) && (await statusIs(childId, "completed")));
+  await page.keyboard.press("r");
+  await page.getByTestId(`kds-recall-${table.order.number}`).waitFor({ timeout: 10_000 });
+  check("the recall list shows the split table once", (await page.getByTestId(`kds-recall-${childNumber}`).count()) === 0);
+  await page.keyboard.press("Escape");
+  await tab("All").click();
+
   // --- Offline banner -------------------------------------------------------
   await page.context().setOffline(true);
   const banner = page.getByText("Connection lost", { exact: false });
