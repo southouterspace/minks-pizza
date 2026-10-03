@@ -117,7 +117,7 @@ async function setGroupRole(page: Page, groupId: number, role: string) {
   await page.locator(`form:has(#group-${groupId}-role) button[type="submit"]`).click();
 }
 
-async function groupKindsFlow(page: Page) {
+async function groupRolesFlow(page: Page) {
   await db.update(modifierGroups).set({ role: "option" });
   const { group } = await ids();
   await page.goto(`${BASE}/admin/modifiers`, { waitUntil: "networkidle" });
@@ -135,7 +135,7 @@ async function groupKindsFlow(page: Page) {
     JSON.stringify(await kinds()),
   );
   await page.goto(`${BASE}/admin/modifiers`, { waitUntil: "networkidle" });
-  check("kind badge shows Toppings", (await page.getByTestId(`group-kind-${group("Extra Toppings")}`).innerText()) === "Toppings");
+  check("role badge shows Topping", (await page.getByTestId(`group-role-${group("Extra Toppings")}`).innerText()) === "Topping");
 }
 
 async function toppingFlow(page: Page, phone: Page) {
@@ -378,7 +378,7 @@ async function main() {
   const phone = await signIn(browser, 375);
   try {
     const provolone = await ingredientFlow(page, phone);
-    await groupKindsFlow(page);
+    await groupRolesFlow(page);
     await toppingFlow(page, phone);
     await removalFlow(page);
     await itemRecipeFlow(page, phone);
