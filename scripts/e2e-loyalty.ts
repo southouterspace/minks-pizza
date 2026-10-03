@@ -427,10 +427,10 @@ async function main() {
   await refreshMember(ritaMember.id);
   check(
     "friend gets earn + welcome + referee bonus once",
-    summary(await entries(benMember.id)) === "earn:199,referral:300,signup_bonus:200",
+    summary(await entries(benMember.id)) === "earn:199,referee_bonus:300,signup_bonus:200",
     summary(await entries(benMember.id)),
   );
-  const ritaReferral = (await entries(ritaMember.id)).filter((e) => e.kind === "referral");
+  const ritaReferral = (await entries(ritaMember.id)).filter((e) => e.kind === "referrer_bonus");
   check("referrer gets 500 once", ritaReferral.length === 1 && ritaReferral[0].points === 500);
 
   // --- Birthday -------------------------------------------------------------

@@ -559,7 +559,6 @@ export const loyaltyMembers = pgTable(
     id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
     phone: text("phone").notNull().unique(), // 10 digits
     name: text("name"),
-    email: text("email"),
     birthMonth: integer("birth_month"),
     birthDay: integer("birth_day"),
     birthdaySetAt: timestamp("birthday_set_at", { withTimezone: true }),
@@ -600,6 +599,10 @@ export const loyaltyLedger = pgTable(
     operatorId: integer("operator_id").references(() => operators.id, {
       onDelete: "set null",
     }),
+    /** The entry this one undoes (a restore names its expiry); at most once. */
+    reversesEntryId: integer("reverses_entry_id")
+      .unique()
+      .references((): AnyPgColumn => loyaltyLedger.id, { onDelete: "cascade" }),
     createdAt: timestamp("created_at", { withTimezone: true })
       .notNull()
       .defaultNow(),

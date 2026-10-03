@@ -17,10 +17,10 @@ import {
   SIGNUP_MIN_NET_CENTS,
 } from "@/lib/loyalty";
 import {
+  birthdayBonusThisYear,
   currentPromotion,
   getLoyaltySettings,
   getMember,
-  ledgerKey,
   listRewards,
   memberLedger,
   memberOrders,
@@ -241,14 +241,14 @@ async function MemberView({
 }) {
   await refreshMember(signedIn.id);
   const member = (await getMember(signedIn.id)) ?? signedIn;
-  const [status, ledger, recentOrders] = await Promise.all([
+  const [status, ledger, recentOrders, birthdayArrived] = await Promise.all([
     memberStatus(member, loyalty),
     memberLedger(member.id),
     memberOrders(member.id),
+    birthdayBonusThisYear(member.id, loyalty.timezone),
   ]);
   const year = localDate(new Date(), loyalty.timezone).year;
   const safeUntil = pointsSafeUntil(member, loyalty.expirationMonths);
-  const birthdayArrived = ledger.some((e) => e.idemKey === ledgerKey.birthday(member.id, year));
   const birthdayNext =
     member.birthMonth && member.birthdaySetAt
       ? nextBirthdayGrant({ birthMonth: member.birthMonth, birthdaySetAt: member.birthdaySetAt }, new Date(), loyalty.timezone)

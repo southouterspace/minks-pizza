@@ -10,9 +10,11 @@ export const LEDGER_KINDS = [
   "redeem_refund",
   "signup_bonus",
   "birthday",
-  "referral",
+  "referrer_bonus",
+  "referee_bonus",
   "adjust",
   "expire",
+  "restore",
 ] as const;
 
 export type LedgerKind = (typeof LEDGER_KINDS)[number];
@@ -27,9 +29,12 @@ export const LEDGER_KIND_RULES: Record<LedgerKind, { lifetime: boolean; label: s
   redeem_refund: { lifetime: false, label: "Points returned" },
   signup_bonus: { lifetime: true, label: "Welcome bonus" },
   birthday: { lifetime: true, label: "Birthday bonus" },
-  referral: { lifetime: true, label: "Referral bonus" },
+  referrer_bonus: { lifetime: true, label: "Referral bonus" },
+  referee_bonus: { lifetime: true, label: "Referral bonus" },
   adjust: { lifetime: true, label: "Adjusted by the store" },
   expire: { lifetime: false, label: "Points expired" },
+  // Those points counted toward lifetime when first earned.
+  restore: { lifetime: false, label: "Expired points restored" },
 };
 
 /** The welcome bonus waits for a first completed order of at least this net. */
@@ -382,8 +387,3 @@ export function expiryDue(
 
 /** Operators can undo an expiry for this long. */
 export const EXPIRY_RESTORE_DAYS = 30;
-
-/** Expired points newer than this can still be restored by an operator. */
-export function expiryRestorableSince(now: Date): Date {
-  return new Date(now.getTime() - EXPIRY_RESTORE_DAYS * 24 * 60 * 60 * 1000);
-}

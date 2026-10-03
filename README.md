@@ -258,6 +258,14 @@ Checkout reads the new columns, so **migrate production before deploying**:
 MINKS_DATABASE_URL=<production url> npm run db:push   # additive: new tables, enum and order columns with defaults
 ```
 
+Production has no loyalty rows yet, so the push needs no data migration. A
+database that ran an earlier build of this branch has `referral` ledger rows
+and restores stored as `adjust`. Convert those by idempotency-key prefix
+(`referral:referrer:` to `referrer_bonus`, `referral:referee:` to
+`referee_bonus`, `restore:` to `restore`) before pushing, then recompute
+`lifetime_points` from the lifetime-earning kinds. `scripts/loyalty-audit.ts`
+checks both the balance and the lifetime total afterwards.
+
 ### Staff: scheduling and time clock
 
 Employees are not operators. They never sign in to the admin. Each one gets

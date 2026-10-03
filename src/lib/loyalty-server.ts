@@ -5,7 +5,7 @@
  * that caused it. Not server-only: the order pipeline and scripts import it.
  */
 import { randomInt, randomUUID } from "node:crypto";
-import { and, asc, desc, eq, gte, isNull, max, sql, sum, type SQL } from "drizzle-orm";
+import { and, asc, count, desc, eq, gte, inArray, isNull, max, sql, sum, type SQL } from "drizzle-orm";
 import {
   categories,
   db,
@@ -17,6 +17,8 @@ import {
   orders,
 } from "@/db";
 import {
+  EXPIRY_RESTORE_DAYS,
+  LEDGER_KINDS,
   LEDGER_KIND_RULES,
   REFERRER_BONUS_YEARLY_CAP,
   SIGNUP_MIN_NET_CENTS,
@@ -32,6 +34,7 @@ import {
   type RewardEffect,
   type RewardPrice,
 } from "@/lib/loyalty";
+import { localDateOf, zonedInstant } from "@/lib/zoned";
 
 export type LoyaltySettings = typeof loyaltySettings.$inferSelect;
 export type LoyaltyMember = typeof loyaltyMembers.$inferSelect;
@@ -72,6 +75,7 @@ export type LedgerEntry = {
   orderId?: string | null;
   note?: string | null;
   operatorId?: number | null;
+  reversesEntryId?: number | null;
 };
 
 /**
@@ -88,9 +92,10 @@ export function ledgerStatement(entry: LedgerEntry) {
     : sql`0`;
   return db.execute(sql`
     with e as (
-      insert into loyalty_ledger (member_id, kind, points, order_id, idem_key, note, operator_id)
+      insert into loyalty_ledger (member_id, kind, points, order_id, idem_key, note, operator_id, reverses_entry_id)
       select s.member_id, ${entry.kind}::loyalty_entry_kind, s.points, ${entry.orderId ?? null}::uuid,
-             ${entry.idemKey}, ${entry.note ?? null}, ${entry.operatorId ?? null}::int
+             ${entry.idemKey}, ${entry.note ?? null}, ${entry.operatorId ?? null}::int,
+             ${entry.reversesEntryId ?? null}::int
       from (${source}) s
       where s.member_id is not null and s.points <> 0
       on conflict (idem_key) do nothing
@@ -303,7 +308,7 @@ function settlementStatements(memberId: number, settings: LoyaltySettings) {
                 )}`,
     }),
     ledgerStatement({
-      kind: "referral",
+      kind: "referee_bonus",
       idemKey: ledgerKey.referee(memberId),
       from: sql`select m.id as member_id, ${settings.refereeBonus}::int as points
                 from loyalty_members m
@@ -311,7 +316,7 @@ function settlementStatements(memberId: number, settings: LoyaltySettings) {
                   and ${completedOrderOf(memberId)}`,
     }),
     ledgerStatement({
-      kind: "referral",
+      kind: "referrer_bonus",
       idemKey: ledgerKey.referrer(memberId),
       note: "Friend's first order",
       from: sql`select m.referred_by_id as member_id, ${settings.referrerBonus}::int as points
@@ -320,7 +325,7 @@ function settlementStatements(memberId: number, settings: LoyaltySettings) {
                   and ${completedOrderOf(memberId)}
                   and (select count(*) from loyalty_ledger l
                        where l.member_id = m.referred_by_id
-                         and l.idem_key like 'referral:referrer:%'
+                         and l.kind = 'referrer_bonus'
                          and l.created_at > now() - interval '365 days') < ${REFERRER_BONUS_YEARLY_CAP}`,
     }),
   ];
@@ -480,23 +485,97 @@ export function memberOrders(memberId: number, limit = 20) {
     .limit(limit);
 }
 
+/** An expiry an operator can still undo: recent, and not restored yet. */
+const restorableExpiry = sql<boolean>`(
+  ${loyaltyLedger.kind} = 'expire'
+  and ${loyaltyLedger.createdAt} > now() - make_interval(days => ${EXPIRY_RESTORE_DAYS})
+  and not exists (select 1 from loyalty_ledger r where r.reverses_entry_id = ${loyaltyLedger.id}))`;
+
+/** Gives back an expiry's points; false when it isn't restorable. */
+export async function restoreExpiry(entryId: number, operatorId: number): Promise<boolean> {
+  const { rowCount } = await ledgerStatement({
+    kind: "restore",
+    idemKey: ledgerKey.restore(entryId),
+    reversesEntryId: entryId,
+    operatorId,
+    from: sql`select ${loyaltyLedger.memberId} as member_id, -${loyaltyLedger.points} as points
+              from ${loyaltyLedger} where ${loyaltyLedger.id} = ${entryId} and ${restorableExpiry}`,
+  });
+  return rowCount > 0;
+}
+
+export async function birthdayBonusThisYear(memberId: number, timezone: string): Promise<boolean> {
+  const yearStart = zonedInstant(`${localDateOf(new Date(), timezone).slice(0, 4)}-01-01`, "00:00", timezone);
+  const [row] = await db
+    .select({ id: loyaltyLedger.id })
+    .from(loyaltyLedger)
+    .where(
+      and(
+        eq(loyaltyLedger.memberId, memberId),
+        eq(loyaltyLedger.kind, "birthday"),
+        gte(loyaltyLedger.createdAt, yearStart),
+      ),
+    )
+    .limit(1);
+  return row !== undefined;
+}
+
 export function memberLedger(memberId: number, limit = 50) {
   return db
     .select({
       id: loyaltyLedger.id,
-      idemKey: loyaltyLedger.idemKey,
       kind: loyaltyLedger.kind,
       points: loyaltyLedger.points,
       note: loyaltyLedger.note,
       createdAt: loyaltyLedger.createdAt,
       orderId: loyaltyLedger.orderId,
       orderNumber: orders.orderNumber,
+      restorable: restorableExpiry,
     })
     .from(loyaltyLedger)
     .leftJoin(orders, eq(orders.id, loyaltyLedger.orderId))
     .where(eq(loyaltyLedger.memberId, memberId))
     .orderBy(desc(loyaltyLedger.createdAt), desc(loyaltyLedger.id))
     .limit(limit);
+}
+
+export type BalanceMismatch = {
+  id: number;
+  phone: string;
+  balance: number;
+  ledgerSum: number;
+  lifetime: number;
+  ledgerLifetime: number;
+};
+
+/**
+ * Members whose cached balance isn't the sum of their ledger, or whose
+ * lifetime points aren't the sum of their lifetime-earning entries.
+ */
+export async function auditBalances(): Promise<{ members: number; mismatches: BalanceMismatch[] }> {
+  const lifetimeKinds = LEDGER_KINDS.filter((k) => LEDGER_KIND_RULES[k].lifetime);
+  const ledgerSum = sql<number>`coalesce(sum(${loyaltyLedger.points}), 0)::int`;
+  const ledgerLifetime = sql<number>`coalesce(sum(greatest(${loyaltyLedger.points}, 0))
+    filter (where ${inArray(loyaltyLedger.kind, lifetimeKinds)}), 0)::int`;
+  const [mismatches, [{ members }]] = await Promise.all([
+    db
+      .select({
+        id: loyaltyMembers.id,
+        phone: loyaltyMembers.phone,
+        balance: loyaltyMembers.pointsBalance,
+        ledgerSum,
+        lifetime: loyaltyMembers.lifetimePoints,
+        ledgerLifetime,
+      })
+      .from(loyaltyMembers)
+      .leftJoin(loyaltyLedger, eq(loyaltyLedger.memberId, loyaltyMembers.id))
+      .groupBy(loyaltyMembers.id)
+      .having(
+        sql`${loyaltyMembers.pointsBalance} <> ${ledgerSum} or ${loyaltyMembers.lifetimePoints} <> ${ledgerLifetime}`,
+      ),
+    db.select({ members: count() }).from(loyaltyMembers),
+  ]);
+  return { members, mismatches };
 }
 
 // ---------------------------------------------------------------------------
