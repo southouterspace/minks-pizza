@@ -208,6 +208,49 @@ password.
 password rejection, password change, sign-in with the new password, removal,
 and the removed account no longer authenticating.
 
+## Session 4 — Kitchen display system
+
+**Ask:** research what operators love and hate about Toast KDS, Square KDS and
+their competitors (pizzerias first), then ship a working KDS.
+
+**Research** (`docs/kds-research.md`, delegated to a subagent): the biggest
+pizza gaps are half-and-half display, the make-line → oven handoff, dropped
+tickets and offline failures, hard-to-read modifiers, and all-day counts that
+can't count by size. Reddit, Toast Community and most review sites were
+unreachable from the sandbox. Sources and paraphrases are marked in the
+report.
+
+**Built:** `/kitchen` (see README → Kitchen display).
+
+- **Data model.** `categories.station` (pizza / kitchen / counter) is copied
+  to `order_items.station` at checkout. Each item records progress in
+  `order_items.oven_at` and `done_at`, the order in `orders.ready_at`, and
+  the timer thresholds and oven time live in `store_settings.kds_*`. Order
+  status is derived from the items in `syncStatus` (`src/lib/kds-server.ts`),
+  so no screen can leave an order "ready" with unmade food.
+- **The oven is a stage, not a station.** Pies move queued → oven → done, and
+  the Make line and Oven screens are two views over the pizza station. This
+  is the handoff Square told a pizzeria it couldn't build.
+- **Rules are pure** (`src/lib/kds.ts`): routing, tap/bump transitions,
+  ticket layout, all-day counts, and `applyLocally`, which mirrors the server
+  so taps feel instant. A poll that started before an action finished is
+  dropped, so the screen never flickers back.
+- **Recall clears item progress.** A recalled ticket is usually a remake;
+  "bumped by mistake" is covered by the Undo toast.
+- **No drop channel.** The display reads the orders table directly; there is
+  no print or push hop for a ticket to fall out of. A failed tap shows a toast
+  instead of failing silently.
+- **Not built:** half-and-half needs ordering and pricing support first
+  (roadmap #2). The KDS has no role of its own and uses an operator session.
+
+**Tested:** `scripts/e2e-kds.ts`, 27 checks against a throwaway Neon project
+(`minks-kds-test`, `autumn-bar-62526195`), because this session's Neon access
+couldn't reach the production project. Covered: station snapshot at checkout,
+pizza-first ticket layout, all-day counts, make → oven → kitchen → ready →
+handoff with database state checked at every step, recall, Undo, bump-bar
+keys, a new order appearing live, the cancel alert, and the offline banner
+appearing and clearing.
+
 ## Gotchas hit (for future sessions)
 
 - Playwright `getByRole(name:)` is substring-matching: "Publish store" also
@@ -226,6 +269,11 @@ and the removed account no longer authenticating.
   matching div, which was a sibling of the button under test — so a
   "no Remove button here" assertion passed vacuously. Anchor row-scoped queries
   to an explicit `data-testid` instead.
+- The e2e checks the database right after a tap. The screen updates
+  optimistically, so poll the database (`eventually()` in `e2e-kds.ts`)
+  instead of reading it once.
+- Screenshots taken right after a tab click can catch `transition-colors`
+  halfway, so two tabs look selected. Check `aria-pressed`, not pixels.
 - Destructive e2e (creating/removing operator accounts) must not run against the
   production database. `mcp__Neon__create_branch` makes an isolated copy in
   seconds; point `MINKS_DATABASE_URL` at it and delete the branch afterwards.

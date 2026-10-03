@@ -61,7 +61,9 @@ npm run dev
    **Accepting orders** switch pauses ordering without unpublishing.
 5. **Orders** (`/admin`) — live inbox that auto-refreshes; move orders through
    `new → confirmed → preparing → ready → completed` (or cancel).
-6. **Team** (`/admin/team`) — add or remove operator accounts, and change your
+6. **Kitchen display** (`/kitchen`) — the full-screen KDS for the line. See
+   [Kitchen display](#kitchen-display-kds) below.
+7. **Team** (`/admin/team`) — add or remove operator accounts, and change your
    own password. See [Operator accounts](#operator-accounts) below.
 
 #### Operator accounts
@@ -81,6 +83,78 @@ operator can replace it from the same page. Two things to know:
 - **You cannot remove your own account.** That restriction is what guarantees at
   least one operator always exists — at zero accounts `/admin/setup` would
   unlock itself and the store could be claimed by anyone.
+
+### Kitchen display (KDS)
+
+`/kitchen` is a full-screen, dark, touch-first kitchen display built from
+operator feedback on Toast, Square and other KDS products, weighted toward
+pizzerias (see `docs/kds-research.md`). Open it on any tablet or TV signed in
+as an operator and tap **Start kitchen display** once, so it can chime and keep
+the screen awake.
+
+**Stations.** Each menu category routes to a station (Menu → category → Edit →
+*Kitchen station*): **Pizza line**, **Kitchen** (wings, knots, salads) or
+**Counter** (drinks and anything with no prep; shown on the ticket but never
+holds an order back). Each order line copies its category's station at
+checkout, so re-routing a category doesn't reshuffle tickets already on the
+line. Each screen remembers its own station choice:
+
+| Screen | Shows | Tap an item | Bump |
+|---|---|---|---|
+| All | every open ticket (expo or one-screen shops) | advance one stage | finish the whole order |
+| Make line | tickets with pies not yet fired | into the oven | fire every pie on the ticket |
+| Oven | pies in the oven, each with a bake countdown | out, cut and boxed | pull every pie on the ticket |
+| Kitchen | tickets with non-pizza kitchen items | done | finish the kitchen items |
+| Ready | bumped orders waiting for the customer or driver | | picked up / out for delivery |
+
+An order becomes **ready** on its own when every item that needs cooking is
+finished, and any tap on its items moves it to **preparing**. The customer's
+order tracker reflects both.
+
+**Reading a ticket.** Size and crust come first as chips, because they decide
+which dough ball to grab. Toppings show as `+ Pepperoni`. Removals (`No …`)
+are red and uppercase, amount changes (`Extra …`, `Light …`) are amber, and
+item notes and order notes (allergies) sit in yellow boxes. Quantities above
+one are highlighted. The header shows the order number, PICKUP or DELIVERY,
+and a timer that turns amber and then red at the thresholds set in
+**Settings → Kitchen display**, which also sets the oven bake time.
+
+**During a rush.**
+- **All-day** panel (`A`): unmade quantities across all tickets by item and
+  size, for example "6 Cheese Pizza Large 14"".
+- **Recall** (`R`): orders bumped in the last two hours. Recalling puts the
+  ticket back on the line from the start. Every finishing bump also shows an
+  **Undo** toast.
+- **Bump bar / keyboard:** `1`–`9` or the arrow keys select a ticket, and
+  `Enter` or `Space` bumps it. Most USB bump bars send these keys.
+- New orders chime and flash. An order canceled while it is on screen raises
+  a red "pull it" banner.
+- If the connection drops, the tickets stay on screen under a red banner
+  that shows when they were last synced. Polling resumes on its own.
+- Text size (A−/A+) and the sound toggle are saved per screen.
+
+The display polls `GET /api/kds` every 4 seconds. Taps update the screen
+immediately and are sent to `POST /api/kds`. Each action is idempotent, so
+a double tap or a retry is harmless.
+
+#### Deploying the KDS schema
+
+The KDS adds columns, so **migrate the production database before deploying
+this code**. Checkout reads `categories.station`, so the old schema breaks
+ordering.
+
+```bash
+MINKS_DATABASE_URL=<production url> npm run db:push   # additive: new enum + columns with defaults
+```
+
+Then route the existing categories (or do it in Menu → Edit):
+
+```sql
+update categories set station = 'pizza'   where name ilike '%pizza%' or name ilike 'build your own%';
+update categories set station = 'counter' where name ilike '%drink%' or name ilike '%beverage%';
+```
+
+Orders placed before the migration default to the Kitchen station.
 
 ### Customer (`/`)
 
@@ -110,9 +184,11 @@ minimums, and recomputes every price at order time.
 ```
 src/
   db/            schema.ts (Drizzle), seed.ts, index.ts (client)
-  lib/           menu.ts, orders.ts (pricing + creation), auth.ts, validation.ts
+  lib/           menu.ts, orders.ts (pricing + creation), auth.ts, validation.ts,
+                 kds.ts (kitchen display rules, pure), kds-server.ts (queries + actions)
   app/(store)/   customer storefront (menu, cart, checkout, order status)
   app/admin/     operator dashboard (orders, menu, modifiers, settings, team)
+  app/kitchen/   kitchen display (KDS); data via app/api/kds
   components/    cart context, storefront + admin UI
 ```
 
@@ -129,6 +205,10 @@ Informed by industry research (see `docs/RESEARCH.md`), roughly in order:
 6. **Allergen/dietary tags & item photos** (schema already has `imageUrl`)
 7. **Customer accounts with saved addresses & one-tap reorder** — optional,
    post-purchase (guest checkout stays the default)
-8. **Coupons/promo codes; printable kitchen tickets; audible new-order alert**
+8. **Coupons/promo codes; printable kitchen tickets**
+9. **KDS follow-ups** (from `docs/kds-research.md`): half-and-half pizzas end
+   to end (ordering, pricing and a left/right ticket layout, the most-requested
+   pizza KDS feature); a kitchen-only role so the display tablet doesn't carry
+   full admin access; promised-time sorting once scheduled orders exist
 
 See `NOTES.md` for the build log and decision record.
