@@ -277,7 +277,9 @@ clock.
 
 - **The clock is a state machine.** `ClockState` is off, working or on a
   break, and `ALLOWED` lists the actions each state accepts. `planClock`
-  sorts every request into apply, replay or refuse. A replay is an action
+  sorts every request into apply, replay or refuse. An applied plan
+  carries a `ClockStep` that already holds the rows it writes, so the
+  kiosk server switches on the step with no fallback. A replay is an action
   that finds the clock already where it leads, such as a second clock-in,
   and it answers with the current view instead of an error. The kiosk draws
   its buttons from the same table. Clocking out from a break is refused, so
@@ -328,11 +330,14 @@ clock.
 
 **Tested:**
 
-- `scripts/test-timeclock.ts`: 29 pure checks. Covered: zoned helpers
+- `scripts/test-timeclock.ts`: 47 pure checks (29 at first; the
+  restructure added the rest). Covered: zoned helpers
   across both 2026 New York DST changes and an overnight shift; 45 h →
   5 h overtime and $712.50; two rates → a $41.67 weighted-average premium;
   California 8/12 plus weekly 40; paid and unpaid breaks; every state ×
-  action; every conflict and flag.
+  action and the step each applied plan carries; every conflict and flag;
+  a shift ending at midnight against the next day's time off; the
+  formatting helpers; the settings field parser; the kiosk reducer.
 - `scripts/e2e-timeclock.ts`: 51 checks in a real browser against the
   `timeclock-test` branch of `autumn-bar-62526195`, asserting both screen
   and database. Covered: employee with two roles and a PIN, duplicate PIN,
@@ -342,6 +347,26 @@ clock.
   leaving one open punch, the database refusing a second open punch,
   manager clock-out, settings, the early clock-in refusal, and 375px
   layouts.
+
+**Restructure (review follow-up):**
+
+- `timeclock-server.ts` (1141 lines) became `src/lib/staff/`, one
+  module per feature, and every rule those modules or the pages had
+  re-derived now has one home in `timeclock.ts` or `zoned.ts`. Pages
+  render view models and don't query.
+- Multi-row creates are atomic. `nextId` (`src/db/ids.ts`) reserves an
+  identity value so a punch and its breaks and audit row, or an employee
+  and their roles, go in one `db.batch`. Manager clock-out and approval
+  insert their audit rows from the update's `returning` rows in the same
+  statement, so a lost race audits nothing.
+- `time_off_one_live`, a partial unique index on
+  `(employee_id, start_date, end_date) where status <> 'denied'`, makes
+  requestTimeOff a single upsert.
+- Availability is `Record<Weekday, DayRule>` in the domain. The jsonb
+  column keeps its stored shape and is parsed when read.
+- One intended behavior change: the Time off page uses
+  `shiftTouchesTimeOff`, the schedule's overlap rule. A shift ending at
+  midnight no longer conflicts with time off that starts that day.
 
 **Not built:**
 
@@ -382,7 +407,9 @@ clock.
   halfway, so two tabs look selected. Check `aria-pressed`, not pixels.
 - `tsx` scripts can't import modules marked `import "server-only"` (it
   throws outside Next). The time clock e2e recomputes the PIN digest with
-  `node:crypto` instead of importing `timeclock-server.ts`.
+  `node:crypto` instead of importing `src/lib/staff/employees.ts`. For a
+  one-off script against the test database, put a stub `server-only`
+  package on `NODE_PATH` (alongside `node_modules`).
 - `npx tsc --noEmit` on a fresh checkout fails on `LayoutProps` and
   `PageProps` until `npx next typegen` (or `next dev` / `next build`) has
   generated the route types.

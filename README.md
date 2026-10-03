@@ -248,7 +248,9 @@ src/
   lib/           menu.ts, orders.ts (pricing + creation), auth.ts, validation.ts,
                  kds.ts (kitchen display rules, pure), kds-server.ts (queries + actions),
                  zoned.ts (store-timezone calendar math), timeclock.ts (staff rules and
-                 payroll math, pure), timeclock-server.ts (staff queries + actions)
+                 payroll math, pure)
+  lib/staff/     staff server modules, one per feature: config, queries, employees,
+                 kiosk, schedule, time-off, timesheets, overview; timesheet-csv.ts (pure)
   app/(store)/   customer storefront (menu, cart, checkout, order status)
   app/admin/     operator dashboard (orders, menu, modifiers, settings, team, staff)
   app/kitchen/   kitchen display (KDS); data via app/api/kds
