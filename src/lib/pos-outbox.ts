@@ -129,8 +129,12 @@ async function post(request: SubmitOrderRequest): Promise<Response> {
   }
 }
 
+/** Entries with a POST on the wire; the replay loop leaves them alone. */
+const inFlight = new Set<string>();
+
 async function attempt(entry: OutboxEntry): Promise<SubmitOutcome> {
-  const res = await post(entry.request);
+  inFlight.add(entry.orderId);
+  const res = await post(entry.request).finally(() => inFlight.delete(entry.orderId));
   switch (res.kind) {
     case "ok":
       await remove(entry.orderId);
@@ -172,7 +176,7 @@ export function drain(): Promise<OrderView[]> {
     const sent: OrderView[] = [];
     try {
       for (const e of await entries()) {
-        if (e.state !== "pending") continue;
+        if (e.state !== "pending" || inFlight.has(e.orderId)) continue;
         const out = await attempt(e);
         if (out.kind === "sent") sent.push(out.order);
         if (out.kind === "queued" || out.kind === "locked") break;

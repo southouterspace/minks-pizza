@@ -31,7 +31,7 @@ export function PromptDialog({ spec, onClose }: { spec: PromptSpec; onClose: () 
 
   return (
     <Dialog open onOpenChange={(o) => !o && onClose()}>
-      <DialogContent className="w-[min(520px,calc(100vw-2rem))] gap-4 sm:max-w-none" data-testid="prompt-dialog">
+      <DialogContent className="w-[min(520px,calc(100vw-2rem))] gap-4 sm:max-w-none!" data-testid="prompt-dialog">
         <DialogHeader>
           <DialogTitle className="text-lg">{spec.title}</DialogTitle>
           {spec.description && <DialogDescription>{spec.description}</DialogDescription>}

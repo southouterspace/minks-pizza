@@ -31,8 +31,8 @@ type Lane = "all" | "scheduled" | "kitchen" | "ready" | "unpaid";
 
 const LANES: { value: Lane; label: string; test: (o: OrderView) => boolean }[] = [
   { value: "all", label: "All", test: () => true },
-  { value: "scheduled", label: "Held / scheduled", test: (o) => o.status === "held" },
-  { value: "kitchen", label: "In kitchen", test: (o) => o.status === "new" || o.status === "preparing" },
+  { value: "scheduled", label: "Held", test: (o) => o.status === "held" },
+  { value: "kitchen", label: "Kitchen", test: (o) => o.status === "new" || o.status === "preparing" },
   { value: "ready", label: "Ready", test: (o) => o.status === "ready" },
   { value: "unpaid", label: "Unpaid", test: (o) => dueCents(o.totals) > 0 },
 ];
@@ -87,7 +87,7 @@ export function OrdersBoard() {
           size="sm"
           className="min-w-0 flex-1"
         />
-        <label className="relative flex w-56 items-center">
+        <label className="relative flex w-44 shrink-0 items-center">
           <Search className="pointer-events-none absolute left-3 size-4 text-muted-foreground" />
           <input
             value={query}

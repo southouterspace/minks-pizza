@@ -158,7 +158,11 @@ async function main() {
   const page = await context.newPage();
   page.on("pageerror", (e) => console.log("pageerror:", e.message));
   page.on("console", (m) => m.type() === "error" && console.log("console:", m.text().slice(0, 300)));
-  const shot = (name: string) => page.screenshot({ path: `${SHOT_DIR}/pos-${name}.png` });
+  // Let dialog and toast animations settle so the picture is what a person sees.
+  const shot = async (name: string) => {
+    await page.waitForTimeout(400);
+    await page.screenshot({ path: `${SHOT_DIR}/pos-${name}.png` });
+  };
   const prints = () => page.evaluate(() => (window as unknown as { __prints: number }).__prints);
   let taps = 0;
   const tap = async (locator: ReturnType<Page["locator"]>) => {
@@ -255,6 +259,7 @@ async function main() {
   const lineSummary = await page.getByTestId("line-summary").first().innerText();
   check("reorder brings back the pie with its options", lineSummary === 'X-Large 16" · Thin Crust · Extra Bacon', lineSummary);
   check("quote time shows while on the phone", /\d+ min/.test(await page.getByTestId("quote").innerText()));
+  await shot("06b-reordered");
   await page.getByRole("radio", { name: "Later" }).click();
   await page.getByLabel("Ready at").fill("23:45");
   await shot("07-phone-later");
@@ -407,6 +412,7 @@ async function main() {
   await page.waitForTimeout(5_000);
   const replayedLines = await linesOf(queued[0]);
   const replayedTenders = await tendersOf(queued[0]);
+  check("one paper ticket for one failed order", (await prints()) === printsBefore + 1);
   check("replayed exactly once: 1 line, 1 tender", replayedLines.length === 1 && replayedTenders.length === 1, `${replayedLines.length} lines, ${replayedTenders.length} tenders`);
 
   // --- Receipt reprint ------------------------------------------------------------------
@@ -432,6 +438,7 @@ async function main() {
   await page.getByTestId("manager-pin").waitFor();
   await pin("1234");
   await page.getByTestId("z-report").waitFor();
+  await page.getByTestId("manager-pin").waitFor({ state: "detached" });
   await shot("13-shift-closed");
   const [closedShift] = await db.select().from(shifts).where(eq(shifts.id, openShift.id));
   check("shift closed with counted cash and the manager as closer", closedShift.closedAt !== null && closedShift.countedCashCents === expectedCash - 150 && closedShift.closedBy === 1);

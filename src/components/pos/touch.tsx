@@ -2,9 +2,12 @@ import type { ComponentProps } from "react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 
-/** The Nova button at counter size: 48px tall, readable at arm's length. */
+/**
+ * The Nova button at counter size: 48px tall, readable at arm's length.
+ * Nova's size classes are unlayered, so overrides need Tailwind's `!`.
+ */
 export function Tap({ className, ...props }: ComponentProps<typeof Button>) {
-  return <Button className={cn("h-12 gap-2 rounded-xl px-4 text-base", className)} {...props} />;
+  return <Button className={cn("h-12! gap-2! rounded-xl! px-4! text-base!", className)} {...props} />;
 }
 
 /** A row of mutually exclusive choices with one selected. */

@@ -142,22 +142,6 @@ export function OrderPanel({
       <div className="flex flex-col gap-2 border-t p-3">
         {!appending && isPhoneFirst(draft.mode) && quote !== undefined && (
           <div className="flex items-center gap-2">
-            <span className="flex flex-1 items-center gap-1 text-sm" data-testid="quote">
-              <Clock className="size-4" />
-              <b>{quote} min</b>
-              <span className="text-muted-foreground">
-                · {draft.schedule.kind === "later" ? `ready ${timeOf(new Date(draft.schedule.readyAt))}` : `ready ~${timeOf(new Date(now + quote * 60_000))}`}
-              </span>
-            </span>
-            {draft.schedule.kind === "later" ? (
-              <input
-                type="time"
-                aria-label="Ready at"
-                value={hhmmOf(draft.schedule.readyAt)}
-                onChange={(e) => e.target.value && dispatch({ type: "schedule", schedule: { kind: "later", readyAt: laterIso(e.target.value) } })}
-                className="h-10 rounded-lg border bg-background px-2"
-              />
-            ) : null}
             <Segmented
               value={draft.schedule.kind === "later" ? "later" : "asap"}
               options={[
@@ -171,9 +155,29 @@ export function OrderPanel({
                 })
               }
               size="sm"
-              className="w-36"
+              className="w-36 shrink-0"
             />
+            {draft.schedule.kind === "later" ? (
+              <input
+                type="time"
+                aria-label="Ready at"
+                value={hhmmOf(draft.schedule.readyAt)}
+                onChange={(e) => e.target.value && dispatch({ type: "schedule", schedule: { kind: "later", readyAt: laterIso(e.target.value) } })}
+                className="h-11 min-w-0 flex-1 rounded-lg border bg-background px-2 text-base"
+              />
+            ) : (
+              <span className="flex min-w-0 flex-1 items-center gap-1 text-sm whitespace-nowrap" data-testid="quote">
+                <Clock className="size-4 shrink-0" />
+                <b>{quote} min</b>
+                <span className="truncate text-muted-foreground">· ready ~{timeOf(new Date(now + quote * 60_000))}</span>
+              </span>
+            )}
           </div>
+        )}
+        {!appending && draft.schedule.kind === "later" && quote !== undefined && (
+          <p className="-mt-1 text-sm text-muted-foreground">
+            Kitchen starts it at {timeOf(new Date(Date.parse(draft.schedule.readyAt) - quote * 60_000))} ({quote} min quote). Held until then.
+          </p>
         )}
         {!appending && (
           <input

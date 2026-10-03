@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
-import { toast } from "sonner";
+import { notify } from "./notify";
 import { ClipboardList, Lock, Menu as MenuIcon, Moon, Printer, RotateCw, Trash2, WifiOff } from "lucide-react";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import {
@@ -98,7 +98,12 @@ export function PosTerminal({
   const [draft, dispatch] = useReducer(draftReducer, undefined, () => emptyDraft());
   const [pane, setPane] = useState<Pane>({ kind: "menu" });
   const [sending, setSending] = useState(false);
-  const [paying, setPaying] = useState<{ key: string; tenders: TenderInput[]; sent: OrderView | null } | null>(null);
+  const [paying, setPaying] = useState<{
+    key: string;
+    tenders: TenderInput[];
+    /** Set once the paid order went to the outbox; `order` is null when it was queued, not sent. */
+    submitted: { order: OrderView | null } | null;
+  } | null>(null);
   const [approval, setApproval] = useState<PendingApproval | null>(null);
   const [dialog, setDialog] = useState<null | { kind: "open_shift" } | { kind: "close_shift"; shiftId: string } | { kind: "drawer"; drawer: DrawerEventKind } | { kind: "outbox" }>(null);
   const [prefs, setPrefs] = useState<Prefs>({ dark: false, lockAfterOrder: false });
@@ -163,7 +168,7 @@ export function PosTerminal({
 
   const drain = useCallback(async () => {
     const sent = await outbox.drain();
-    for (const o of sent) toast.success(`Order #${o.number} reached the kitchen (was not sent)`);
+    for (const o of sent) notify.success(`#${o.number} sent: the order that was waiting offline reached the kitchen`);
   }, []);
 
   useEffect(() => {
@@ -231,7 +236,7 @@ export function PosTerminal({
     (r: { reason: string; message?: string }) => {
       if (r.reason === "locked") lock();
       if (r.reason === "no_open_shift") setDialog({ kind: "open_shift" });
-      toast.error(failureText(r));
+      notify.error(failureText(r));
     },
     [lock],
   );
@@ -298,7 +303,7 @@ export function PosTerminal({
       if (known) return showOrder(known);
       const r = await act("Open order", () => readOrder(orderId));
       if (r?.order) showOrder(r.order);
-      else if (r) toast.error("That order wasn't found.");
+      else if (r) notify.error("That order wasn't found.");
     },
     [board, act, showOrder],
   );
@@ -329,21 +334,21 @@ export function PosTerminal({
     setSending(false);
     switch (out.kind) {
       case "sent":
-        toast.success(`#${out.order.number} sent${out.order.status === "held" ? " (held)" : ""}`);
+        notify.success(`#${out.order.number} sent${out.order.status === "held" ? " (held)" : ""}`);
         void refreshBoard();
         return { ok: true, order: out.order };
       case "queued":
-        toast.error("NOT SENT: printing a paper ticket. It will send when the connection is back.", { duration: 10_000 });
+        notify.error("NOT SENT: printing a paper ticket. It will send when the connection is back.", { duration: 10_000 });
         print(<FallbackTicket req={req} lines={slipLines(req, menu)} at={Date.now()} />);
         setOnline(false);
         return { ok: true, order: null };
       case "locked":
-        toast.error("The terminal locked. The order is saved and sends after you unlock.");
+        notify.error("The terminal locked. The order is saved and sends after you unlock.");
         lock();
         return { ok: true, order: null };
       case "rejected":
         await outbox.discard(req.orderId);
-        toast.error(out.message);
+        notify.error(out.message);
         return { ok: false, order: null };
     }
   };
@@ -358,7 +363,7 @@ export function PosTerminal({
       );
       setSending(false);
       if (r && "order" in r) {
-        toast.success(`Added to #${target.number}`);
+        notify.success(`Added to #${target.number}`);
         dispatch({ type: "reset", mode: "walk_in" });
         showOrder(r.order);
         void refreshBoard();
@@ -372,11 +377,11 @@ export function PosTerminal({
 
   const pay = () => {
     if (!board?.shift) {
-      toast.error(failureText({ reason: "no_open_shift" }));
+      notify.error(failureText({ reason: "no_open_shift" }));
       setDialog({ kind: "open_shift" });
       return;
     }
-    setPaying({ key: draft.orderId, tenders: [], sent: null });
+    setPaying({ key: draft.orderId, tenders: [], submitted: null });
   };
 
   const draftTotal = draftTotals(draft, menu).totalCents;
@@ -385,13 +390,12 @@ export function PosTerminal({
     const p = paying;
     setPaying(null);
     if (!p) return;
-    if (!p.sent && p.tenders.length > 0) {
+    if (p.submitted) return finishDraft(draft.mode);
+    if (p.tenders.length > 0) {
       // Money was taken: the order must be recorded with it.
       const { ok } = await submitDraft(draft, p.tenders);
       if (ok) finishDraft(draft.mode);
-      return;
     }
-    if (p.sent || p.tenders.length > 0) finishDraft(draft.mode);
   };
 
   // --- builder ------------------------------------------------------------------
@@ -603,7 +607,7 @@ export function PosTerminal({
             }
             const { ok, order } = await submitDraft(draft, tenders);
             if (!ok) return null;
-            setPaying({ ...paying, tenders, sent: order });
+            setPaying({ ...paying, tenders, submitted: { order } });
             return { dueCents: 0 };
           }}
           onPayLater={async () => {
@@ -611,7 +615,7 @@ export function PosTerminal({
             setPaying(null);
             if (ok) finishDraft(draft.mode);
           }}
-          onReceipt={() => paying.sent && receipt(paying.sent)}
+          onReceipt={() => paying.submitted?.order && receipt(paying.submitted.order)}
           onClose={() => void closePaying()}
         />
       )}
@@ -639,8 +643,8 @@ export function PosTerminal({
           onPrint={(e) => print(<FallbackTicket req={e.request} lines={slipLines(e.request, menu)} at={e.createdAt} />)}
           onRetry={async (e) => {
             const out = await outbox.retry(e.orderId);
-            if (out?.kind === "sent") toast.success(`#${out.order.number} sent`);
-            else if (out) toast.error(out.kind === "rejected" ? out.message : "Still can't reach the server.");
+            if (out?.kind === "sent") notify.success(`#${out.order.number} sent`);
+            else if (out) notify.error(out.kind === "rejected" ? out.message : "Still can't reach the server.");
           }}
           onDiscard={(e) => void outbox.discard(e.orderId)}
           onClose={() => setDialog(null)}
@@ -686,7 +690,7 @@ function OutboxDialog({
 }) {
   return (
     <Dialog open onOpenChange={(o) => !o && onClose()}>
-      <DialogContent className="w-[min(640px,calc(100vw-2rem))] gap-4 sm:max-w-none" data-testid="outbox-dialog">
+      <DialogContent className="w-[min(640px,calc(100vw-2rem))] gap-4 sm:max-w-none!" data-testid="outbox-dialog">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2 text-lg">
             <ClipboardList className="size-5" /> Connection and unsent orders

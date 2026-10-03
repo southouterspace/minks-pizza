@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState, type Dispatch } from "react";
-import { toast } from "sonner";
+import { notify } from "./notify";
 import { AlertTriangle, ArrowRight, History, MapPin, Phone, RotateCcw } from "lucide-react";
 import type { CustomerLookup } from "@/lib/orders-server";
 import { allItems, draftLine, lineSummary, type Draft, type DraftAction } from "@/lib/pos-client/draft";
@@ -68,9 +68,9 @@ export function CallerPanel({ draft, dispatch, onContinue }: { draft: Draft; dis
     });
     setUnavailable(unavailable);
     if (unavailable.length > 0) {
-      toast.warning(`${unavailable.length} item${unavailable.length > 1 ? "s" : ""} couldn't be reordered`);
+      notify.warning(`${unavailable.length} item${unavailable.length > 1 ? "s" : ""} couldn't be reordered`);
     } else {
-      toast.success(`Reordered #${order.number}`);
+      notify.success(`Reordered #${order.number}`);
       onContinue();
     }
   };
@@ -90,6 +90,10 @@ export function CallerPanel({ draft, dispatch, onContinue }: { draft: Draft; dis
             autoComplete="off"
             value={draft.customer.phone}
             onChange={(e) => dispatch({ type: "customer", patch: { phone: e.target.value } })}
+            onBlur={(e) => {
+              const d = digits(e.target.value);
+              if (d.length === 10) dispatch({ type: "customer", patch: { phone: `(${d.slice(0, 3)}) ${d.slice(3, 6)}-${d.slice(6)}` } });
+            }}
             placeholder="(555) 010-2233"
             aria-label="Caller phone"
             className={cn(field, "h-14 text-2xl tracking-wide tabular-nums")}
@@ -160,9 +164,7 @@ export function CallerPanel({ draft, dispatch, onContinue }: { draft: Draft; dis
           </p>
           <ul className="mt-1 list-disc pl-5">
             {unavailable.map((u, i) => (
-              <li key={i}>
-                <span className="font-medium">{u.name}</span>: {u.reason}
-              </li>
+              <li key={i}>{u.reason.includes(u.name) ? u.reason : `${u.name}: ${u.reason}`}</li>
             ))}
           </ul>
         </div>

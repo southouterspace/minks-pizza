@@ -80,7 +80,7 @@ export function TenderDialog({
 
   return (
     <Dialog open={open} onOpenChange={(o) => !o && !busy && onClose()}>
-      <DialogContent className="w-[min(640px,calc(100vw-2rem))] gap-5 sm:max-w-none" data-testid="tender-dialog">
+      <DialogContent className="w-[min(640px,calc(100vw-2rem))] gap-5 sm:max-w-none!" data-testid="tender-dialog">
         <DialogHeader>
           <DialogTitle className="text-xl">{title}</DialogTitle>
         </DialogHeader>
@@ -147,11 +147,11 @@ export function TenderDialog({
             {method === "cash" ? (
               <div className="flex flex-col gap-3">
                 <div className="grid grid-cols-4 gap-2">
-                  <Tap variant="secondary" className="h-16 text-lg" disabled={busy} onClick={() => cash(applying)} data-testid="cash-exact">
+                  <Tap variant="secondary" className="h-16! text-lg!" disabled={busy} onClick={() => cash(applying)} data-testid="cash-exact">
                     Exact
                   </Tap>
                   {QUICK_CASH.map((c) => (
-                    <Tap key={c} variant="secondary" className="h-16 text-lg" disabled={busy} onClick={() => cash(c)} data-cash={c / 100}>
+                    <Tap key={c} variant="secondary" className="h-16! text-lg!" disabled={busy} onClick={() => cash(c)} data-cash={c / 100}>
                       {formatCents(c).replace(".00", "")}
                     </Tap>
                   ))}
@@ -191,7 +191,7 @@ export function TenderDialog({
                   </label>
                 </div>
                 <Tap
-                  className="h-14 text-lg"
+                  className="h-14! text-lg!"
                   disabled={busy || cardAmount <= 0 || cardAmount > due || (card.last4 !== "" && card.last4.length !== 4)}
                   onClick={() => {
                     setChange(null);

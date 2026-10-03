@@ -100,7 +100,7 @@ export function OrderDetail({
       confirm: "Refund",
       destructive: true,
       reasons: REFUND_REASONS,
-      amount: { max: net, initial: net },
+      amount: { max: net, initial: net > order.totals.totalCents ? net - order.totals.totalCents : net },
       method: true,
       onSubmit: ({ reason, cents, method }) => void mutate(`Refund ${formatCents(cents)}`, { kind: "refund", id, method, amountCents: cents, reason }),
     });
@@ -236,10 +236,19 @@ export function OrderDetail({
             <dd className="text-right font-semibold">{formatCents(order.totals.totalCents)}</dd>
             <dt className="text-muted-foreground">Paid</dt>
             <dd className="text-right">{formatCents(net)}</dd>
-            <dt className="text-lg font-bold">Due</dt>
-            <dd className="text-right text-lg font-bold" data-testid="order-due">
-              {formatCents(due)}
-            </dd>
+            {net > order.totals.totalCents ? (
+              <>
+                <dt className="text-lg font-bold text-destructive">Refund due</dt>
+                <dd className="text-right text-lg font-bold text-destructive">{formatCents(net - order.totals.totalCents)}</dd>
+              </>
+            ) : (
+              <>
+                <dt className="text-lg font-bold">Due</dt>
+                <dd className="text-right text-lg font-bold" data-testid="order-due">
+                  {formatCents(due)}
+                </dd>
+              </>
+            )}
           </dl>
         </div>
 

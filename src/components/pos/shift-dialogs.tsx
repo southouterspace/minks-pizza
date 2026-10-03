@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import Link from "next/link";
-import { toast } from "sonner";
+import { notify } from "./notify";
 import { buttonVariants } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { closeShift, drawerEvent, openShift, previewShift } from "@/app/pos/actions";
@@ -25,7 +25,7 @@ export function OpenShiftDialog({ onClose }: { onClose: () => void }) {
 
   return (
     <Dialog open onOpenChange={(o) => !o && onClose()}>
-      <DialogContent className="w-[min(440px,calc(100vw-2rem))] gap-4 sm:max-w-none" data-testid="open-shift">
+      <DialogContent className="w-[min(440px,calc(100vw-2rem))] gap-4 sm:max-w-none!" data-testid="open-shift">
         <DialogHeader>
           <DialogTitle className="text-lg">Open the shift</DialogTitle>
           <DialogDescription>Count the starting bank in the drawer. Payments can&apos;t be taken until a shift is open.</DialogDescription>
@@ -46,7 +46,7 @@ export function OpenShiftDialog({ onClose }: { onClose: () => void }) {
               const r = await act("Open shift", () => openShift({ shiftId, startingBankCents: cents }));
               setBusy(false);
               if (r) {
-                toast.success(`Shift open with ${formatCents(cents!)}`);
+                notify.success(`Shift open with ${formatCents(cents!)}`);
                 await refreshBoard();
                 onClose();
               }
@@ -77,7 +77,7 @@ export function DrawerDialog({ kind, onClose }: { kind: DrawerEventKind; onClose
 
   return (
     <Dialog open onOpenChange={(o) => !o && onClose()}>
-      <DialogContent className="w-[min(440px,calc(100vw-2rem))] gap-4 sm:max-w-none">
+      <DialogContent className="w-[min(440px,calc(100vw-2rem))] gap-4 sm:max-w-none!">
         <DialogHeader>
           <DialogTitle className="text-lg">{spec.title}</DialogTitle>
           <DialogDescription>{kind === "paid_in" ? "Recorded against this shift's drawer." : "Needs a manager. Recorded against this shift's drawer."}</DialogDescription>
@@ -100,7 +100,7 @@ export function DrawerDialog({ kind, onClose }: { kind: DrawerEventKind; onClose
             onClick={async () => {
               const r = await act(spec.title, (approval) => drawerEvent({ id, kind, cents: cents ?? 0, reason: reason.trim(), approval }));
               if (r) {
-                toast.success(`${spec.title} recorded`);
+                notify.success(`${spec.title} recorded`);
                 onClose();
               }
             }}
@@ -189,9 +189,9 @@ export function CloseShiftDialog({ shiftId, names, onClose }: { shiftId: string;
       .then((r) => {
         if (!live) return;
         if (r.ok) setRunning(r.report);
-        else toast.error(failureText(r));
+        else notify.error(failureText(r));
       })
-      .catch(() => toast.error(failureText({ reason: "offline" })));
+      .catch(() => notify.error(failureText({ reason: "offline" })));
     return () => {
       live = false;
     };
@@ -213,7 +213,7 @@ export function CloseShiftDialog({ shiftId, names, onClose }: { shiftId: string;
 
   return (
     <Dialog open onOpenChange={(o) => !o && onClose()}>
-      <DialogContent className="max-h-[calc(100vh-2rem)] w-[min(680px,calc(100vw-2rem))] gap-4 overflow-y-auto sm:max-w-none" data-testid="close-shift">
+      <DialogContent className="max-h-[calc(100vh-2rem)] w-[min(680px,calc(100vw-2rem))] gap-4 overflow-y-auto sm:max-w-none!" data-testid="close-shift">
         <DialogHeader>
           <DialogTitle className="text-lg">{closed ? "Shift closed" : "Close the shift"}</DialogTitle>
           <DialogDescription>{closed ? "Print the Z report for the bank bag." : "Count the drawer and read the batch total off the card terminal. Needs a manager."}</DialogDescription>
@@ -238,7 +238,7 @@ export function CloseShiftDialog({ shiftId, names, onClose }: { shiftId: string;
         <div className="grid grid-cols-2 gap-2">
           {closed ? (
             <>
-              <Link href={`/admin/reports/shift/${shiftId}`} target="_blank" className={cn(buttonVariants({ variant: "outline" }), "h-12 rounded-xl text-base")} data-testid="z-report">
+              <Link href={`/admin/reports/shift/${shiftId}`} target="_blank" className={cn(buttonVariants({ variant: "outline" }), "h-12! rounded-xl! text-base!")} data-testid="z-report">
                 Print Z report
               </Link>
               <Tap onClick={onClose}>Done</Tap>

@@ -165,7 +165,7 @@ export function ManagerPinDialog({
 }) {
   return (
     <Dialog open={open} onOpenChange={(o) => !o && onCancel()}>
-      <DialogContent className="w-auto sm:max-w-none" data-testid="manager-pin">
+      <DialogContent className="w-auto sm:max-w-none!" data-testid="manager-pin">
         <DialogHeader className="items-center text-center">
           <DialogTitle className="flex items-center gap-2 text-lg">
             <ShieldCheck className="size-5" /> Manager approval

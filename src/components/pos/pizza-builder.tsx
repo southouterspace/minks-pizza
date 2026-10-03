@@ -83,12 +83,7 @@ export function PizzaBuilder({
         <button type="button" onClick={onCancel} className="rounded-xl p-3 hover:bg-muted" aria-label="Close builder">
           <X className="size-5" />
         </button>
-        <div className="min-w-0 flex-1">
-          <h2 className="truncate text-xl font-semibold">{item.name}</h2>
-          <p className="truncate text-sm text-muted-foreground" data-testid="builder-summary">
-            {quantity} × {priced.ok ? lineSummary(priced.modifiers) || item.name : priced.message}
-          </p>
-        </div>
+        <h2 className="min-w-0 flex-1 truncate text-xl font-semibold">{item.name}</h2>
         <div className="flex items-center gap-1 rounded-xl bg-muted p-1">
           <button type="button" className="flex size-11 items-center justify-center rounded-lg hover:bg-background" onClick={() => setQuantity((q) => Math.max(1, q - 1))} aria-label="One fewer">
             <Minus className="size-5" />
@@ -104,6 +99,10 @@ export function PizzaBuilder({
           {editing ? "Update" : "Add"} · {priced.ok ? formatCents(priced.unitPriceCents * quantity) : "—"}
         </Tap>
       </div>
+
+      <p className={cn("-mt-1 rounded-xl bg-muted px-3 py-2 text-base", !priced.ok && "text-destructive")} data-testid="builder-summary">
+        {quantity} × {priced.ok ? lineSummary(priced.modifiers) || item.name : priced.message}
+      </p>
 
       <div className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto pr-1 pb-2">
         {groups.map((g) =>
