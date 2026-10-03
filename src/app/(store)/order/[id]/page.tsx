@@ -207,7 +207,7 @@ export default async function OrderPage({
                   </p>
                   {item.modifiers.length > 0 ? (
                     <p className="mt-0.5 text-xs text-muted-foreground">
-                      {item.modifiers.map(describeChoice).join(" · ")}
+                      {item.modifiers.map((m) => (m.kind === "option" ? `${m.groupName}: ${describeChoice(m)}` : describeChoice(m))).join(" · ")}
                     </p>
                   ) : null}
                   {item.notes ? (
