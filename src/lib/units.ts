@@ -71,3 +71,12 @@ export function formatQty(milli: number, baseUnit: BaseUnit): string {
       return `${sign}${trim(abs / 1_000, 1)}`;
   }
 }
+
+/** What an ingredient can be entered in: its packs first, then its base unit's registry units. */
+export function unitsFor(baseUnit: BaseUnit, packs: readonly UnitDef[] = []): UnitDef[] {
+  const names = new Set(packs.map((p) => p.name));
+  return [...packs, ...UNITS[baseUnit].filter((u) => !names.has(u.name))];
+}
+
+/** The unit a count or delivery line starts in. */
+export const DEFAULT_ENTRY_UNIT: Record<BaseUnit, string> = { g: "lb", ml: "qt", each: "each" };
