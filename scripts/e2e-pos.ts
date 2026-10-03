@@ -14,7 +14,7 @@
  * seeded menu, demo staff (manager 1234, cashier 5678), 8.25% tax and a
  * $5.00 discount threshold.
  */
-import { chromium, type Page } from "playwright";
+import { chromium, type Locator, type Page } from "playwright";
 import { and, eq, gte, isNull, type SQL } from "drizzle-orm";
 import { randomUUID } from "node:crypto";
 import { adjustments, customers, db, drawerEvents, menuItems, modifierGroups, modifiers, orderItems, orders, pinAttempts, shifts, storeSettings, tenders } from "../src/db";
@@ -42,6 +42,17 @@ async function eventually(fn: () => Promise<boolean>, ms = 10_000): Promise<bool
     await new Promise((r) => setTimeout(r, 300));
   }
   return fn();
+}
+
+/** Waits out an enter animation: the box reads the same twice in a row. */
+async function settled(locator: Locator) {
+  let last = "";
+  await eventually(async () => {
+    const box = JSON.stringify(await locator.boundingBox());
+    const still = box === last;
+    last = box;
+    return still;
+  }, 3_000);
 }
 
 const orderRow = async (id: string) => (await db.select().from(orders).where(eq(orders.id, id)))[0];
@@ -273,6 +284,7 @@ async function main() {
   await page.getByTestId("send").click();
   const toast = page.locator("[data-sonner-toast]").filter({ hasText: "sent (held)" });
   await toast.waitFor();
+  await settled(toast);
   const boxes = await Promise.all([toast, page.locator("header"), page.getByTestId("send"), page.getByTestId("pay")].map((l) => l.boundingBox()));
   const [toastBox, ...covered] = boxes;
   const overlaps = (a: NonNullable<typeof toastBox>, b: NonNullable<typeof toastBox>) => a.x < b.x + b.width && b.x < a.x + a.width && a.y < b.y + b.height && b.y < a.y + a.height;
