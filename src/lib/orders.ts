@@ -1,4 +1,4 @@
-import { eq, inArray } from "drizzle-orm";
+import { eq, inArray, sql, type SQL } from "drizzle-orm";
 import {
   categories,
   db,
@@ -6,6 +6,7 @@ import {
   menuItems,
   modifierGroups,
   modifiers,
+  orderDiscounts,
   orderEvents,
   orderItems,
   orders,
@@ -13,11 +14,25 @@ import {
   type OrderItemModifier,
 } from "@/db";
 import type { KitchenStation } from "@/lib/kds";
-import { taxFromBps } from "@/lib/money";
+import { formatCents, taxFromBps } from "@/lib/money";
+import { loadCandidates, phoneKeySql } from "@/lib/promotion-queries";
+import {
+  customerKeyFromPhone,
+  discountedTotals,
+  evaluatePromotions,
+  normalizeCode,
+  REASONS,
+  type AppliedDiscount,
+  type Evaluation,
+  type PromotionCandidate,
+} from "@/lib/promotions";
 import type { CheckoutInput } from "@/lib/validation";
 
 export type PricedLine = {
   itemId: number;
+  categoryId: number;
+  /** Chosen modifier ids, so promotions can target a size. */
+  modifierIds: number[];
   itemName: string;
   quantity: number;
   unitPriceCents: number;
@@ -140,6 +155,8 @@ export async function priceCart(
 
     return {
       itemId: item.id,
+      categoryId: item.categoryId,
+      modifierIds: line.modifierIds,
       itemName: item.name,
       quantity: line.quantity,
       unitPriceCents: unitPrice,
@@ -162,6 +179,120 @@ export async function priceCart(
     deliveryFeeCents,
     totalCents: subtotalCents + taxCents + deliveryFeeCents,
   };
+}
+
+export type CheckoutQuote = Evaluation & {
+  lines: PricedLine[];
+  subtotalCents: number;
+  deliveryFeeCents: number;
+  taxCents: number;
+  /** Everything but the tip, which the customer picks. */
+  totalBeforeTipCents: number;
+  timezone: string;
+  /** The candidates the evaluation used, for the redemption guard. */
+  candidates: PromotionCandidate[];
+  customerKey: string | null;
+};
+
+/**
+ * The one pricing path: the live preview in cart and checkout and the order
+ * insert both come through here, so what the customer sees is what is charged.
+ */
+export async function quoteCheckout(
+  input: {
+    lines: CheckoutInput["lines"];
+    orderType: "pickup" | "delivery";
+    customerPhone?: string;
+    promoCodes?: string[];
+  },
+  now = new Date(),
+): Promise<CheckoutQuote> {
+  const customerKey = customerKeyFromPhone(input.customerPhone);
+  const [settings, cart, loaded] = await Promise.all([
+    getSettings(),
+    priceCart(input.lines, input.orderType),
+    loadCandidates(input.promoCodes ?? [], customerKey),
+  ]);
+  const evaluation = evaluatePromotions({
+    lines: cart.lines,
+    orderType: input.orderType,
+    subtotalCents: cart.subtotalCents,
+    deliveryFeeCents: cart.deliveryFeeCents,
+    now,
+    timezone: settings.timezone,
+    customerKey,
+    customerHasOrdered: loaded.customerHasOrdered,
+    enteredCodes: loaded.enteredCodes,
+    candidates: loaded.candidates,
+    names: loaded.names,
+  });
+  const totals = discountedTotals({
+    subtotalCents: cart.subtotalCents,
+    deliveryFeeCents: cart.deliveryFeeCents,
+    tipCents: 0,
+    taxRateBps: settings.taxRateBps,
+    discounts: evaluation.applied,
+  });
+  return {
+    ...evaluation,
+    lines: cart.lines,
+    subtotalCents: cart.subtotalCents,
+    deliveryFeeCents: cart.deliveryFeeCents,
+    taxCents: totals.taxCents,
+    totalBeforeTipCents: totals.totalCents,
+    timezone: settings.timezone,
+    candidates: loaded.candidates,
+    customerKey,
+  };
+}
+
+const LIMIT_SENTINEL = "promotion_limit_reached";
+
+/**
+ * Still true for every applied promotion once its row is locked: live, under
+ * its total, per-customer and per-code limits, and (for new-customer offers)
+ * no other order on this phone. Runs as its own statement after the lock so
+ * it reads a snapshot that includes any order that just won the race.
+ */
+function redemptionGuard(quote: CheckoutQuote, orderId: string): SQL | null {
+  const conditions: SQL[] = [];
+  const uses = (where: SQL) =>
+    sql`(select count(*) from ${orderDiscounts} d join ${orders} o on o.id = d.order_id
+         where ${where} and o.status <> 'canceled' and o.id <> ${orderId})`;
+  for (const a of quote.applied) {
+    const c = quote.candidates.find((x) => x.promotion.id === a.promotionId)!;
+    const p = c.promotion;
+    conditions.push(sql`exists (select 1 from promotions where id = ${p.id} and is_active and archived_at is null)`);
+    if (p.totalLimit !== null) conditions.push(sql`${uses(sql`d.promotion_id = ${p.id}`)} < ${p.totalLimit}`);
+    if (p.perCustomerLimit !== null) {
+      conditions.push(sql`${uses(sql`d.promotion_id = ${p.id} and d.customer_key = ${quote.customerKey}`)} < ${p.perCustomerLimit}`);
+    }
+    if (c.code?.maxUses != null) conditions.push(sql`${uses(sql`d.code_id = ${c.code.id}`)} < ${c.code.maxUses}`);
+    if (p.newCustomersOnly) {
+      conditions.push(
+        sql`not exists (select 1 from ${orders} where ${orders.status} <> 'canceled' and ${orders.id} <> ${orderId} and ${phoneKeySql} = ${quote.customerKey})`,
+      );
+    }
+  }
+  return conditions.length ? sql.join(conditions, sql` and `) : null;
+}
+
+function isLimitRace(err: unknown): boolean {
+  for (let e: unknown = err; e; e = (e as { cause?: unknown }).cause) {
+    if (e instanceof Error && e.message.includes(LIMIT_SENTINEL)) return true;
+  }
+  return false;
+}
+
+/** "PIZZA10 was just fully redeemed", from why the fresh quote turned the deal down. */
+function lostDealMessage(lost: AppliedDiscount, fresh: CheckoutQuote): string {
+  if (!lost.code) return `"${lost.label}" just ran out`;
+  const code = normalizeCode(lost.code);
+  const reason = fresh.rejected.find((r) => r.code === code)?.reason;
+  if (reason === REASONS.perCustomer) return `${lost.code} was already used with this phone number`;
+  if (reason === REASONS.newCustomers) return `${lost.code} is for new customers only`;
+  if (reason === REASONS.soldOut) return `${lost.code} was just fully redeemed`;
+  return `${lost.code} is no longer available`;
 }
 
 /**
@@ -191,11 +322,37 @@ export async function createOrder(input: CheckoutInput) {
     throw new OrderError("Delivery is not available right now.");
   }
 
-  const cart = await priceCart(input.lines, input.orderType);
+  for (let attempt = 0; ; attempt++) {
+    const quote = await quoteCheckout(input);
+    const totalCents = quote.totalBeforeTipCents + input.tipCents;
+    if (input.expectedTotalCents !== undefined && input.expectedTotalCents !== totalCents) {
+      const rejected = quote.rejected[0];
+      throw new OrderError(
+        `${rejected ? `${rejected.code}: ${rejected.reason}. ` : ""}Your total is now ${formatCents(totalCents)}. Check it and place your order again.`,
+      );
+    }
+    try {
+      return await insertOrder(input, settings, quote);
+    } catch (err) {
+      if (!isLimitRace(err)) throw err;
+      const fresh = await quoteCheckout(input);
+      const lost = quote.applied.find((a) => !fresh.applied.some((f) => f.promotionId === a.promotionId));
+      if (!lost && attempt === 0) continue;
+      throw new OrderError(
+        `${lost ? lostDealMessage(lost, fresh) : "A deal on your order just changed"} — your total is now ${formatCents(fresh.totalBeforeTipCents + input.tipCents)}.`,
+      );
+    }
+  }
+}
 
+async function insertOrder(
+  input: CheckoutInput,
+  settings: Awaited<ReturnType<typeof getSettings>>,
+  quote: CheckoutQuote,
+) {
   if (
     input.orderType === "delivery" &&
-    cart.subtotalCents < settings.deliveryMinimumCents
+    quote.subtotalCents < settings.deliveryMinimumCents
   ) {
     throw new OrderError(
       `Delivery orders have a minimum subtotal of $${(
@@ -208,9 +365,11 @@ export async function createOrder(input: CheckoutInput) {
   const prepMinutes =
     input.orderType === "delivery" ? settings.deliveryPrepMinutes : settings.pickupPrepMinutes;
 
-  // The id is minted here so the order, its lines and its "placed" event go
-  // in as one transaction: a failure can't leave an order with no items.
+  // The id is minted here so the order, its lines, its "placed" event and
+  // its redemptions go in as one transaction.
   const orderId = crypto.randomUUID();
+  const guard = redemptionGuard(quote, orderId);
+  const promotionIds = [...new Set(quote.applied.map((a) => a.promotionId))].sort((a, b) => a - b);
   const [[order]] = await db.batch([
     db
       .insert(orders)
@@ -227,11 +386,12 @@ export async function createOrder(input: CheckoutInput) {
         city: input.city || null,
         zip: input.zip || null,
         orderNotes: input.orderNotes || null,
-        subtotalCents: cart.subtotalCents,
-        taxCents: cart.taxCents,
-        deliveryFeeCents: cart.deliveryFeeCents,
+        subtotalCents: quote.subtotalCents,
+        discountCents: quote.discountCents,
+        taxCents: quote.taxCents,
+        deliveryFeeCents: quote.deliveryFeeCents,
         tipCents: input.tipCents,
-        totalCents: cart.totalCents + input.tipCents,
+        totalCents: quote.totalBeforeTipCents + input.tipCents,
         paymentStatus: "pending",
       })
       .returning(),
@@ -243,7 +403,7 @@ export async function createOrder(input: CheckoutInput) {
       createdAt: placedAt,
     }),
     db.insert(orderItems).values(
-      cart.lines.map((l) => ({
+      quote.lines.map((l) => ({
         orderId,
         menuItemId: l.itemId,
         itemName: l.itemName,
@@ -255,6 +415,28 @@ export async function createOrder(input: CheckoutInput) {
         station: l.station,
       })),
     ),
+    ...(quote.applied.length
+      ? [
+          // Locks in id order so two checkouts can't deadlock; a checkout
+          // racing for the same promotion waits here until the first commits.
+          db.execute(sql`select id from promotions where id in ${promotionIds} order by id for update`),
+          ...(guard
+            ? [db.execute(sql`select (case when ${guard} then '1' else ${LIMIT_SENTINEL} end)::int as ok`)]
+            : []),
+          db.insert(orderDiscounts).values(
+            quote.applied.map((a) => ({
+              orderId,
+              promotionId: a.promotionId,
+              codeId: a.codeId,
+              label: a.label,
+              amountCents: a.amountCents,
+              target: a.target,
+              customerKey: quote.customerKey!,
+              source: "promotion" as const,
+            })),
+          ),
+        ]
+      : []),
   ]);
 
   return order;
