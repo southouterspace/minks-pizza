@@ -18,7 +18,7 @@ import { PromoCodeField, QuoteTotals, useCheckoutQuote } from "@/components/stor
 import { cn } from "@/lib/utils";
 
 export function CartView() {
-  const { lines, subtotalCents, updateQuantity, removeLine, removePromoCode, orderType, ready } = useCart();
+  const { lines, subtotalCents, updateQuantity, removeLine, removePromoCode, orderType, orderTypes, ready } = useCart();
   const { quote, error } = useCheckoutQuote(orderType);
 
   if (!ready) {
@@ -138,7 +138,9 @@ export function CartView() {
           </p>
         ) : null}
         <p className="text-xs text-muted-foreground">
-          Delivery fee and tip are added at checkout.
+          {orderType === "pickup" && orderTypes.delivery
+            ? "Tip, and a delivery fee if you choose delivery, are added at checkout."
+            : "Tip is added at checkout."}
         </p>
       </div>
 

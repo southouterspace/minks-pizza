@@ -46,13 +46,11 @@ const TIP_PRESETS = [0, 10, 15, 20];
 
 export function CheckoutForm({ config }: { config: CheckoutConfig }) {
   const router = useRouter();
-  const { lines, subtotalCents: cartSubtotalCents, promoCodes, removePromoCode, orderType: picked, setOrderType, clear, ready } =
+  const { lines, subtotalCents: cartSubtotalCents, promoCodes, removePromoCode, orderType, setOrderType, clear, ready } =
     useCart();
   const [pending, startTransition] = useTransition();
   const submittedRef = useRef(false);
 
-  const enabled = { pickup: config.pickupEnabled, delivery: config.deliveryEnabled };
-  const orderType = enabled[picked] ? picked : config.pickupEnabled ? "pickup" : "delivery";
   const [tipPercent, setTipPercent] = useState<number | "custom">(15);
   const [customTip, setCustomTip] = useState("");
   const [error, setError] = useState<string | null>(null);

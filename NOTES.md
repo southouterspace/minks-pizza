@@ -413,10 +413,12 @@ complaints are in `docs/promotions-research.md`.
   serves checkout, cart, tracker, admin detail and the print ticket in one
   row order; a zero fee, tax or tip is hidden everywhere (the ticket used to
   print "Tax $0.00").
-- **Order type lives in the cart context**, so the cart quotes what checkout
-  will. On a fresh visit it defaults to pickup, so when pickup is off the
-  cart no longer shows a delivery fee before checkout (its copy already said
-  the fee is added there).
+- **Order type lives in the cart context**, clamped there to the types the
+  store offers (the store layout passes them in) and saved with the cart, so
+  the cart and checkout quote the same order type even with pickup off or
+  after a reload. The cart's footnote names only what checkout still adds.
+  The store layout is `force-dynamic`: `/cart` used to prerender at build
+  time, freezing that day's settings into the page.
 - **Best deal.** Options are each eligible exclusive promotion alone, or all
   eligible stackable ones together; the larger saving wins, ties go to the
   option using more of the customer's codes. Item rewards apply before

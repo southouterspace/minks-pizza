@@ -42,19 +42,21 @@ type CartContextValue = {
   promoCodes: string[];
   addPromoCode: (code: string) => void;
   removePromoCode: (code: string) => void;
-  /** What the customer last picked at checkout; cart and checkout quote the same thing. */
+  /** What the customer last picked, clamped to what the store offers, so cart and checkout quote the same thing. */
   orderType: OrderType;
   setOrderType: (orderType: OrderType) => void;
+  orderTypes: Record<OrderType, boolean>;
   /** True once the cart has hydrated from localStorage. */
   ready: boolean;
 };
 
-type OrderType = "pickup" | "delivery";
+export type OrderType = "pickup" | "delivery";
 
 const CartContext = createContext<CartContextValue | null>(null);
 
 const STORAGE_KEY = "minks-cart-v1";
 const PROMO_KEY = "minks-promo-v1";
+const ORDER_TYPE_KEY = "minks-order-type-v1";
 const MAX_CODES = 5;
 
 function withCode(codes: string[], code: string): string[] {
@@ -68,11 +70,18 @@ function lineKey(line: Omit<CartLine, "key">): string {
   return `${line.itemId}:${mods.join(",")}:${line.notes ?? ""}`;
 }
 
-export function CartProvider({ children }: { children: React.ReactNode }) {
+export function CartProvider({
+  orderTypes,
+  children,
+}: {
+  orderTypes: Record<OrderType, boolean>;
+  children: React.ReactNode;
+}) {
   const [lines, setLines] = useState<CartLine[]>([]);
   const [promoCodes, setPromoCodes] = useState<string[]>([]);
-  const [orderType, setOrderType] = useState<OrderType>("pickup");
+  const [picked, setOrderType] = useState<OrderType>("pickup");
   const [ready, setReady] = useState(false);
+  const orderType: OrderType = orderTypes[picked] ? picked : orderTypes.pickup ? "pickup" : "delivery";
 
   // Hydrate from localStorage after mount — deliberate setState-in-effect so
   // server and first client render agree (empty cart), avoiding hydration
@@ -94,6 +103,12 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
     } catch {
       // corrupted codes — start fresh
     }
+    try {
+      const saved = localStorage.getItem(ORDER_TYPE_KEY);
+      if (saved === "pickup" || saved === "delivery") setOrderType(saved);
+    } catch {
+      // storage unavailable — default to pickup
+    }
     setReady(true);
   }, []);
 
@@ -104,19 +119,12 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
     if (!ready) return;
     try {
       localStorage.setItem(STORAGE_KEY, JSON.stringify(lines));
+      localStorage.setItem(PROMO_KEY, JSON.stringify(promoCodes));
+      localStorage.setItem(ORDER_TYPE_KEY, picked);
     } catch {
       // storage unavailable (private mode) — cart is session-only
     }
-  }, [lines, ready]);
-
-  useEffect(() => {
-    if (!ready) return;
-    try {
-      localStorage.setItem(PROMO_KEY, JSON.stringify(promoCodes));
-    } catch {
-      // storage unavailable — codes are session-only
-    }
-  }, [promoCodes, ready]);
+  }, [lines, promoCodes, picked, ready]);
 
   const addPromoCode = useCallback((code: string) => setPromoCodes((prev) => withCode(prev, code)), []);
   const removePromoCode = useCallback(
@@ -173,9 +181,10 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
       removePromoCode,
       orderType,
       setOrderType,
+      orderTypes,
       ready,
     };
-  }, [lines, promoCodes, orderType, ready, addLine, updateQuantity, removeLine, clear, addPromoCode, removePromoCode]);
+  }, [lines, promoCodes, orderType, orderTypes, ready, addLine, updateQuantity, removeLine, clear, addPromoCode, removePromoCode]);
 
   return <CartContext.Provider value={value}>{children}</CartContext.Provider>;
 }

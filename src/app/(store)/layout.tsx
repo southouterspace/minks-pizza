@@ -5,11 +5,14 @@ import { CartBadge } from "@/components/store/cart-badge";
 import { Separator } from "@/components/ui/separator";
 import { getSettings } from "@/lib/orders";
 
+// Without this, /cart prerenders at build time with that day's settings baked in.
+export const dynamic = "force-dynamic";
+
 export default async function StoreLayout({ children }: LayoutProps<"/">) {
   const settings = await getSettings();
 
   return (
-    <CartProvider>
+    <CartProvider orderTypes={{ pickup: settings.pickupEnabled, delivery: settings.deliveryEnabled }}>
       <PromoLinkCapture />
       <header className="sticky top-0 z-40 border-b border-border bg-background/80 backdrop-blur">
         <div className="mx-auto flex h-16 max-w-5xl items-center justify-between px-4 sm:px-6">

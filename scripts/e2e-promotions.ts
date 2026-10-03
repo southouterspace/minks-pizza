@@ -414,6 +414,33 @@ async function main() {
   });
   check("a paused code says the offer has ended", !paused.ok && paused.error === "E2E-PIZZA: This offer has ended. Your total is now $38.91. Check it and place your order again.", paused.ok ? "placed" : paused.error);
 
+  // With pickup off, a cart last left on pickup quotes delivery, as checkout will.
+  await db.update(storeSettings).set({ pickupEnabled: false });
+  try {
+    const deliveryOnly = await browser.newPage({ viewport: { width: 375, height: 800 } });
+    await deliveryOnly.goto(`${BASE}/`, { waitUntil: "networkidle" });
+    await cart(deliveryOnly, [knot(6)]);
+    await deliveryOnly.evaluate(() => localStorage.setItem("minks-order-type-v1", "pickup"));
+    await deliveryOnly.goto(`${BASE}/cart`, { waitUntil: "networkidle" });
+    // 3594 + $3.99 fee − $3.99 free delivery + 8.25% tax (297) = 3891.
+    check(
+      "pickup off: the cart quotes delivery with the automatic deal",
+      (await shows(deliveryOnly, "discount-line", "E2E Free delivery $30+")) && (await shows(deliveryOnly, "totals-total", "$38.91")),
+      `${await textOf(deliveryOnly, "discount-line")} / ${await textOf(deliveryOnly, "totals-total")}`,
+    );
+    check("pickup off: the cart says only the tip is still to come", (await deliveryOnly.getByText("Tip is added at checkout.").count()) === 1);
+    await deliveryOnly.screenshot({ path: `${SHOT_DIR}/cart-delivery-only-375.png`, fullPage: true });
+    await deliveryOnly.goto(`${BASE}/checkout`, { waitUntil: "networkidle" });
+    await deliveryOnly.getByRole("button", { name: "No tip" }).click();
+    check(
+      "pickup off: checkout quotes the same delivery total",
+      await eventually(async () => (await deliveryOnly.getByTestId("place-order").innerText()).includes("Place delivery order · $38.91")),
+      await deliveryOnly.getByTestId("place-order").innerText(),
+    );
+  } finally {
+    await db.update(storeSettings).set({ pickupEnabled: true });
+  }
+
   await browser.close();
   const raceOrders = [...winners, afterComp].flatMap((r) => (r.ok ? [r.orderId] : []));
   await db.delete(orders).where(inArray(orders.id, raceOrders));
