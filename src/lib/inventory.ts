@@ -2,7 +2,9 @@ import "server-only";
 import { eq, inArray, or, sql, type SQL } from "drizzle-orm";
 import {
   db,
+  ingredientPacks,
   ingredients,
+  inventoryCounts,
   inventoryMoves,
   menuItems,
   modifierGroups,
@@ -14,7 +16,13 @@ import {
   stockOuts,
   storeSettings,
 } from "@/db";
-import type { InventoryMoveKind, WasteReason } from "@/lib/inventory-domain";
+import {
+  milliToCents,
+  type CountKind,
+  type InventoryMoveKind,
+  type WasteReason,
+} from "@/lib/inventory-domain";
+import type { BaseUnit, UnitDef } from "@/lib/units";
 import {
   buildRecipeBook,
   costCents,
@@ -315,4 +323,270 @@ export async function recordMoves(moves: readonly NewMove[]): Promise<void> {
     })),
   );
   await syncStockOuts();
+}
+
+// ---------------------------------------------------------------------------
+// Counts, waste, receiving: reads and writes behind /admin/inventory
+// ---------------------------------------------------------------------------
+
+/** How an ingredient's stock reads on the overview. Out wins over low; neither applies until it is tracked. */
+export type StockStatus = "out" | "low" | "uncounted" | "ok";
+
+export type StockLine = {
+  id: number;
+  name: string;
+  baseUnit: BaseUnit;
+  storageArea: string;
+  unitCostMillicents: number;
+  lowStockAtMilli: number | null;
+  onHandMilli: number;
+  status: StockStatus;
+  packs: UnitDef[];
+};
+
+function stockStatus(r: {
+  stocked_out: boolean;
+  tracked: boolean;
+  low_stock_at_milli: number | null;
+  on_hand: number;
+}): StockStatus {
+  if (r.stocked_out) return "out";
+  if (!r.tracked) return "uncounted";
+  if (r.low_stock_at_milli !== null && r.on_hand <= r.low_stock_at_milli) return "low";
+  return "ok";
+}
+
+/** Active ingredients in walk order: storage area, then shelf order. */
+export async function stockLines(): Promise<StockLine[]> {
+  const [{ rows }, packs] = await Promise.all([
+    db.execute<{
+      id: number;
+      name: string;
+      base_unit: BaseUnit;
+      storage_area: string;
+      unit_cost_millicents: number;
+      low_stock_at_milli: number | null;
+      on_hand: number;
+      tracked: boolean;
+      stocked_out: boolean;
+    }>(sql`
+      select i.id, i.name, i.base_unit, i.storage_area, i.unit_cost_millicents, i.low_stock_at_milli,
+        coalesce(sum(m.qty_milli), 0)::float8 as on_hand,
+        coalesce(bool_or(m.kind in ('receive', 'count')), false) as tracked,
+        exists (select 1 from ${stockOuts} s where s.ingredient_id = i.id) as stocked_out
+      from ${ingredients} i
+      left join ${inventoryMoves} m on m.ingredient_id = i.id
+      where i.is_active
+      group by i.id
+      order by i.storage_area, i.shelf_order, i.name
+    `),
+    db
+      .select({ ingredientId: ingredientPacks.ingredientId, name: ingredientPacks.name, baseQtyMilli: ingredientPacks.baseQtyMilli })
+      .from(ingredientPacks)
+      .orderBy(ingredientPacks.baseQtyMilli),
+  ]);
+  return rows.map((r) => ({
+    id: r.id,
+    name: r.name,
+    baseUnit: r.base_unit,
+    storageArea: r.storage_area,
+    unitCostMillicents: r.unit_cost_millicents,
+    lowStockAtMilli: r.low_stock_at_milli,
+    onHandMilli: r.on_hand,
+    status: stockStatus(r),
+    packs: packs
+      .filter((p) => p.ingredientId === r.id)
+      .map((p) => ({ name: p.name, baseQtyMilli: p.baseQtyMilli })),
+  }));
+}
+
+export type SpotRule = "usage" | "value";
+
+/**
+ * The five ingredients a spot count checks: highest theoretical dollar usage
+ * over the last 7 days (what sales moved, at the cost they moved at), and
+ * with no sales in that window, highest on-hand value.
+ */
+export async function spotCountPreset(): Promise<{ ids: number[]; rule: SpotRule }> {
+  const { rows } = await db.execute<{ id: number; usage: string }>(sql`
+    select i.id,
+      coalesce((
+        select -sum(m.qty_milli::numeric * m.unit_cost_millicents)
+        from ${inventoryMoves} m
+        where m.ingredient_id = i.id and m.kind = 'sale' and m.created_at > now() - interval '7 days'
+      ), 0) as usage,
+      coalesce((select sum(m.qty_milli) from ${inventoryMoves} m where m.ingredient_id = i.id), 0)::numeric
+        * i.unit_cost_millicents as value
+    from ${ingredients} i
+    where i.is_active
+    order by usage desc, value desc, i.id
+    limit 5
+  `);
+  return {
+    ids: rows.map((r) => r.id),
+    rule: rows.some((r) => Number(r.usage) > 0) ? "usage" : "value",
+  };
+}
+
+/** Builds `(values (…), (…))` from rows of integer-or-null cells. */
+function intRows(rows: readonly (readonly (number | null)[])[]): SQL {
+  return sql`(values ${sql.join(
+    rows.map((cells) => sql`(${sql.join(cells.map((c) => sql`${c}::integer`), sql`, `)})`),
+    sql`, `,
+  )})`;
+}
+
+/**
+ * Posts a count: one `count` move per line, each the counted quantity minus
+ * on hand as of this very statement, so a sale landing mid-submit can't skew
+ * the variance. A line equal to on hand still posts (a zero move): it is
+ * what marks the ingredient as counted.
+ */
+export async function recordCount(input: {
+  kind: CountKind;
+  operatorId: number | null;
+  lines: readonly { ingredientId: number; countedMilli: number }[];
+}): Promise<{ countId: number; moves: { ingredientId: number; qtyMilli: number }[] }> {
+  const { rows } = await db.execute<{ count_id: number; ingredient_id: number; qty_milli: number }>(sql`
+    with c as (
+      insert into ${inventoryCounts} (kind, operator_id) values (${input.kind}, ${input.operatorId})
+      returning id
+    )
+    insert into ${inventoryMoves} (ingredient_id, kind, qty_milli, unit_cost_millicents, count_id, operator_id)
+    select l.ingredient_id, 'count',
+      l.counted - coalesce((select sum(m.qty_milli) from ${inventoryMoves} m where m.ingredient_id = l.ingredient_id), 0),
+      i.unit_cost_millicents, c.id, ${input.operatorId}::integer
+    from ${intRows(input.lines.map((l) => [l.ingredientId, l.countedMilli]))} as l(ingredient_id, counted)
+    join ${ingredients} i on i.id = l.ingredient_id
+    cross join c
+    returning count_id, ingredient_id, qty_milli
+  `);
+  await syncStockOuts();
+  return {
+    countId: rows[0]?.count_id ?? 0,
+    moves: rows.map((r) => ({ ingredientId: r.ingredient_id, qtyMilli: r.qty_milli })),
+  };
+}
+
+/** A unit-cost change bigger than this, against the previous delivery, gets flagged. */
+const PRICE_ALERT_PCT = 5;
+
+export type PriceChange = { name: string; pct: number };
+
+/**
+ * Posts a delivery: a `receive` move per line at that line's cost, and each
+ * ingredient's unit cost becomes its latest delivered price. Returns the
+ * lines whose price moved more than 5% from the ingredient's previous
+ * delivery, read in the same statement so the new rows can't be mistaken
+ * for the previous ones.
+ */
+export async function recordDelivery(input: {
+  vendor: string | null;
+  operatorId: number | null;
+  lines: readonly { ingredientId: number; qtyMilli: number; unitCostMillicents: number }[];
+}): Promise<PriceChange[]> {
+  const latestCost = new Map(input.lines.map((l) => [l.ingredientId, l.unitCostMillicents]));
+  const { rows } = await db.execute<{ name: string; prev: number; next: number }>(sql`
+    with prev as (
+      select distinct on (m.ingredient_id) m.ingredient_id, m.unit_cost_millicents
+      from ${inventoryMoves} m
+      where m.kind = 'receive' and m.ingredient_id in (${sql.join([...latestCost.keys()], sql`, `)})
+      order by m.ingredient_id, m.id desc
+    ), ins as (
+      insert into ${inventoryMoves} (ingredient_id, kind, qty_milli, unit_cost_millicents, vendor, operator_id)
+      select l.ingredient_id, 'receive', l.qty_milli, l.unit_cost, ${input.vendor}, ${input.operatorId}::integer
+      from ${intRows(input.lines.map((l) => [l.ingredientId, l.qtyMilli, l.unitCostMillicents]))}
+        as l(ingredient_id, qty_milli, unit_cost)
+    ), cost as (
+      update ${ingredients} i set unit_cost_millicents = c.unit_cost
+      from ${intRows([...latestCost])} as c(ingredient_id, unit_cost)
+      where i.id = c.ingredient_id
+    )
+    select i.name, p.unit_cost_millicents as prev, c.unit_cost as next
+    from ${intRows([...latestCost])} as c(ingredient_id, unit_cost)
+    join prev p using (ingredient_id)
+    join ${ingredients} i on i.id = c.ingredient_id
+    order by i.name
+  `);
+  await syncStockOuts();
+  return rows
+    .filter((r) => r.prev > 0 && Math.abs(r.next - r.prev) * 100 > PRICE_ALERT_PCT * r.prev)
+    .map((r) => ({ name: r.name, pct: Math.round(((r.next - r.prev) * 100) / r.prev) }));
+}
+
+export type WasteEntry = {
+  id: number;
+  name: string;
+  baseUnit: BaseUnit;
+  qtyMilli: number;
+  reason: WasteReason | null;
+  valueCents: number;
+  createdAt: Date;
+};
+
+export async function recentWaste(limit = 20): Promise<WasteEntry[]> {
+  const rows = await db
+    .select({
+      id: inventoryMoves.id,
+      name: ingredients.name,
+      baseUnit: ingredients.baseUnit,
+      qtyMilli: inventoryMoves.qtyMilli,
+      reason: inventoryMoves.wasteReason,
+      unitCostMillicents: inventoryMoves.unitCostMillicents,
+      createdAt: inventoryMoves.createdAt,
+    })
+    .from(inventoryMoves)
+    .innerJoin(ingredients, eq(ingredients.id, inventoryMoves.ingredientId))
+    .where(eq(inventoryMoves.kind, "waste"))
+    .orderBy(sql`${inventoryMoves.id} desc`)
+    .limit(limit);
+  return rows.map(({ unitCostMillicents, ...r }) => ({
+    ...r,
+    qtyMilli: -r.qtyMilli,
+    valueCents: milliToCents(-r.qtyMilli, unitCostMillicents),
+  }));
+}
+
+export type InventoryAlerts = {
+  out: { name: string; eightySixed: string }[];
+  low: { name: string; onHandMilli: number; baseUnit: BaseUnit }[];
+};
+
+/**
+ * What the admin banner shows: every stock-out with what it 86'd, and every
+ * tracked ingredient at or below its low-stock level that isn't out. Reads
+ * only ingredients that have a stock-out row or a low-stock level.
+ */
+export async function inventoryAlerts(): Promise<InventoryAlerts> {
+  const { rows } = await db.execute<{
+    name: string;
+    out: boolean;
+    eighty_sixed: string;
+    on_hand: number;
+    base_unit: BaseUnit;
+  }>(sql`
+    select i.name, s.ingredient_id is not null as out, i.base_unit,
+      coalesce((
+        select string_agg(n.name, ', ' order by n.k, n.name) from (
+          select 0 as k, name from ${menuItems} where id = any(s.menu_item_ids)
+          union all
+          select 1, name from ${modifiers} where id = any(s.modifier_ids)
+        ) n
+      ), '') as eighty_sixed,
+      coalesce(sum(m.qty_milli), 0)::float8 as on_hand
+    from ${ingredients} i
+    left join ${stockOuts} s on s.ingredient_id = i.id
+    left join ${inventoryMoves} m on m.ingredient_id = i.id
+    where s.ingredient_id is not null or (i.is_active and i.low_stock_at_milli is not null)
+    group by i.id, s.ingredient_id
+    having s.ingredient_id is not null
+      or (bool_or(m.kind in ('receive', 'count')) and coalesce(sum(m.qty_milli), 0) <= i.low_stock_at_milli)
+    order by i.storage_area, i.shelf_order, i.name
+  `);
+  return {
+    out: rows.filter((r) => r.out).map((r) => ({ name: r.name, eightySixed: r.eighty_sixed })),
+    low: rows
+      .filter((r) => !r.out)
+      .map((r) => ({ name: r.name, onHandMilli: r.on_hand, baseUnit: r.base_unit })),
+  };
 }
