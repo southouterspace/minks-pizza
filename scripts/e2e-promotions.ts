@@ -351,6 +351,35 @@ async function main() {
   check("CSV has Discount columns", header.includes("Subtotal,Discount,Discounts,Tax"), header);
   check("CSV row carries the discount and its lines", row?.includes("35.94,10.19,E2E 20% off $30+; Late order,2.12"), row);
 
+  // A comp from a deal's preset is reported under the deal but leaves its limit alone.
+  const [compDeal] = await db
+    .insert(promotions)
+    .values({ name: "E2E Comp $1", trigger: "code", reward: { type: "order_amount", amountCents: 100 }, orderTypes: ["pickup", "delivery"], totalLimit: 1, advertised: false })
+    .returning();
+  await db.insert(promotionCodes).values({ promotionId: compDeal.id, code: "E2ECOMP", display: "E2E-COMP" });
+  await detail.reload({ waitUntil: "networkidle" });
+  await detail.getByTestId("apply-discount").click();
+  await detail.getByRole("button", { name: "E2E Comp $1", exact: true }).click();
+  await detail.getByTestId("confirm-discount").click();
+  check(
+    "a preset comp is recorded against its deal",
+    await eventually(async () => (await db.select().from(orderDiscounts).where(and(eq(orderDiscounts.promotionId, compDeal.id), eq(orderDiscounts.source, "comp")))).length === 1),
+  );
+  const afterComp = await placeOrder({
+    orderType: "pickup",
+    customerName: "Comp Check",
+    customerPhone: "5550102003",
+    tipCents: 0,
+    lines: [{ itemId: knots.id, quantity: 1, modifierIds: [] }],
+    promoCodes: ["E2E-COMP"],
+  });
+  const afterCompLedger = afterComp.ok ? await ledger(afterComp.orderId) : [];
+  check(
+    "the comp didn't use up the deal's one redemption",
+    afterCompLedger.length === 1 && afterCompLedger[0].promotionId === compDeal.id && afterCompLedger[0].source === "promotion",
+    afterComp.ok ? JSON.stringify(afterCompLedger) : afterComp.error,
+  );
+
   // Operator list numbers.
   await detail.goto(`${BASE}/admin/promotions`, { waitUntil: "networkidle" });
   check(
@@ -359,6 +388,11 @@ async function main() {
     await textOf(detail, `promotion-${codeDeal.id}`),
   );
   check("race deal shows Used up", await shows(detail, `promotion-${race.id}`, "Used up"));
+  check(
+    "the comp deal counts one use and both discounts",
+    (await shows(detail, `promotion-${compDeal.id}`, "Uses\n1 / 1")) && (await shows(detail, `promotion-${compDeal.id}`, "Discounted\n$2.00")),
+    await textOf(detail, `promotion-${compDeal.id}`),
+  );
   check("promotions list: no sideways scroll at 375px", await noSideScroll(detail));
   await detail.screenshot({ path: `${SHOT_DIR}/admin-promotions-375.png`, fullPage: true });
   await admin.goto(`${BASE}/admin/promotions`, { waitUntil: "networkidle" });
@@ -381,7 +415,7 @@ async function main() {
   check("a paused code says the offer has ended", !paused.ok && paused.error === "E2E-PIZZA: This offer has ended. Your total is now $38.91. Check it and place your order again.", paused.ok ? "placed" : paused.error);
 
   await browser.close();
-  const raceOrders = winners.flatMap((r) => (r.ok ? [r.orderId] : []));
+  const raceOrders = [...winners, afterComp].flatMap((r) => (r.ok ? [r.orderId] : []));
   await db.delete(orders).where(inArray(orders.id, raceOrders));
   await db.delete(operators).where(eq(operators.email, EMAIL));
   console.log(`\n${passes} passed, ${failures} failed. Screenshots in ${SHOT_DIR}`);

@@ -1,4 +1,4 @@
-import { eq, inArray, sql, type SQL } from "drizzle-orm";
+import { eq, inArray, sql } from "drizzle-orm";
 import {
   categories,
   db,
@@ -10,12 +10,14 @@ import {
   orderEvents,
   orderItems,
   orders,
+  promotions,
   storeSettings,
   type OrderItemModifier,
 } from "@/db";
 import type { KitchenStation } from "@/lib/kds";
 import { formatCents, taxFromBps } from "@/lib/money";
-import { loadCandidates, phoneKeySql } from "@/lib/promotion-queries";
+import { loadCandidates } from "@/lib/promotion-queries";
+import { redemptionGuard } from "@/lib/promotion-usage";
 import { lostDealCopy, refusalCopy } from "@/lib/promotion-copy";
 import { normalizeCode } from "@/lib/promo-code";
 import type { TargetNames } from "@/lib/promotion-copy";
@@ -25,7 +27,6 @@ import {
   evaluatePromotions,
   type AppliedDiscount,
   type Evaluation,
-  type PromotionCandidate,
 } from "@/lib/promotion-engine";
 import type { CheckoutInput } from "@/lib/validation";
 
@@ -192,8 +193,6 @@ export type CheckoutQuote = Evaluation & {
   timezone: string;
   /** For the words of a refusal. */
   names: TargetNames;
-  /** The candidates the evaluation used, for the redemption guard. */
-  candidates: PromotionCandidate[];
   customerKey: string | null;
 };
 
@@ -244,47 +243,8 @@ export async function quoteCheckout(
     totalBeforeTipCents: totals.totalCents,
     timezone: settings.timezone,
     names: loaded.names,
-    candidates: loaded.candidates,
     customerKey,
   };
-}
-
-const LIMIT_SENTINEL = "promotion_limit_reached";
-
-/**
- * Still true for every applied promotion once its row is locked: live, under
- * its total, per-customer and per-code limits, and (for new-customer offers)
- * no other order on this phone. Runs as its own statement after the lock so
- * it reads a snapshot that includes any order that just won the race.
- */
-function redemptionGuard(quote: CheckoutQuote, orderId: string): SQL | null {
-  const conditions: SQL[] = [];
-  const uses = (where: SQL) =>
-    sql`(select count(*) from ${orderDiscounts} d join ${orders} o on o.id = d.order_id
-         where ${where} and o.status <> 'canceled' and o.id <> ${orderId})`;
-  for (const a of quote.applied) {
-    const c = quote.candidates.find((x) => x.promotion.id === a.promotionId)!;
-    const p = c.promotion;
-    conditions.push(sql`exists (select 1 from promotions where id = ${p.id} and is_active and archived_at is null)`);
-    if (p.totalLimit !== null) conditions.push(sql`${uses(sql`d.promotion_id = ${p.id}`)} < ${p.totalLimit}`);
-    if (p.perCustomerLimit !== null) {
-      conditions.push(sql`${uses(sql`d.promotion_id = ${p.id} and d.customer_key = ${quote.customerKey}`)} < ${p.perCustomerLimit}`);
-    }
-    if (c.code?.maxUses != null) conditions.push(sql`${uses(sql`d.code_id = ${c.code.id}`)} < ${c.code.maxUses}`);
-    if (p.newCustomersOnly) {
-      conditions.push(
-        sql`not exists (select 1 from ${orders} where ${orders.status} <> 'canceled' and ${orders.id} <> ${orderId} and ${phoneKeySql} = ${quote.customerKey})`,
-      );
-    }
-  }
-  return conditions.length ? sql.join(conditions, sql` and `) : null;
-}
-
-function isLimitRace(err: unknown): boolean {
-  for (let e: unknown = err; e; e = (e as { cause?: unknown }).cause) {
-    if (e instanceof Error && e.message.includes(LIMIT_SENTINEL)) return true;
-  }
-  return false;
 }
 
 function lostDealMessage(lost: AppliedDiscount, fresh: CheckoutQuote): string {
@@ -319,8 +279,8 @@ export async function createOrder(input: CheckoutInput) {
     throw new OrderError("Delivery is not available right now.");
   }
 
+  let quote = await quoteCheckout(input);
   for (let attempt = 0; ; attempt++) {
-    const quote = await quoteCheckout(input);
     const totalCents = quote.totalBeforeTipCents + input.tipCents;
     if (input.expectedTotalCents !== undefined && input.expectedTotalCents !== totalCents) {
       const rejected = quote.rejected[0];
@@ -330,25 +290,32 @@ export async function createOrder(input: CheckoutInput) {
         : "";
       throw new OrderError(`${why}Your total is now ${formatCents(totalCents)}. Check it and place your order again.`);
     }
-    try {
-      return await insertOrder(input, settings, quote);
-    } catch (err) {
-      if (!isLimitRace(err)) throw err;
-      const fresh = await quoteCheckout(input);
-      const lost = quote.applied.find((a) => !fresh.applied.some((f) => f.promotionId === a.promotionId));
-      if (!lost && attempt === 0) continue;
+    const order = await insertOrder(input, settings, quote);
+    if (order) return order;
+    // Lost a limit race: say which deal went, from why a fresh quote refuses it.
+    const fresh = await quoteCheckout(input);
+    const lost = quote.applied.find((a) => !fresh.applied.some((f) => f.promotionId === a.promotionId));
+    if (lost || attempt > 0) {
       throw new OrderError(
         `${lost ? lostDealMessage(lost, fresh) : "A deal on your order just changed"} — your total is now ${formatCents(fresh.totalBeforeTipCents + input.tipCents)}.`,
       );
     }
+    quote = fresh;
   }
 }
 
+/**
+ * Inserts the order, its lines, its "placed" event and its redemptions as
+ * one statement that writes nothing unless the redemption guard still
+ * holds. Returns null when it didn't: a deal's limit went to another order
+ * after the quote. Drizzle's builders can't express a data-modifying CTE,
+ * hence the SQL template (the same pattern as order-writes.ts).
+ */
 async function insertOrder(
   input: CheckoutInput,
   settings: Awaited<ReturnType<typeof getSettings>>,
   quote: CheckoutQuote,
-) {
+): Promise<typeof orders.$inferSelect | null> {
   if (
     input.orderType === "delivery" &&
     quote.subtotalCents < settings.deliveryMinimumCents
@@ -363,80 +330,72 @@ async function insertOrder(
   const placedAt = new Date();
   const prepMinutes =
     input.orderType === "delivery" ? settings.deliveryPrepMinutes : settings.pickupPrepMinutes;
+  const at = placedAt.toISOString();
+  const promisedAt = new Date(placedAt.getTime() + prepMinutes * 60_000).toISOString();
+  const lines = quote.lines.map((l) => ({
+    menu_item_id: l.itemId,
+    item_name: l.itemName,
+    quantity: l.quantity,
+    unit_price_cents: l.unitPriceCents,
+    line_total_cents: l.lineTotalCents,
+    modifiers: l.modifiers,
+    notes: l.notes || null,
+    station: l.station,
+  }));
+  const discounts = quote.applied.map((a) => ({
+    promotion_id: a.promotionId,
+    code_id: a.codeId,
+    label: a.label,
+    amount_cents: a.amountCents,
+    target: a.target,
+    customer_key: quote.customerKey,
+  }));
 
-  // The id is minted here so the order, its lines, its "placed" event and
-  // its redemptions go in as one transaction.
   const orderId = crypto.randomUUID();
-  const guard = redemptionGuard(quote, orderId);
-  const promotionIds = [...new Set(quote.applied.map((a) => a.promotionId))].sort((a, b) => a - b);
-  const [[order]] = await db.batch([
-    db
-      .insert(orders)
-      .values({
-        id: orderId,
-        placedAt,
-        promisedAt: new Date(placedAt.getTime() + prepMinutes * 60_000),
-        orderType: input.orderType,
-        customerName: input.customerName,
-        customerPhone: input.customerPhone,
-        customerEmail: input.customerEmail || null,
-        addressLine1: input.addressLine1 || null,
-        addressLine2: input.addressLine2 || null,
-        city: input.city || null,
-        zip: input.zip || null,
-        orderNotes: input.orderNotes || null,
-        subtotalCents: quote.subtotalCents,
-        discountCents: quote.discountCents,
-        taxCents: quote.taxCents,
-        deliveryFeeCents: quote.deliveryFeeCents,
-        tipCents: input.tipCents,
-        totalCents: quote.totalBeforeTipCents + input.tipCents,
-        paymentStatus: "pending",
-      })
-      .returning(),
-    db.insert(orderEvents).values({
-      orderId,
-      type: "placed",
-      toStatus: "new",
-      actor: "Customer",
-      createdAt: placedAt,
-    }),
-    db.insert(orderItems).values(
-      quote.lines.map((l) => ({
-        orderId,
-        menuItemId: l.itemId,
-        itemName: l.itemName,
-        quantity: l.quantity,
-        unitPriceCents: l.unitPriceCents,
-        lineTotalCents: l.lineTotalCents,
-        modifiers: l.modifiers,
-        notes: l.notes || null,
-        station: l.station,
-      })),
-    ),
-    ...(quote.applied.length
-      ? [
-          // Locks in id order so two checkouts can't deadlock; a checkout
-          // racing for the same promotion waits here until the first commits.
-          db.execute(sql`select id from promotions where id in ${promotionIds} order by id for update`),
-          ...(guard
-            ? [db.execute(sql`select (case when ${guard} then '1' else ${LIMIT_SENTINEL} end)::int as ok`)]
-            : []),
-          db.insert(orderDiscounts).values(
-            quote.applied.map((a) => ({
-              orderId,
-              promotionId: a.promotionId,
-              codeId: a.codeId,
-              label: a.label,
-              amountCents: a.amountCents,
-              target: a.target,
-              customerKey: quote.customerKey!,
-              source: "promotion" as const,
-            })),
-          ),
-        ]
-      : []),
-  ]);
+  const place = db.execute(sql`
+    with placed as (
+      insert into ${orders} (id, placed_at, promised_at, order_type, customer_name, customer_phone, customer_email,
+        address_line1, address_line2, city, zip, order_notes, subtotal_cents, discount_cents, tax_cents,
+        delivery_fee_cents, tip_cents, total_cents, payment_status)
+      select ${orderId}::uuid, ${at}::timestamptz, ${promisedAt}::timestamptz, ${input.orderType}::order_type,
+        ${input.customerName}::text, ${input.customerPhone}::text, ${input.customerEmail || null}::text,
+        ${input.addressLine1 || null}::text, ${input.addressLine2 || null}::text, ${input.city || null}::text,
+        ${input.zip || null}::text, ${input.orderNotes || null}::text, ${quote.subtotalCents}::integer,
+        ${quote.discountCents}::integer, ${quote.taxCents}::integer, ${quote.deliveryFeeCents}::integer,
+        ${input.tipCents}::integer, ${quote.totalBeforeTipCents + input.tipCents}::integer, 'pending'
+      where ${redemptionGuard(quote.applied, quote.customerKey)}
+      returning id
+    ), placed_event as (
+      insert into ${orderEvents} (order_id, type, to_status, actor, created_at)
+      select id, 'placed', 'new', 'Customer', ${at}::timestamptz from placed
+    ), placed_lines as (
+      insert into ${orderItems} (order_id, menu_item_id, item_name, quantity, unit_price_cents, line_total_cents, modifiers, notes, station)
+      select placed.id, x.menu_item_id, x.item_name, x.quantity, x.unit_price_cents, x.line_total_cents, x.modifiers, x.notes, x.station
+      from placed, jsonb_to_recordset(${JSON.stringify(lines)}::jsonb) as x(menu_item_id integer, item_name text,
+        quantity integer, unit_price_cents integer, line_total_cents integer, modifiers jsonb, notes text, station kitchen_station)
+    ), placed_discounts as (
+      insert into ${orderDiscounts} (order_id, promotion_id, code_id, label, amount_cents, target, customer_key, source)
+      select placed.id, x.promotion_id, x.code_id, x.label, x.amount_cents, x.target, x.customer_key, 'promotion'
+      from placed, jsonb_to_recordset(${JSON.stringify(discounts)}::jsonb) as x(promotion_id integer, code_id integer,
+        label text, amount_cents integer, target discount_target, customer_key text)
+    )
+    select id from placed`);
 
-  return order;
+  // Read back in the same transaction; no row means the guard failed.
+  const read = db.select().from(orders).where(eq(orders.id, orderId));
+
+  const promotionIds = [...new Set(quote.applied.map((a) => a.promotionId))].sort((a, b) => a - b);
+  if (promotionIds.length === 0) {
+    const [, [order]] = await db.batch([place, read]);
+    return order ?? null;
+  }
+  // Locks in id order so two checkouts can't deadlock; one racing for the
+  // same promotion waits here until the first commits, then its guard
+  // (a later statement, so a fresh snapshot) counts the winner's order.
+  const [, , [order]] = await db.batch([
+    db.execute(sql`select id from ${promotions} where id in ${promotionIds} order by id for update`),
+    place,
+    read,
+  ]);
+  return order ?? null;
 }

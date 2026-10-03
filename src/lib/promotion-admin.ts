@@ -12,40 +12,42 @@ import {
   promotions,
 } from "@/db";
 import { toTerms } from "@/lib/promotion-queries";
+import { keptLedger, usesOf } from "@/lib/promotion-usage";
 import { isOrderReward } from "@/lib/promotion-schema";
 
 export type PromotionStats = {
+  /** Redemptions, the number its limits count. */
   uses: number;
+  /** Everything taken off under this deal's name, operator comps included. */
   discountedCents: number;
-  /** Item subtotal less item discounts, over the non-canceled orders that used it. */
+  /** Item subtotal less item discounts, over the non-canceled orders that carry it. */
   netSalesCents: number;
 };
 
 const NO_STATS: PromotionStats = { uses: 0, discountedCents: 0, netSalesCents: 0 };
 
 async function statsByPromotion(promotionId?: number): Promise<Map<number, PromotionStats>> {
-  const only = promotionId === undefined ? sql`true` : sql`d.promotion_id = ${promotionId}`;
+  const only = promotionId === undefined ? sql`d.promotion_id is not null` : sql`d.promotion_id = ${promotionId}`;
   const { rows } = await db.execute<{
     promotion_id: number;
     uses: string;
     discounted: string;
     net_sales: string;
   }>(sql`
-    with used as (
+    with touched as (
       select d.promotion_id, d.order_id, sum(d.amount_cents) as amount
-      from ${orderDiscounts} d join ${orders} o on o.id = d.order_id
-      where d.promotion_id is not null and o.status <> 'canceled' and ${only}
+      from ${keptLedger} and ${only}
       group by d.promotion_id, d.order_id
     )
-    select used.promotion_id,
-      count(*) as uses,
-      sum(used.amount) as discounted,
+    select touched.promotion_id,
+      ${usesOf(sql`d.promotion_id = touched.promotion_id`)} as uses,
+      sum(touched.amount) as discounted,
       sum(o.subtotal_cents - coalesce((
         select sum(x.amount_cents) from ${orderDiscounts} x
         where x.order_id = o.id and x.target = 'items'
       ), 0)) as net_sales
-    from used join ${orders} o on o.id = used.order_id
-    group by used.promotion_id
+    from touched join ${orders} o on o.id = touched.order_id
+    group by touched.promotion_id
   `);
   return new Map(
     rows.map((r) => [
@@ -84,19 +86,7 @@ export async function getPromotion(id: number) {
   const [row] = await db.select().from(promotions).where(eq(promotions.id, id));
   if (!row) return null;
   const [codes, [{ totalCodes }], stats] = await Promise.all([
-    db
-      .select({
-        id: promotionCodes.id,
-        display: promotionCodes.display,
-        maxUses: promotionCodes.maxUses,
-        createdAt: promotionCodes.createdAt,
-        uses: sql<number>`(select count(*) from ${orderDiscounts} d join ${orders} o on o.id = d.order_id
-          where d.code_id = promotion_codes.id and o.status <> 'canceled')`.mapWith(Number),
-      })
-      .from(promotionCodes)
-      .where(eq(promotionCodes.promotionId, id))
-      .orderBy(sql`${promotionCodes.maxUses} nulls first`, asc(promotionCodes.id))
-      .limit(CODES_SHOWN),
+    listCodes(id, CODES_SHOWN),
     db
       .select({ totalCodes: sql<number>`count(*)`.mapWith(Number) })
       .from(promotionCodes)
@@ -104,6 +94,22 @@ export async function getPromotion(id: number) {
     statsByPromotion(id),
   ]);
   return { row, terms: toTerms(row), codes, totalCodes, stats: stats.get(id) ?? NO_STATS };
+}
+
+/** A promotion's codes, shared ones first, each with its redemptions. */
+export function listCodes(promotionId: number, limit?: number) {
+  const query = db
+    .select({
+      id: promotionCodes.id,
+      display: promotionCodes.display,
+      maxUses: promotionCodes.maxUses,
+      // Spelled out: a bare column here would bind to the subquery's own table.
+      uses: sql<number>`${usesOf(sql`d.code_id = promotion_codes.id`)}`.mapWith(Number),
+    })
+    .from(promotionCodes)
+    .where(eq(promotionCodes.promotionId, promotionId))
+    .orderBy(sql`${promotionCodes.maxUses} nulls first`, asc(promotionCodes.id));
+  return limit === undefined ? query : query.limit(limit);
 }
 
 /** Ever redeemed, canceled orders included: such a promotion can be archived but not deleted. */

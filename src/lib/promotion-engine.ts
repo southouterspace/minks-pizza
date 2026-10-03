@@ -90,6 +90,13 @@ export type AppliedDiscount = {
   amountCents: number;
   target: DiscountTarget;
   endsAt: Date | null;
+  /** What the checkout re-checks under lock before the order goes in. */
+  limits: {
+    totalLimit: number | null;
+    perCustomerLimit: number | null;
+    codeMaxUses: number | null;
+    newCustomersOnly: boolean;
+  };
 };
 
 /** Why a candidate can't apply, as data; promotion-copy.ts owns the words. */
@@ -354,6 +361,12 @@ function applyAll(chosen: PromotionCandidate[], input: EvaluateInput): AppliedDi
       amountCents: applyReward(c.promotion.reward, s, input.lines),
       target: rewardTarget(c.promotion.reward),
       endsAt: c.promotion.endsAt,
+      limits: {
+        totalLimit: c.promotion.totalLimit,
+        perCustomerLimit: c.promotion.perCustomerLimit,
+        codeMaxUses: c.code?.maxUses ?? null,
+        newCustomersOnly: c.promotion.newCustomersOnly,
+      },
     }))
     .filter((a) => a.amountCents > 0);
 }

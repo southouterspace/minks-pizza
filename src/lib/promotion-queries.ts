@@ -1,18 +1,10 @@
 import { and, eq, inArray, isNull, ne, sql } from "drizzle-orm";
-import {
-  categories,
-  db,
-  menuItems,
-  modifiers,
-  orderDiscounts,
-  orders,
-  promotionCodes,
-  promotions,
-} from "@/db";
+import { categories, db, menuItems, modifiers, orders, promotionCodes, promotions } from "@/db";
 import { normalizeCode } from "@/lib/promo-code";
 import { describeOffer, formatLastDay, type TargetNames } from "@/lib/promotion-copy";
 import type { PromotionCandidate, PromotionTerms } from "@/lib/promotion-engine";
 import { promotionRewardSchema } from "@/lib/promotion-schema";
+import { codeUsage, phoneKeySql, promotionUsage } from "@/lib/promotion-usage";
 
 export type PromotionRow = typeof promotions.$inferSelect;
 
@@ -21,37 +13,7 @@ export function toTerms(row: PromotionRow): PromotionTerms {
   return { ...row, reward: promotionRewardSchema.parse(row.reward) };
 }
 
-/** Digits-only phone, last ten, in SQL: the same key customerKeyFromPhone makes. */
-export const phoneKeySql = sql`right(regexp_replace(${orders.customerPhone}, '\\D', '', 'g'), 10)`;
-
 const kept = ne(orders.status, "canceled");
-
-/** Redemptions of each promotion over non-canceled orders, overall and for one customer. */
-export async function promotionUsage(promotionIds: number[], customerKey: string | null) {
-  if (promotionIds.length === 0) return new Map<number, { uses: number; customerUses: number }>();
-  const rows = await db
-    .select({
-      promotionId: orderDiscounts.promotionId,
-      uses: sql<number>`count(*)`.mapWith(Number),
-      customerUses: sql<number>`count(*) filter (where ${orderDiscounts.customerKey} = ${customerKey ?? ""})`.mapWith(Number),
-    })
-    .from(orderDiscounts)
-    .innerJoin(orders, eq(orders.id, orderDiscounts.orderId))
-    .where(and(inArray(orderDiscounts.promotionId, promotionIds), kept))
-    .groupBy(orderDiscounts.promotionId);
-  return new Map(rows.map((r) => [r.promotionId!, { uses: r.uses, customerUses: r.customerUses }]));
-}
-
-async function codeUsage(codeIds: number[]) {
-  if (codeIds.length === 0) return new Map<number, number>();
-  const rows = await db
-    .select({ codeId: orderDiscounts.codeId, uses: sql<number>`count(*)`.mapWith(Number) })
-    .from(orderDiscounts)
-    .innerJoin(orders, eq(orders.id, orderDiscounts.orderId))
-    .where(and(inArray(orderDiscounts.codeId, codeIds), kept))
-    .groupBy(orderDiscounts.codeId);
-  return new Map(rows.map((r) => [r.codeId!, r.uses]));
-}
 
 async function hasOrdered(customerKey: string | null): Promise<boolean> {
   if (!customerKey) return false;
