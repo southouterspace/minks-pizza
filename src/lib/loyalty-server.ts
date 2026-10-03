@@ -264,6 +264,28 @@ export async function findOrCreateMember(
   }
 }
 
+export async function memberByPhone(phone: string): Promise<LoyaltyMember | null> {
+  const [m] = await db.select().from(loyaltyMembers).where(eq(loyaltyMembers.phone, phone));
+  return m ?? null;
+}
+
+/**
+ * Batch after inserting a guest's order: enrolls the phone if it's new and
+ * links the order to its member.
+ */
+export function enrollStatements(orderId: string, phone: string, name: string) {
+  return [
+    db
+      .insert(loyaltyMembers)
+      .values({ phone, name: name || null, referralCode: newReferralCode() })
+      .onConflictDoNothing({ target: loyaltyMembers.phone }),
+    db
+      .update(orders)
+      .set({ loyaltyMemberId: sql`(select id from loyalty_members where phone = ${phone})` })
+      .where(eq(orders.id, orderId)),
+  ];
+}
+
 /** Points from `earn` entries in the trailing 365 days decide the tier. */
 export async function qualifyingPoints(memberId: number): Promise<number> {
   const [row] = await db

@@ -18,13 +18,14 @@ import { earnPoints, normalizePhone, rewardDiscount, tierFor } from "@/lib/loyal
 import {
   INSUFFICIENT_POINTS,
   currentPromotion,
-  findOrCreateMember,
+  enrollStatements,
   getLoyaltySettings,
   getMember,
   getReward,
   isInsufficientPoints,
   ledgerKey,
   ledgerStatement,
+  memberByPhone,
   qualifyingPoints,
   type LoyaltyMember,
   type LoyaltyReward,
@@ -294,11 +295,11 @@ export async function createOrder(
 
   const signedIn = ctx.memberId != null ? await getMember(ctx.memberId) : null;
   const phone = normalizePhone(input.customerPhone);
-  const member =
-    signedIn ??
-    (input.joinLoyalty && phone && (await getLoyaltySettings()).enabled
-      ? (await findOrCreateMember(phone, { name: input.customerName })).member
-      : null);
+  // A guest opting in is enrolled inside the order's batch, so a rejected
+  // order enrolls nobody. Until then a new phone earns like any new member.
+  const joiningPhone =
+    !signedIn && input.joinLoyalty && phone && (await getLoyaltySettings()).enabled ? phone : null;
+  const member = signedIn ?? (joiningPhone ? await memberByPhone(joiningPhone) : null);
 
   const quote = await quoteOrder(input, {
     member,
@@ -328,7 +329,6 @@ export async function createOrder(
   // both win.
   const orderId = randomUUID();
   const reward = quote.loyalty?.reward ?? null;
-  const orderMember = quote.loyalty ? member : null;
   try {
     const [[order]] = await db.batch([
       db
@@ -353,7 +353,7 @@ export async function createOrder(
           tipCents: input.tipCents,
           totalCents: quote.totalCents + input.tipCents,
           paymentStatus: "pending",
-          loyaltyMemberId: orderMember?.id ?? null,
+          loyaltyMemberId: quote.loyalty ? (signedIn?.id ?? null) : null,
           loyaltyRewardName: reward?.name ?? null,
           loyaltyPointsRedeemed: reward?.price.cost ?? 0,
           loyaltyPointsEarned: quote.loyalty?.pointsEarned ?? 0,
@@ -379,14 +379,15 @@ export async function createOrder(
           station: l.station,
         })),
       ),
-      ...(reward && orderMember
+      ...(quote.loyalty && joiningPhone ? enrollStatements(orderId, joiningPhone, input.customerName) : []),
+      ...(reward && signedIn
         ? [
             ledgerStatement({
               kind: "redeem",
               idemKey: ledgerKey.redeem(orderId),
               orderId,
               note: reward.name,
-              from: { memberId: orderMember.id, points: -reward.price.cost },
+              from: { memberId: signedIn.id, points: -reward.price.cost },
             }),
           ]
         : []),
