@@ -555,6 +555,42 @@ the webhook route and the admin UI are untested against real services.
   production database. `mcp__Neon__create_branch` makes an isolated copy in
   seconds; point `MINKS_DATABASE_URL` at it and delete the branch afterwards.
 
+- React 19 resets a `<form>` after its action finishes. A Base UI `Switch`
+  inside one snaps its hidden checkbox back to the first-render value, so the
+  next click changes nothing React can see. `ToggleSwitchForm` (now `ActionSwitch`) calls its
+  action in a transition instead of submitting a form.
+- Next's route announcer has `role="alert"`; target form errors by
+  `data-testid`, not `getByRole("alert")`.
+- Drizzle sends `sql` params untyped, so a raw `VALUES (...)` list reads as
+  text. Cast (`::int`, `::jsonb`) or the insert fails on integer columns.
+
+## Loyalty program (session 4)
+
+- Every balance change is one `ledgerStatement` in `src/lib/loyalty-server.ts`:
+  `INSERT ... ON CONFLICT (idem_key) DO NOTHING` feeding an `UPDATE` of the
+  cached balance. It rides inside `db.batch` with the order write that caused
+  it, so the `points_balance >= 0` CHECK rejects an overspend atomically.
+- Program rules are pure in `src/lib/loyalty.ts` (`npm test`), including
+  `applyReward()`, the checkout eligibility ladder.
+- Completion and cancel side effects hang off `ON_ENTER` in
+  `src/lib/order-writes.ts`: every status writer (admin board, KDS, e2e) uses
+  `transitionStatements`, so points post in the same batch as the logged move.
+  `refreshMember` only does what time alone makes due: expiry and birthday.
+- Idempotency keys only deduplicate. Ask the ledger by `kind` (restores,
+  referral sides) or `reverses_entry_id`, never by key prefix.
+- `npm run loyalty:audit` (`auditBalances()` in lib) checks balance =
+  SUM(ledger) and lifetime = SUM(positive lifetime-earning entries).
+- `npm run e2e:loyalty` runs independent `node:test` scenarios
+  (`scripts/e2e/loyalty.e2e.ts`) on the shared `scripts/e2e/harness.ts`
+  against a dev server (`E2E_BASE_URL=http://localhost:3417`). Each scenario
+  makes its own members on fresh phones; the suite owns the program settings
+  and rewards named "E2E …" and restores them, then runs the audit. It is
+  safe to re-run, but still writes orders: test branch only.
+  `E2E_SHOT_DIR=<dir>` adds desktop and 375px screenshots.
+- Sign-in codes go out by Twilio when `TWILIO_ACCOUNT_SID`,
+  `TWILIO_AUTH_TOKEN` and `TWILIO_FROM_NUMBER` are set; in development the
+  code shows on screen; in production without Twilio, sign-in is refused.
+
 ## Decisions & findings
 
 - 2026-08-12: Container restarted once mid-session; disk survived, background

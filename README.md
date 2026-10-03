@@ -107,8 +107,9 @@ minutes from Settings. The customer's tracker shows "Ready around 6:45 PM"
 while the order is cooking and the cancel reason if it was canceled.
 
 **Time zone.** Settings → Time zone decides when the store's day starts for
-the board numbers and history dates, and the clock that promised times are
-shown in. Default: Central.
+the board numbers and history dates, the clock that promised times are
+shown in, and the day rewards promotions and birthdays fall on. Default:
+Central.
 
 ##### Deploying the order-management schema
 
@@ -212,6 +213,62 @@ update categories set station = 'counter' where name ilike '%drink%' or name ili
 ```
 
 Orders placed before the migration default to the Kitchen station.
+
+### Rewards (`/rewards`, `/admin/loyalty`)
+
+A points program the operator turns on in **Loyalty**. It is off until then.
+Research behind the defaults is in `docs/loyalty-research.md`, and the
+customer complaints it answers are in `docs/loyalty-complaints.md`.
+
+- **Earning.** 10 points per $1 of food and drink after any reward discount.
+  Tax, tip and the delivery fee don't earn. Points post when the order is
+  completed and are shown as Pending until then. Guests join by phone with a
+  checkbox at checkout, with no sign-in needed to earn.
+- **Spending.** Signed-in members pick a reward at checkout ($3 off at 300,
+  a free side at 700, a free large pizza at 1,500 by default). Totals come
+  from the server. A cancel returns the points.
+- **Sign-in.** A 6-digit code texted to the phone, with no passwords.
+  **Production needs `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN` and
+  `TWILIO_FROM_NUMBER`**. Without them, customers still earn but can't sign
+  in to spend, and the admin shows a warning. In development the code is
+  shown on screen.
+- **Bonuses.** Welcome bonus on the first completed order of $15+, a
+  birthday bonus, referral bonuses for both sides, and promotions such as
+  double points on Tuesdays. Welcome and referral bonuses post with the
+  completion that earns them. A referrer already paid for 10 friends in the
+  last year gets nothing for the next one, then or later.
+- **Trust rules.** A raised reward price keeps the old price for 60 days.
+  Points expire only after 12 months with no completed order, and the
+  rewards page shows the date. Balances never go below zero. Signing in
+  claims the member's phone-matched orders from the last 30 days. Members can
+  delete their account.
+- **Operators.** Members search, ledger, point adjustments with a reason,
+  restore of expired points, a missing-order claim, rewards and promotions
+  editors, tiers and program settings.
+
+Every balance change is one SQL statement that appends to `loyalty_ledger`
+and moves the cached balance together (`ledgerStatement` in
+`src/lib/loyalty-server.ts`). Each entry has a unique idempotency key, so
+replays do nothing, and a `CHECK (points_balance >= 0)` makes overspending
+fail the whole order transaction. `npm run loyalty:audit` confirms every
+balance and lifetime total matches the ledger, and `npm run e2e:loyalty`
+runs the end-to-end scenarios against a dev server on a test database.
+
+#### Deploying the rewards schema
+
+Checkout reads the new columns, so **migrate production before deploying**:
+
+```bash
+MINKS_DATABASE_URL=<production url> npm run db:push   # additive: new tables, enum and order columns with defaults
+```
+
+Production has no loyalty rows yet, so the push needs no data migration. A
+database that ran an earlier build of this branch has `referral` ledger rows
+and restores stored as `adjust`. Convert those by idempotency-key prefix
+(`referral:referrer:` to `referrer_bonus`, `referral:referee:` to
+`referee_bonus`, `restore:` to `restore`) before pushing, then recompute
+`lifetime_points` from the lifetime-earning kinds. `npm run loyalty:audit`
+checks both the balance and the lifetime total afterwards.
 
 ### Staff: scheduling and time clock
 

@@ -1,3 +1,5 @@
+import { randomUUID } from "node:crypto";
+import { cache } from "react";
 import { eq, inArray } from "drizzle-orm";
 import {
   categories,
@@ -12,7 +14,31 @@ import {
   storeSettings,
   type OrderItemModifier,
 } from "@/db";
+
+type StoreSettings = typeof storeSettings.$inferSelect;
 import type { KitchenStation } from "@/lib/kds";
+import {
+  INSUFFICIENT_POINTS,
+  activePromotion,
+  applyReward,
+  earnPoints,
+  normalizePhone,
+  tierFor,
+  type Redemption,
+} from "@/lib/loyalty";
+import {
+  enrollStatements,
+  getLoyaltySettings,
+  getReward,
+  isInsufficientPoints,
+  ledgerKey,
+  ledgerStatement,
+  listPromotions,
+  memberByPhone,
+  qualifyingPoints,
+  type LoyaltyMember,
+  type LoyaltyReward,
+} from "@/lib/loyalty-server";
 import { taxFromBps } from "@/lib/money";
 import type { CheckoutInput } from "@/lib/validation";
 
@@ -25,26 +51,26 @@ export type PricedLine = {
   modifiers: OrderItemModifier[];
   notes?: string;
   station: KitchenStation;
+  categoryId: number;
 };
 
 export type PricedCart = {
   lines: PricedLine[];
   subtotalCents: number;
-  taxCents: number;
   deliveryFeeCents: number;
-  totalCents: number; // before tip
 };
 
 export class OrderError extends Error {}
 
-export async function getSettings() {
+/** Read once per request (React cache); outside a render it reads every time. */
+export const getSettings = cache(async () => {
   const [settings] = await db
     .select()
     .from(storeSettings)
     .where(eq(storeSettings.id, 1));
   if (!settings) throw new OrderError("Store is not configured yet.");
   return settings;
-}
+});
 
 /**
  * Server-side pricing: the client's cart carries only ids + quantities; every
@@ -54,8 +80,8 @@ export async function getSettings() {
 export async function priceCart(
   lines: CheckoutInput["lines"],
   orderType: "pickup" | "delivery",
+  settings: Pick<StoreSettings, "deliveryFeeCents">,
 ): Promise<PricedCart> {
-  const settings = await getSettings();
 
   const itemIds = [...new Set(lines.map((l) => l.itemId))];
   const items = await db
@@ -147,20 +173,76 @@ export async function priceCart(
       modifiers: chosen,
       notes: line.notes,
       station: item.station,
+      categoryId: item.categoryId,
     };
   });
 
-  const subtotalCents = priced.reduce((sum, l) => sum + l.lineTotalCents, 0);
-  const deliveryFeeCents =
-    orderType === "delivery" ? settings.deliveryFeeCents : 0;
-  const taxCents = taxFromBps(subtotalCents, settings.taxRateBps);
-
   return {
     lines: priced,
-    subtotalCents,
+    subtotalCents: priced.reduce((sum, l) => sum + l.lineTotalCents, 0),
+    deliveryFeeCents: orderType === "delivery" ? settings.deliveryFeeCents : 0,
+  };
+}
+
+export type OrderQuote = PricedCart & {
+  discountCents: number;
+  taxCents: number;
+  totalCents: number; // before tip
+  loyalty: {
+    programName: string;
+    /** A rejected redemption means the order would be refused. */
+    redemption: Redemption<LoyaltyReward>;
+    pointsEarned: number;
+    promoName: string | null;
+  } | null;
+};
+
+/**
+ * Prices a cart and applies the loyalty program: the reward discount (tax is
+ * on the discounted subtotal) and the points this order will earn. `member`
+ * earns, and spends when `rewardId` is set.
+ */
+export async function quoteOrder(
+  input: Pick<CheckoutInput, "lines" | "orderType" | "rewardId">,
+  member: LoyaltyMember | null,
+): Promise<OrderQuote> {
+  const rewardId = input.rewardId ?? null;
+  const [settings, loyalty, promos, reward, qualifying] = await Promise.all([
+    getSettings(),
+    getLoyaltySettings(),
+    listPromotions(),
+    rewardId === null ? null : getReward(rewardId),
+    member ? qualifyingPoints(member.id) : 0,
+  ]);
+  const cart = await priceCart(input.lines, input.orderType, settings);
+
+  const redemption: Redemption<LoyaltyReward> =
+    loyalty.enabled && rewardId !== null ? applyReward(reward, member, cart.lines) : { status: "none" };
+  const discountCents = redemption.status === "applied" ? redemption.discountCents : 0;
+  const netCents = cart.subtotalCents - discountCents;
+  const taxCents = taxFromBps(netCents, settings.taxRateBps);
+  const base = {
+    ...cart,
+    discountCents,
     taxCents,
-    deliveryFeeCents,
-    totalCents: subtotalCents + taxCents + deliveryFeeCents,
+    totalCents: netCents + taxCents + cart.deliveryFeeCents,
+  };
+  if (!loyalty.enabled) return { ...base, loyalty: null };
+
+  const promo = activePromotion(promos, new Date(), settings.timezone);
+  return {
+    ...base,
+    loyalty: {
+      programName: loyalty.programName,
+      redemption,
+      promoName: promo?.name ?? null,
+      pointsEarned: earnPoints({
+        netCents,
+        pointsPerDollar: loyalty.pointsPerDollar,
+        tierMultiplierBps: tierFor(qualifying, loyalty.tiers).multiplierBps,
+        promoMultiplierBps: promo?.multiplierBps ?? 10_000,
+      }),
+    },
   };
 }
 
@@ -172,9 +254,12 @@ export async function priceCart(
  * and flip payment_status to 'paid' from the Stripe webhook. Everything
  * upstream (validation, pricing) and downstream (confirmation page,
  * admin inbox) already works off the persisted order.
+ *
+ * `signedIn` is the member from the session, never from the client; only
+ * they can spend points. A guest who opts in earns on their phone number.
  */
-export async function createOrder(input: CheckoutInput) {
-  const settings = await getSettings();
+export async function createOrder(input: CheckoutInput, signedIn: LoyaltyMember | null = null) {
+  const [settings, loyalty] = await Promise.all([getSettings(), getLoyaltySettings()]);
 
   if (!settings.isPublished) {
     throw new OrderError("This store is not accepting online orders yet.");
@@ -190,12 +275,23 @@ export async function createOrder(input: CheckoutInput) {
   if (input.orderType === "delivery" && !settings.deliveryEnabled) {
     throw new OrderError("Delivery is not available right now.");
   }
+  if (loyalty.enabled && input.rewardId != null && !signedIn) {
+    throw new OrderError("Sign in to use your points.");
+  }
 
-  const cart = await priceCart(input.lines, input.orderType);
+  const phone = normalizePhone(input.customerPhone);
+  // A guest opting in is enrolled inside the order's batch, so a rejected
+  // order enrolls nobody. Until then a new phone earns like any new member.
+  const joiningPhone = loyalty.enabled && !signedIn && input.joinLoyalty && phone ? phone : null;
+  const member = signedIn ?? (joiningPhone ? await memberByPhone(joiningPhone) : null);
+
+  const quote = await quoteOrder(input, member);
+  const redemption = quote.loyalty?.redemption ?? { status: "none" };
+  if (redemption.status === "rejected") throw new OrderError(redemption.error);
 
   if (
     input.orderType === "delivery" &&
-    cart.subtotalCents < settings.deliveryMinimumCents
+    quote.subtotalCents < settings.deliveryMinimumCents
   ) {
     throw new OrderError(
       `Delivery orders have a minimum subtotal of $${(
@@ -208,54 +304,78 @@ export async function createOrder(input: CheckoutInput) {
   const prepMinutes =
     input.orderType === "delivery" ? settings.deliveryPrepMinutes : settings.pickupPrepMinutes;
 
-  // The id is minted here so the order, its lines and its "placed" event go
-  // in as one transaction: a failure can't leave an order with no items.
-  const orderId = crypto.randomUUID();
-  const [[order]] = await db.batch([
-    db
-      .insert(orders)
-      .values({
-        id: orderId,
-        placedAt,
-        promisedAt: new Date(placedAt.getTime() + prepMinutes * 60_000),
-        orderType: input.orderType,
-        customerName: input.customerName,
-        customerPhone: input.customerPhone,
-        customerEmail: input.customerEmail || null,
-        addressLine1: input.addressLine1 || null,
-        addressLine2: input.addressLine2 || null,
-        city: input.city || null,
-        zip: input.zip || null,
-        orderNotes: input.orderNotes || null,
-        subtotalCents: cart.subtotalCents,
-        taxCents: cart.taxCents,
-        deliveryFeeCents: cart.deliveryFeeCents,
-        tipCents: input.tipCents,
-        totalCents: cart.totalCents + input.tipCents,
-        paymentStatus: "pending",
-      })
-      .returning(),
-    db.insert(orderEvents).values({
-      orderId,
-      type: "placed",
-      toStatus: "new",
-      actor: "Customer",
-      createdAt: placedAt,
-    }),
-    db.insert(orderItems).values(
-      cart.lines.map((l) => ({
+  // The id is minted here so the order, its lines, its "placed" event and
+  // the points it spends go in as one transaction: a failure can't leave an
+  // order with no items, and two orders racing for the same points can't
+  // both win.
+  const orderId = randomUUID();
+  const reward = redemption.status === "applied" ? redemption.reward : null;
+  try {
+    const [[order]] = await db.batch([
+      db
+        .insert(orders)
+        .values({
+          id: orderId,
+          placedAt,
+          promisedAt: new Date(placedAt.getTime() + prepMinutes * 60_000),
+          orderType: input.orderType,
+          customerName: input.customerName,
+          customerPhone: input.customerPhone,
+          customerEmail: input.customerEmail || null,
+          addressLine1: input.addressLine1 || null,
+          addressLine2: input.addressLine2 || null,
+          city: input.city || null,
+          zip: input.zip || null,
+          orderNotes: input.orderNotes || null,
+          subtotalCents: quote.subtotalCents,
+          discountCents: quote.discountCents,
+          taxCents: quote.taxCents,
+          deliveryFeeCents: quote.deliveryFeeCents,
+          tipCents: input.tipCents,
+          totalCents: quote.totalCents + input.tipCents,
+          paymentStatus: "pending",
+          loyaltyMemberId: quote.loyalty ? (signedIn?.id ?? null) : null,
+          loyaltyRewardName: reward?.name ?? null,
+          loyaltyPointsRedeemed: reward?.price.cost ?? 0,
+          loyaltyPointsEarned: quote.loyalty?.pointsEarned ?? 0,
+        })
+        .returning(),
+      db.insert(orderEvents).values({
         orderId,
-        menuItemId: l.itemId,
-        itemName: l.itemName,
-        quantity: l.quantity,
-        unitPriceCents: l.unitPriceCents,
-        lineTotalCents: l.lineTotalCents,
-        modifiers: l.modifiers,
-        notes: l.notes || null,
-        station: l.station,
-      })),
-    ),
-  ]);
-
-  return order;
+        type: "placed",
+        toStatus: "new",
+        actor: "Customer",
+        createdAt: placedAt,
+      }),
+      db.insert(orderItems).values(
+        quote.lines.map((l) => ({
+          orderId,
+          menuItemId: l.itemId,
+          itemName: l.itemName,
+          quantity: l.quantity,
+          unitPriceCents: l.unitPriceCents,
+          lineTotalCents: l.lineTotalCents,
+          modifiers: l.modifiers,
+          notes: l.notes || null,
+          station: l.station,
+        })),
+      ),
+      ...(quote.loyalty && joiningPhone ? enrollStatements(orderId, joiningPhone, input.customerName) : []),
+      ...(reward && signedIn
+        ? [
+            ledgerStatement({
+              kind: "redeem",
+              idemKey: ledgerKey.redeem(orderId),
+              orderId,
+              note: reward.name,
+              from: { memberId: signedIn.id, points: -reward.price.cost },
+            }),
+          ]
+        : []),
+    ]);
+    return order;
+  } catch (err) {
+    if (isInsufficientPoints(err)) throw new OrderError(INSUFFICIENT_POINTS);
+    throw err;
+  }
 }

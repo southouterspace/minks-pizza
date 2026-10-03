@@ -12,6 +12,7 @@ import {
   unique,
   uniqueIndex,
   uuid,
+  type AnyPgColumn,
 } from "drizzle-orm/pg-core";
 import { relations, sql } from "drizzle-orm";
 import {
@@ -21,6 +22,12 @@ import {
   TERMINAL_COURIER_STATUSES,
 } from "../lib/delivery/types";
 import { KITCHEN_STATIONS } from "../lib/kds";
+import {
+  DEFAULT_TIERS,
+  LEDGER_KINDS,
+  type LoyaltyTier,
+  type RewardEffect,
+} from "../lib/loyalty";
 import {
   DEFAULT_STAFF_RULES,
   JOB_ROLES,
@@ -291,6 +298,15 @@ export const orders = pgTable(
       .defaultNow(),
     /** Set when the kitchen bumps the order (status → ready); cleared on recall. */
     readyAt: timestamp("ready_at", { withTimezone: true }),
+    loyaltyMemberId: integer("loyalty_member_id").references(
+      (): AnyPgColumn => loyaltyMembers.id,
+      { onDelete: "set null" },
+    ),
+    discountCents: integer("discount_cents").notNull().default(0),
+    loyaltyRewardName: text("loyalty_reward_name"),
+    loyaltyPointsRedeemed: integer("loyalty_points_redeemed").notNull().default(0),
+    /** Promised at checkout, posted to the ledger when the order completes. */
+    loyaltyPointsEarned: integer("loyalty_points_earned").notNull().default(0),
     updatedAt: timestamp("updated_at", { withTimezone: true })
       .notNull()
       .defaultNow(),
@@ -504,6 +520,136 @@ export const timeOffRequests = pgTable(
     // or a double tap lands on the existing row instead of a second one.
     uniqueIndex("time_off_one_live").on(t.employeeId, t.startDate, t.endDate).where(sql`${t.status} <> 'denied'`),
   ],
+);
+
+// ---------------------------------------------------------------------------
+// Loyalty
+// ---------------------------------------------------------------------------
+
+export const loyaltyEntryKindEnum = pgEnum("loyalty_entry_kind", LEDGER_KINDS);
+
+export const loyaltySettings = pgTable("loyalty_settings", {
+  id: integer("id").primaryKey(), // always 1
+  enabled: boolean("enabled").notNull().default(false),
+  programName: text("program_name").notNull().default("Mink's Rewards"),
+  pointsPerDollar: integer("points_per_dollar").notNull().default(10),
+  signupBonus: integer("signup_bonus").notNull().default(200),
+  birthdayPoints: integer("birthday_points").notNull().default(700),
+  referrerBonus: integer("referrer_bonus").notNull().default(500),
+  refereeBonus: integer("referee_bonus").notNull().default(300),
+  /** Months of inactivity before the balance expires; null = never. */
+  expirationMonths: integer("expiration_months").default(12),
+  tiers: jsonb("tiers").$type<LoyaltyTier[]>().notNull().default(DEFAULT_TIERS),
+  updatedAt: timestamp("updated_at", { withTimezone: true })
+    .notNull()
+    .defaultNow(),
+});
+
+export const loyaltyRewards = pgTable("loyalty_rewards", {
+  id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+  name: text("name").notNull(),
+  description: text("description"),
+  pointsCost: integer("points_cost").notNull(),
+  /** While protected, customers pay min(points_cost, previous_points_cost). */
+  previousPointsCost: integer("previous_points_cost"),
+  priceProtectedUntil: timestamp("price_protected_until", { withTimezone: true }),
+  effect: jsonb("effect").$type<RewardEffect>().notNull(),
+  isActive: boolean("is_active").notNull().default(true),
+  sortOrder: integer("sort_order").notNull().default(0),
+  createdAt: timestamp("created_at", { withTimezone: true })
+    .notNull()
+    .defaultNow(),
+});
+
+export const loyaltyPromotions = pgTable("loyalty_promotions", {
+  id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+  name: text("name").notNull(),
+  multiplierBps: integer("multiplier_bps").notNull(), // 20000 = 2x
+  /** 0 = Sunday; empty = every day. */
+  daysOfWeek: jsonb("days_of_week").$type<number[]>().notNull().default([]),
+  /** Inclusive, in the store's timezone. */
+  startsOn: date("starts_on"),
+  endsOn: date("ends_on"),
+  isActive: boolean("is_active").notNull().default(true),
+  createdAt: timestamp("created_at", { withTimezone: true })
+    .notNull()
+    .defaultNow(),
+});
+
+export const loyaltyMembers = pgTable(
+  "loyalty_members",
+  {
+    id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+    phone: text("phone").notNull().unique(), // 10 digits
+    name: text("name"),
+    birthMonth: integer("birth_month"),
+    birthDay: integer("birth_day"),
+    birthdaySetAt: timestamp("birthday_set_at", { withTimezone: true }),
+    referralCode: text("referral_code").notNull().unique(),
+    referredById: integer("referred_by_id").references(
+      (): AnyPgColumn => loyaltyMembers.id,
+      { onDelete: "set null" },
+    ),
+    /** Cache of SUM(loyalty_ledger.points); only the ledger statement writes it. */
+    pointsBalance: integer("points_balance").notNull().default(0),
+    lifetimePoints: integer("lifetime_points").notNull().default(0),
+    verifiedAt: timestamp("verified_at", { withTimezone: true }),
+    /** Last completed order, or enrollment; points expire on inactivity. */
+    lastActivityAt: timestamp("last_activity_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (t) => [check("points_balance_non_negative", sql`${t.pointsBalance} >= 0`)],
+);
+
+export const loyaltyLedger = pgTable(
+  "loyalty_ledger",
+  {
+    id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+    memberId: integer("member_id")
+      .notNull()
+      .references(() => loyaltyMembers.id, { onDelete: "cascade" }),
+    kind: loyaltyEntryKindEnum("kind").notNull(),
+    points: integer("points").notNull(),
+    orderId: uuid("order_id").references(() => orders.id, {
+      onDelete: "set null",
+    }),
+    idemKey: text("idem_key").notNull().unique(),
+    note: text("note"),
+    operatorId: integer("operator_id").references(() => operators.id, {
+      onDelete: "set null",
+    }),
+    /** The entry this one undoes (a restore names its expiry); at most once. */
+    reversesEntryId: integer("reverses_entry_id")
+      .unique()
+      .references((): AnyPgColumn => loyaltyLedger.id, { onDelete: "cascade" }),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (t) => [
+    check("points_non_zero", sql`${t.points} <> 0`),
+    index("loyalty_ledger_member_created_idx").on(t.memberId, t.createdAt),
+  ],
+);
+
+export const loyaltyLoginCodes = pgTable(
+  "loyalty_login_codes",
+  {
+    id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+    phone: text("phone").notNull(),
+    codeHash: text("code_hash").notNull(),
+    expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+    attempts: integer("attempts").notNull().default(0),
+    consumedAt: timestamp("consumed_at", { withTimezone: true }),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (t) => [index("loyalty_login_codes_phone_idx").on(t.phone)],
 );
 
 // ---------------------------------------------------------------------------

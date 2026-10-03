@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { Minus, Plus, ShoppingBag } from "lucide-react";
 import { useCart } from "@/components/cart-context";
+import { CartPoints, type CartLoyalty } from "@/components/store/cart-points";
 import { formatCents } from "@/lib/money";
 import { Button, buttonVariants } from "@/components/ui/button";
 import {
@@ -16,7 +17,7 @@ import {
 import { Separator } from "@/components/ui/separator";
 import { cn } from "@/lib/utils";
 
-export function CartView() {
+export function CartView({ loyalty }: { loyalty: CartLoyalty | null }) {
   const { lines, subtotalCents, updateQuantity, removeLine, ready } = useCart();
 
   if (!ready) {
@@ -127,6 +128,7 @@ export function CartView() {
       <p className="mt-1 text-xs text-muted-foreground">
         Tax, fees, and tip are calculated at checkout.
       </p>
+      {loyalty ? <CartPoints lines={lines} loyalty={loyalty} /> : null}
 
       <Separator className="mt-6" />
 
