@@ -23,7 +23,6 @@ const qtyLine = z.object({
   unit: z.string().min(1).max(40),
 });
 
-/** Every unit each ingredient accepts: its packs plus its base unit's registry units. */
 async function unitsById(ids: readonly number[]): Promise<Map<number, UnitDef[]>> {
   if (ids.length === 0) return new Map();
   const [rows, packs] = await Promise.all([
@@ -38,7 +37,6 @@ async function unitsById(ids: readonly number[]): Promise<Map<number, UnitDef[]>
   );
 }
 
-/** The line's unit as one the ingredient accepts, or null when it doesn't. */
 function unitOf(units: Map<number, UnitDef[]>, line: z.infer<typeof qtyLine>): UnitDef | null {
   return units.get(line.ingredientId)?.find((u) => u.name === line.unit) ?? null;
 }

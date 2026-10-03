@@ -1,12 +1,3 @@
-/**
- * Starter ingredients and recipes for the seeded menu, so a fresh database
- * demos depletion, costing and auto-86 out of the box. Idempotent: group
- * kinds and extra prices are set by name, and ingredients and recipe lines
- * are inserted only where absent, so it is safe on a database that already
- * has some of this. No 86 thresholds: an ingredient that has never been
- * counted sits at zero on hand, and a threshold would 86 the whole menu
- * before the first count. Operators set them per ingredient.
- */
 import { eq } from "drizzle-orm";
 import type { NeonHttpDatabase } from "drizzle-orm/neon-http";
 import * as schema from "./schema";
@@ -15,10 +6,8 @@ type Db = NeonHttpDatabase<typeof schema>;
 
 const OZ = 28_350;
 
-/** $/lb as millicents per gram. */
 const perLb = (dollars: number) => Math.round((dollars * 100 * 1000) / 453.592);
 
-/** Ounces at Small, Medium, Large, X-Large. */
 type BySize = readonly [number, number, number, number];
 const SIZES = ['Small 10"', 'Medium 12"', 'Large 14"', 'X-Large 16"'] as const;
 
@@ -44,7 +33,6 @@ const INGREDIENTS: (typeof schema.ingredients.$inferInsert)[] = [
 const SAUCE: BySize = [3, 4, 5, 6];
 const CHEESE: BySize = [5, 6, 8, 10];
 
-/** Each pizza: toppings in ounces by size, on top of dough, sauce and cheese. */
 const PIZZAS: Record<string, { sauce?: string; toppings: [string, BySize][] }> = {
   "Margherita": { toppings: [["Tomatoes", [2, 2.5, 3, 3.5]], ["Fresh basil", [0.2, 0.25, 0.3, 0.35]]] },
   "Pepperoni Classic": { toppings: [["Pepperoni", [3, 4, 5, 6]]] },
@@ -58,7 +46,6 @@ const PIZZAS: Record<string, { sauce?: string; toppings: [string, BySize][] }> =
   "Cheese Pizza": { toppings: [] },
 };
 
-/** "Extra Toppings" modifiers: ingredient, ounces by size, and the extra-portion price. */
 const TOPPINGS: Record<string, { ingredient: string; oz: BySize; extraPriceCents: number }> = {
   "Pepperoni": { ingredient: "Pepperoni", oz: [1.5, 2, 3, 3.5], extraPriceCents: 300 },
   "Italian Sausage": { ingredient: "Italian sausage", oz: [1.5, 2, 3, 3.5], extraPriceCents: 300 },
@@ -126,7 +113,6 @@ export async function seedInventory(db: Db): Promise<{ ingredients: number; reci
     if (mod) bySize({ menuItemId: null, modifierId: mod.id }, topping.ingredient, topping.oz);
   }
 
-  // The unique constraint treats nulls as equal, so a re-run skips every line it already wrote.
   const inserted = lines.length
     ? await db.insert(schema.recipeLines).values(lines).onConflictDoNothing().returning({ id: schema.recipeLines.id })
     : [];

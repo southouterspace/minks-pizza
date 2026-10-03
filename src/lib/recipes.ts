@@ -1,8 +1,3 @@
-/**
- * Recipes: how much of each ingredient a menu item or modifier uses at a
- * given size, and the theoretical usage and cost of an order built from
- * them. Shared by server and client — no I/O.
- */
 import {
   DEFAULT_CHOICE,
   selectionFactorBps,
@@ -15,14 +10,11 @@ export type RecipeOwner = { kind: "item"; id: number } | { kind: "modifier"; id:
 
 export type RecipeLine = {
   owner: RecipeOwner;
-  /** Null = applies at every size the owner has no size-specific line for. */
   sizeModifierId: number | null;
   ingredientId: number;
-  /** Signed: negative lines model removals ("No onions"). */
   qtyMilli: number;
 };
 
-/** The `recipe_lines` row shape, as read from the database. */
 export type RecipeLineRow = {
   menuItemId: number | null;
   modifierId: number | null;
@@ -48,7 +40,6 @@ export function ownerKey(owner: RecipeOwner): string {
   return `${owner.kind}:${owner.id}`;
 }
 
-/** Recipe lines indexed by owner, for one lookup per order line component. */
 export type RecipeBook = ReadonlyMap<string, readonly RecipeLine[]>;
 
 export function buildRecipeBook(lines: readonly RecipeLine[]): RecipeBook {
@@ -62,13 +53,8 @@ export function buildRecipeBook(lines: readonly RecipeLine[]): RecipeBook {
   return book;
 }
 
-/** Ingredient → signed milli quantity. */
 export type Usage = Map<number, number>;
 
-/**
- * The owner's lines that apply at `sizeId`: per ingredient, the line for
- * that size, else the size-less line, else nothing.
- */
 export function resolveLines(book: RecipeBook, owner: RecipeOwner, sizeId: number | null): Usage {
   const usage: Usage = new Map();
   const sized = new Set<number>();
@@ -83,7 +69,6 @@ export function resolveLines(book: RecipeBook, owner: RecipeOwner, sizeId: numbe
   return usage;
 }
 
-/** One order line as the recipe engine sees it: the `order_items` row. */
 export type UsageLine = {
   menuItemId: number | null;
   quantity: number;
@@ -92,7 +77,6 @@ export type UsageLine = {
 
 export type RecipeContext = {
   book: RecipeBook;
-  /** Ids of every modifier in a `size` group: the one on the line picks the recipe size. */
   sizeModifierIds: ReadonlySet<number>;
   settings: PortionSettings;
 };
@@ -103,11 +87,6 @@ function add(into: Usage, from: Usage, factor: number) {
   }
 }
 
-/**
- * Theoretical usage of one order line, unrounded: the item's recipe plus each
- * modifier's recipe scaled by its placement and portion, removals clamped so
- * a "No onions" never credits stock, times the line quantity.
- */
 export function orderLineUsage(line: UsageLine, ctx: RecipeContext): Usage {
   const sizeId =
     line.modifiers.find((m) => m.modifierId !== undefined && ctx.sizeModifierIds.has(m.modifierId))
@@ -132,7 +111,6 @@ export function orderLineUsage(line: UsageLine, ctx: RecipeContext): Usage {
   return usage;
 }
 
-/** Whole-order usage, each ingredient rounded to integer milli once. */
 export function orderUsage(lines: readonly UsageLine[], ctx: RecipeContext): Usage {
   const total: Usage = new Map();
   for (const line of lines) add(total, orderLineUsage(line, ctx), 1);
@@ -144,10 +122,8 @@ export function orderUsage(lines: readonly UsageLine[], ctx: RecipeContext): Usa
   return total;
 }
 
-/** Ingredient → millicents per base unit. */
 export type UnitCosts = ReadonlyMap<number, number>;
 
-/** Food cost of a usage in whole cents, rounded once. Unknown ingredients cost nothing. */
 export function costCents(usage: Usage, unitCosts: UnitCosts): number {
   let millicentsTimesMilli = 0;
   for (const [ingredientId, qty] of usage) {
@@ -156,7 +132,6 @@ export function costCents(usage: Usage, unitCosts: UnitCosts): number {
   return Math.round(millicentsTimesMilli / 1_000_000);
 }
 
-/** What one plate of `itemId` at `sizeId` with its default modifiers costs to make. */
 export function plateCost(
   itemId: number,
   sizeId: number | null,

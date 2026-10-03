@@ -50,7 +50,6 @@ export type IngredientFormValue = {
 
 type PackRow = { key: number; name: string; count: string; size: string; unit: string };
 
-/** A quantity as an amount in a readable unit, for prefilling an input pair. */
 function asEntry(milli: number | null, baseUnit: BaseUnit): { qty: string; unit: string } {
   if (milli === null) return { qty: "", unit: ENTRY_UNIT[baseUnit] };
   const unit = readableUnit([milli], baseUnit);
@@ -60,7 +59,6 @@ function asEntry(milli: number | null, baseUnit: BaseUnit): { qty: string; unit:
 function initialCost(ingredient: IngredientFormValue | undefined): string {
   if (!ingredient) return "";
   const unit = unitFor(COST_DISPLAY_UNIT[ingredient.baseUnit], ingredient.baseUnit)!;
-  // Four places so re-saving lands on the same millicents.
   return trimAmount(centsPerUnit(ingredient.unitCostMillicents, unit) / 100, 4);
 }
 
@@ -102,7 +100,6 @@ export function IngredientForm({
   storageAreas,
 }: {
   ingredient?: IngredientFormValue;
-  /** Stock history or recipe lines already read this ingredient in its base unit. */
   unitLocked: boolean;
   storageAreas: string[];
 }) {

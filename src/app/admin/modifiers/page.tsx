@@ -236,7 +236,6 @@ export default async function ModifiersPage() {
             (m) => m.groupId === group.id,
           );
           const isToppings = group.kind === "toppings";
-          // A size's own recipe can't vary by size.
           const recipeSizes = group.kind === "size" ? [] : sizes;
           const usedBy = [
             ...new Set(

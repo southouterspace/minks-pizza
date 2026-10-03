@@ -139,7 +139,6 @@ async function main() {
     return row.id;
   }
 
-  /** Places through checkout on a store-local time and drives it to `to`. */
   async function sell(
     localTime: string,
     lines: Parameters<typeof createOrder>[0]["lines"],
@@ -191,7 +190,6 @@ async function main() {
     const o1 = await sell("2020-03-02 12:00", [
       { itemId: pizza.id, quantity: 2, modifiers: [{ id: large.id }, crust, { id: pepMod.id }] },
     ]);
-    // 23:30 store time is already March 3 in UTC: the report must bucket it on March 2.
     const o2 = await sell("2020-03-02 23:30", [
       {
         itemId: pizza.id,
@@ -204,7 +202,6 @@ async function main() {
     ]);
     const o4 = await sell("2020-03-03 18:00", [{ itemId: soda.id, quantity: 1, modifiers: [] }]);
     await sell("2020-03-03 19:00", [{ itemId: soda.id, quantity: 3, modifiers: [] }], "canceled");
-    // A line completed before recipes existed has no cost.
     await db.update(orderItems).set({ costCents: null }).where(eq(orderItems.orderId, o4.id));
 
     await recordMoves([{ ingredientId: mozz.id, kind: "waste", qtyMilli: -50 * G, wasteReason: "burnt" }]);

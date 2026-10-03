@@ -183,21 +183,13 @@ export function formatElapsed(ms: number): string {
 
 export type TicketMod = { label: string; kind: "add" | "remove" | "amount" | "option" };
 
-/** Toppings on one part of the pie. */
 export type ToppingSection = { placement: Placement; mods: TicketMod[] };
 
 export type TicketLine = {
   /** Size and crust lead the ticket: they decide which dough ball to grab. */
   size: string | null;
   crust: string | null;
-  /**
-   * Everything that is not a structured topping, in order: options, and every
-   * modifier of a legacy order line. Removals and amount changes (extra,
-   * light, on the side) are flagged so the display can make them impossible
-   * to miss.
-   */
   mods: TicketMod[];
-  /** Structured toppings by placement, whole then left then right; empty sections are dropped. */
   toppings: ToppingSection[];
 };
 

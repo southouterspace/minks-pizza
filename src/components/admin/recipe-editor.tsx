@@ -31,12 +31,9 @@ export type RecipeSize = { id: number; name: string };
 
 export type StoredLine = { sizeModifierId: number | null; ingredientId: number; qtyMilli: number };
 
-/** What the item editor needs to price a plate: everything on it besides the item's own recipe. */
 export type PlateContext = {
-  /** Selling price per size id; key "all" when the item has no sizes. */
   priceCents: Record<string, number>;
   defaultModifierIds: number[];
-  /** Recipe lines of the default modifiers. */
   modifierLines: RecipeLine[];
   sizeModifierIds: number[];
   settings: PortionSettings;
@@ -62,7 +59,6 @@ function initialRows(lines: StoredLine[], byId: Map<number, RecipeIngredient>): 
   });
 }
 
-/** The grid as milli quantities; cells that don't parse are left out. */
 function toLines(rows: Row[], columns: Column[], byId: Map<number, RecipeIngredient>) {
   return rows.flatMap((row) => {
     const ingredient = byId.get(row.ingredientId)!;
@@ -87,7 +83,6 @@ export function RecipeEditor({
   sizes: RecipeSize[];
   ingredients: RecipeIngredient[];
   lines: StoredLine[];
-  /** Modifiers may take ingredients off ("No onions"); items only add. */
   allowRemoval: boolean;
   plate?: PlateContext;
 }) {

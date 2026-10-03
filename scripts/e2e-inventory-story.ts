@@ -71,7 +71,6 @@ async function onHand(ingredientId: number): Promise<number> {
   return row.milli;
 }
 
-/** Net sale moves per ingredient for one order, as ingredientId → milli (negative = used). */
 async function saleNet(orderId: string): Promise<Record<number, number>> {
   const rows = await db
     .select({
@@ -121,7 +120,6 @@ async function receive(page: Page, lines: { ingredient: string; qty: string; cos
   await page.getByTestId("delivery-saved").waitFor();
 }
 
-/** A full count of just the given lines, each entered in grams to the milligram. */
 async function count(page: Page, lines: [name: string, milli: number][]) {
   await page.goto(`${BASE}/admin/inventory/count?kind=full`, { waitUntil: "networkidle" });
   for (const [name, milli] of lines) {
@@ -138,7 +136,6 @@ async function openPizza(page: Page) {
   await page.click(`label:has-text("${LARGE.slice(0, -1)}")`);
 }
 
-/** Storefront checkout of one Large Cheese Pizza, pepperoni left half extra. */
 async function customerOrder(browser: Browser, tag: string): Promise<{ id: string; number: number }> {
   const page = await browser.newPage({ viewport: { width: 1280, height: 900 } });
   await page.goto(BASE, { waitUntil: "networkidle" });
@@ -168,7 +165,6 @@ async function customerOrder(browser: Browser, tag: string): Promise<{ id: strin
 
 const tab = (page: Page, name: string) => page.getByRole("button", { name: new RegExp(`^${name}\\s*\\d+$`) });
 
-/** Make line → oven → ready → handoff, by clicking the KDS. */
 async function cook(kitchen: Page, order: { id: string; number: number }, tag: string) {
   const [pie] = await db.select().from(orderItems).where(eq(orderItems.orderId, order.id));
   const ticket = kitchen.getByTestId(`kds-ticket-${order.number}`);
@@ -232,7 +228,6 @@ async function main() {
       await db.update(modifiers).set({ extraPriceDeltaCents: 300 }).where(eq(modifiers.id, pepMod.id));
     }
 
-    // Expected usage, computed here from the seeded recipe rows and the store's factors.
     const lines = await db
       .select()
       .from(recipeLines)
@@ -260,7 +255,6 @@ async function main() {
 
     const admin = await signIn(browser);
 
-    // 1. Receive, then count both to known figures.
     await receive(admin, [
       { ingredient: MOZZ, qty: "10", cost: "5.00" },
       { ingredient: PEP, qty: "4", cost: "5.50" },
@@ -275,7 +269,6 @@ async function main() {
     check("count sets mozzarella and pepperoni on hand", mozz0 === 30 * LB && pep0 === 6 * LB, `${mozz0} ${pep0}`);
     await shot(admin, "1-counted");
 
-    // 2. Customer order.
     const first = await customerOrder(browser, "1");
     orderIds.push(first.id);
     const [line] = await db.select().from(orderItems).where(eq(orderItems.orderId, first.id));
@@ -286,13 +279,11 @@ async function main() {
     );
     check("no sale moves before the order is completed", (await saleRowCount(first.id)) === 0);
 
-    // 3. Kitchen.
     const kitchen = await admin.context().newPage();
     await kitchen.goto(`${BASE}/kitchen`, { waitUntil: "networkidle" });
     await kitchen.getByTestId("kds-start").click();
     check("KDS handoff completes the order", await cook(kitchen, first, "1"));
 
-    // 4. Depletion.
     check(
       "sale moves equal the recipe usage",
       await eventually(async () => sameUsage(await saleNet(first.id), expectedSale)),
@@ -326,7 +317,6 @@ async function main() {
     );
     await shot(admin, "4-overview-after-sale");
 
-    // 5. Recall reverses; a second handoff applies once.
     await kitchen.keyboard.press("r");
     await kitchen.getByTestId(`kds-recall-${first.number}`).click();
     check("recall puts the order back to preparing", await eventually(async () => (await orderRow(first.id)).status === "preparing"));
@@ -345,7 +335,6 @@ async function main() {
     );
     check("ledger for the order is apply, reverse, apply", (await saleRowCount(first.id)) === 3 * Object.keys(expected).length, String(await saleRowCount(first.id)));
 
-    // 6. 86 threshold just under on hand, crossed by the next sale.
     const threshold = pep1 - 1_000;
     await admin.goto(`${BASE}/admin/inventory/ingredients/${pep.id}`, { waitUntil: "networkidle" });
     await admin.getByLabel("86 unit").selectOption("g");
@@ -397,7 +386,6 @@ async function main() {
     const restocked = await storefrontOffers(browser);
     check("storefront offers pepperoni again", restocked.classic && restocked.topping, JSON.stringify(restocked));
 
-    // 7. Short mozzarella count leads the variance report.
     const mozzNow = await onHand(mozz.id);
     const pepNow = await onHand(pep.id);
     await count(admin, [

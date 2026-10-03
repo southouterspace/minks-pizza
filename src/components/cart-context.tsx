@@ -17,13 +17,11 @@ export type CartModifier = {
   groupName: string;
   modifierName: string;
   priceDeltaCents: number;
-  /** Toppings only; absent means whole and regular. */
   placement?: Placement;
   portion?: Portion;
 };
 
 export type CartLine = {
-  /** Stable key: item + sorted modifier choices + notes. Same config merges. */
   key: string;
   itemId: number;
   itemName: string;
@@ -78,11 +76,6 @@ const storedLineSchema = z.object({
   notes: z.string().optional(),
 });
 
-/**
- * Reads a saved cart, including ones saved before toppings had halves and
- * portions (their modifiers lack both, which means whole and regular). Keys
- * are recomputed so old lines merge with new ones; unreadable lines drop.
- */
 function parseStoredCart(raw: string): CartLine[] {
   const parsed: unknown = JSON.parse(raw);
   if (!Array.isArray(parsed)) return [];

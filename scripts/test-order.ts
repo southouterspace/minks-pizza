@@ -26,7 +26,6 @@ async function main() {
       notes: "extra crispy",
     }],
   });
-  // Expected: (1099 + 600 + 0 + 175 + 150) * 2 = 2024*2 = 4048 subtotal, + tax at the store's rate, + 300 tip
   const expectedTotal = 4048 + taxFromBps(4048, taxRateBps) + 300;
   console.log("order #", order.orderNumber, "subtotal", order.subtotalCents, "total", order.totalCents, "status", order.status, "payment", order.paymentStatus);
   if (order.subtotalCents !== 4048 || order.totalCents !== expectedTotal) throw new Error("PRICE MISMATCH");

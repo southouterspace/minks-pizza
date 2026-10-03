@@ -47,12 +47,6 @@ export async function getSettings() {
   return settings;
 }
 
-/**
- * Server-side pricing: the client's cart carries only ids, quantities and
- * topping choices; every price comes from the database here. Also enforces
- * availability, modifier group min/max rules, and that halves and portions
- * appear only on toppings.
- */
 export async function priceCart(
   lines: CheckoutInput["lines"],
   orderType: "pickup" | "delivery",

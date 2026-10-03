@@ -3,7 +3,6 @@ import { CircleAlert, TriangleAlert } from "lucide-react";
 import { inventoryAlerts } from "@/lib/inventory";
 import { formatQty } from "@/lib/units";
 
-/** Red line per stock-out, one amber line for everything running low; nothing when all is well. */
 export async function InventoryBanner() {
   const { out, low } = await inventoryAlerts();
   if (out.length === 0 && low.length === 0) return null;

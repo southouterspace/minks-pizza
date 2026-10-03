@@ -15,7 +15,6 @@ export function ExportLink({ href }: { href: string }) {
   );
 }
 
-/** A GET form: the URL holds the range, so reloads, links and the CSV export share it. */
 export function RangeForm({ range, csv }: { range: DateRange; csv: string }) {
   return (
     <div className="mt-4 flex flex-wrap items-end justify-between gap-3">
@@ -49,7 +48,6 @@ export function Kpis({ items }: { items: { label: string; value: string; hint?: 
   );
 }
 
-/** Tables scroll sideways inside this frame; the page never does. */
 export function TableFrame({ children, className }: { children: ReactNode; className?: string }) {
   return <div className={cn("mt-4 overflow-hidden rounded-xl ring-1 ring-foreground/10", className)}>{children}</div>;
 }

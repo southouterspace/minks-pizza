@@ -115,13 +115,10 @@ export const storeSettings = pgTable("store_settings", {
   kdsOvenMinutes: integer("kds_oven_minutes").notNull().default(7),
   /** IANA zone that defines the store's day for stats, history and times. */
   timezone: text("timezone").notNull().default("America/Chicago"),
-  /** Share of a topping's price charged for a half (basis points). */
   halfToppingPriceBps: integer("half_topping_price_bps").notNull().default(5000),
-  /** Share of a topping's recipe a half uses (basis points). */
   halfPortionBps: integer("half_portion_bps").notNull().default(5000),
   lightPortionBps: integer("light_portion_bps").notNull().default(5000),
   extraPortionBps: integer("extra_portion_bps").notNull().default(15000),
-  /** The margin report flags items below this gross margin (basis points). */
   minMarginBps: integer("min_margin_bps").notNull().default(7000),
   isPublished: boolean("is_published").notNull().default(false),
   isAcceptingOrders: boolean("is_accepting_orders").notNull().default(true),
@@ -184,7 +181,6 @@ export const menuItems = pgTable("menu_items", {
 export const modifierGroups = pgTable("modifier_groups", {
   id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
   name: text("name").notNull(), // "Size", "Crust", "Toppings"
-  /** Drives behavior: the size group picks recipe lines, toppings groups offer halves and portions. */
   kind: modifierGroupKindEnum("kind").notNull().default("choice"),
   /** Minimum selections required (0 = optional group). */
   minSelect: integer("min_select").notNull().default(0),
@@ -203,7 +199,6 @@ export const modifiers = pgTable("modifiers", {
     .references(() => modifierGroups.id, { onDelete: "cascade" }),
   name: text("name").notNull(),
   priceDeltaCents: integer("price_delta_cents").notNull().default(0),
-  /** Price of an "extra" portion; null = extra is not offered. Toppings groups only. */
   extraPriceDeltaCents: integer("extra_price_delta_cents"),
   isDefault: boolean("is_default").notNull().default(false),
   isAvailable: boolean("is_available").notNull().default(true),
@@ -228,13 +223,10 @@ export const itemModifierGroups = pgTable("item_modifier_groups", {
 
 /** Snapshot of one chosen modifier, denormalized into the order line. */
 export type OrderItemModifier = {
-  /** Absent on orders placed before recipes existed. */
   modifierId?: number;
   groupName: string;
   modifierName: string;
-  /** What was charged for this selection. */
   priceDeltaCents: number;
-  /** Present only for toppings-group selections. */
   placement?: Placement;
   portion?: Portion;
 };
@@ -296,7 +288,6 @@ export const orderItems = pgTable("order_items", {
   lineTotalCents: integer("line_total_cents").notNull(),
   modifiers: jsonb("modifiers").$type<OrderItemModifier[]>().notNull(),
   notes: text("notes"),
-  /** Theoretical food cost of the whole line, set when the order completes. */
   costCents: integer("cost_cents"),
   /**
    * Kitchen station snapshot, copied from the category at order time so
@@ -333,20 +324,14 @@ export const orderEvents = pgTable(
   (t) => [index("order_events_order_id_created_at_idx").on(t.orderId, t.createdAt)],
 );
 
-// ---------------------------------------------------------------------------
-// Inventory
-// ---------------------------------------------------------------------------
-
 export const ingredients = pgTable("ingredients", {
   id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
   name: text("name").notNull(),
   baseUnit: baseUnitEnum("base_unit").notNull(),
-  /** Millicents per base unit (mozzarella at $4.00/lb = 882 per gram). */
   unitCostMillicents: integer("unit_cost_millicents").notNull().default(0),
   storageArea: text("storage_area").notNull().default("Walk-in"),
   shelfOrder: integer("shelf_order").notNull().default(0),
   lowStockAtMilli: integer("low_stock_at_milli"),
-  /** On hand at or below this auto-86's everything that uses it; null = never. */
   outAtMilli: integer("out_at_milli"),
   isActive: boolean("is_active").notNull().default(true),
   createdAt: timestamp("created_at", { withTimezone: true })
@@ -354,7 +339,6 @@ export const ingredients = pgTable("ingredients", {
     .defaultNow(),
 });
 
-/** A purchase unit ("case", "bag") as a multiple of the ingredient's base unit. */
 export const ingredientPacks = pgTable("ingredient_packs", {
   id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
   ingredientId: integer("ingredient_id")
@@ -364,10 +348,6 @@ export const ingredientPacks = pgTable("ingredient_packs", {
   baseQtyMilli: integer("base_qty_milli").notNull(),
 });
 
-/**
- * One ingredient of one owner's recipe (a menu item or a modifier), optionally
- * for one size. Negative quantities model removals.
- */
 export const recipeLines = pgTable(
   "recipe_lines",
   {
@@ -415,7 +395,6 @@ export const inventoryMoves = pgTable(
       .notNull()
       .references(() => ingredients.id, { onDelete: "restrict" }),
     kind: inventoryMoveKindEnum("kind").notNull(),
-    /** Signed: sales and waste are negative, receipts positive, counts either way. */
     qtyMilli: integer("qty_milli").notNull(),
     unitCostMillicents: integer("unit_cost_millicents").notNull(),
     orderId: uuid("order_id").references(() => orders.id, { onDelete: "set null" }),

@@ -1,5 +1,3 @@
-/** CSV downloads for admin exports. Shared by server and client — no I/O. */
-
 export type CsvCell = string | number | null;
 
 /**

@@ -37,7 +37,6 @@ function param(params: ReportParams, key: string): string | null {
   return s ? s : null;
 }
 
-/** `part / whole` in basis points, or null when there is no whole to divide. */
 export function ratioBps(part: number, whole: number): number | null {
   return whole === 0 ? null : Math.round((part * 10_000) / whole);
 }
@@ -49,10 +48,6 @@ export function formatBps(bps: number | null): string {
 const bpsCell = (bps: number | null): CsvCell => (bps === null ? null : (bps / 100).toFixed(2));
 const dollarsCell = (cents: number | null): CsvCell => (cents === null ? null : (cents / 100).toFixed(2));
 const qtyCell = (milli: number): CsvCell => Number((milli / 1000).toFixed(3));
-
-// ---------------------------------------------------------------------------
-// Date ranges: store-local calendar days, inclusive
-// ---------------------------------------------------------------------------
 
 export type DateRange = { from: string; to: string };
 
@@ -75,11 +70,6 @@ export function storeToday(timezone: string, now = new Date()): string {
   return now.toLocaleDateString("sv-SE", { timeZone: timezone });
 }
 
-/**
- * The range a URL asks for. Missing or malformed ends default to the last
- * week ending today; reversed ends are swapped; a span over a year keeps the
- * year ending at `to`.
- */
 export function resolveRange(params: ReportParams, today: string): DateRange {
   const rawFrom = param(params, "from");
   const rawTo = param(params, "to");
@@ -94,33 +84,22 @@ export function rangeQuery(range: DateRange): string {
   return `?${new URLSearchParams(range).toString()}`;
 }
 
-/** Completed, unrefunded orders placed on a store-local day inside the range. */
 function soldIn(range: DateRange, timezone: string) {
   return sql`${orders.status} = 'completed' and ${orders.paymentStatus} <> 'refunded'
     and ${orders.placedAt} >= (${range.from}::date::timestamp at time zone ${timezone})
     and ${orders.placedAt} < ((${range.to}::date + 1)::timestamp at time zone ${timezone})`;
 }
 
-// ---------------------------------------------------------------------------
-// Food cost %
-// ---------------------------------------------------------------------------
-
 export type FoodCostTotals = {
   orders: number;
-  /** Σ order subtotals: items and modifiers, no tax, tips or fees. */
   netSalesCents: number;
-  /** Σ line totals, the base for coverage. */
   lineSalesCents: number;
-  /** Line totals of the lines whose food cost is known. */
   costedSalesCents: number;
-  /** Σ order_items.cost_cents over the costed lines. */
   cogsCents: number;
 };
 
-/** One store-local day, YYYY-MM-DD. */
 export type FoodCostRow = FoodCostTotals & { day: string };
 
-/** Theoretical food cost over the sales it is known for, so unknown lines don't read as free. */
 export const foodCostBps = (r: FoodCostTotals) => ratioBps(r.cogsCents, r.costedSalesCents);
 export const coverageBps = (r: FoodCostTotals) => ratioBps(r.costedSalesCents, r.lineSalesCents);
 
@@ -188,22 +167,12 @@ export async function foodCostReport(params: ReportParams): Promise<FoodCostRepo
   return { range, timezone, days, total };
 }
 
-// ---------------------------------------------------------------------------
-// Theoretical vs actual, per count
-// ---------------------------------------------------------------------------
-
 export type CountSummary = { id: number; kind: CountKind; createdAt: Date; ingredients: number };
 
-/**
- * One ingredient's ledger between its previous count (or its first move) and
- * this count. expected = opening + received − wasted − usage, and
- * variance = counted − expected, which is the count's own adjustment move.
- */
 export type VarianceRow = {
   ingredientId: number;
   name: string;
   baseUnit: BaseUnit;
-  /** When the previous count of this ingredient was taken; null = since its first move. */
   since: Date | null;
   openingMilli: number;
   receivedMilli: number;
@@ -240,7 +209,6 @@ function countSummaries() {
     .$dynamic();
 }
 
-/** The count the URL names (`?count=`), else the latest. */
 export async function varianceReport(params: ReportParams): Promise<VarianceReport> {
   const counts: CountSummary[] = await countSummaries()
     .orderBy(desc(inventoryCounts.id))
@@ -326,19 +294,12 @@ export async function varianceReport(params: ReportParams): Promise<VarianceRepo
   };
 }
 
-// ---------------------------------------------------------------------------
-// Topping mix
-// ---------------------------------------------------------------------------
-
-/** Quantity-weighted pizzas of one size, and how a topping rode on them. */
 export type ToppingMixRow = {
   sizeId: number;
   size: string;
   toppingId: number;
   topping: string;
-  /** Pizzas of this size. */
   pizzas: number;
-  /** Of those, pizzas with the topping. */
   withTopping: number;
   half: number;
   light: number;
@@ -357,11 +318,6 @@ export type ToppingMixReport = {
 
 type ModifierInfo = { name: string; kind: ModifierGroupKind; order: number };
 
-/**
- * Tallies sold lines by their size selection. Lines without a size (drinks,
- * sides) and selections without a modifierId (orders from before #11) don't
- * count; only modifiers in a toppings group are toppings.
- */
 function tallyToppingMix(
   lines: readonly { quantity: number; modifiers: readonly OrderItemModifier[] }[],
   info: ReadonlyMap<number, ModifierInfo>,
@@ -432,23 +388,16 @@ export async function toppingMixReport(params: ReportParams): Promise<ToppingMix
   return { range, sizes: tallyToppingMix(lines, info) };
 }
 
-// ---------------------------------------------------------------------------
-// Margin by item and size
-// ---------------------------------------------------------------------------
-
 export type MarginRow = {
   itemId: number;
   item: string;
   category: string;
   sizeId: number | null;
   size: string | null;
-  /** Base + size delta + the item's default non-size selections. */
   priceCents: number;
-  /** Null when the item has no recipe: unknown, not free. */
   plateCostCents: number | null;
   marginCents: number | null;
   marginBps: number | null;
-  /** Margin known and under the store's minimum. */
   low: boolean;
 };
 
@@ -522,10 +471,6 @@ export async function marginReport(): Promise<MarginReport> {
   });
   return { minMarginBps, rows };
 }
-
-// ---------------------------------------------------------------------------
-// The four reports: tab labels and CSV
-// ---------------------------------------------------------------------------
 
 export type CsvTable = { filename: string; header: string[]; rows: CsvCell[][] };
 

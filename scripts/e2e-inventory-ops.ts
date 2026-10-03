@@ -87,7 +87,6 @@ async function unitCost(id: number): Promise<number> {
   return row.unitCostMillicents;
 }
 
-/** Wipes the ledger and stock-outs, turning back on whatever a stock-out had 86'd. */
 async function resetInventory() {
   const outs = await db.select().from(stockOuts);
   const itemIds = outs.flatMap((o) => o.menuItemIds);
@@ -155,7 +154,6 @@ async function main() {
     (await page.getByTestId(`stock-row-${mozz}`).innerText()).includes("Not counted yet"),
   );
 
-  // Deliveries
   let mark = await lastMoveId();
   await receive(page, "Sysco", [
     { ingredient: MOZZ, qty: "40", unit: "lb", cost: "4.00" },
@@ -197,7 +195,6 @@ async function main() {
   check("receive page has no sideways scroll at 375px", await noSideScroll(phone));
   await phone.screenshot({ path: `${SHOT_DIR}/receive-warning-375.png`, fullPage: true });
 
-  // Full count with a reload mid-entry
   await page.goto(`${BASE}/admin/inventory/count?kind=full`, { waitUntil: "networkidle" });
   await fillCount(page, MOZZ, "3.75", "case");
   await page.getByTestId("draft-saved").waitFor();
@@ -246,7 +243,6 @@ async function main() {
   check("overview has no sideways scroll at 375px", await noSideScroll(phone));
   await phone.screenshot({ path: `${SHOT_DIR}/overview-375.png`, fullPage: true });
 
-  // Spot count preset
   await page.goto(`${BASE}/admin/inventory/count?kind=spot`, { waitUntil: "networkidle" });
   const spotNames = async () =>
     (await page.locator('[data-testid^="count-line-"] label').allInnerTexts()).map((t) => t.trim());
@@ -269,7 +265,6 @@ async function main() {
     const id = await idOf(name);
     await db.insert(inventoryMoves).values({ ingredientId: id, kind: "sale", qtyMilli: -qty, unitCostMillicents: await unitCost(id) });
   }
-  // An old sale outside the 7-day window must not count.
   await db.insert(inventoryMoves).values({
     ingredientId: await idOf("Grilled chicken"),
     kind: "sale",
@@ -289,7 +284,6 @@ async function main() {
     (await page.getByTestId("count-rule").innerText()).includes("theoretical usage in dollars over the last 7 days"),
   );
 
-  // Waste
   await page.goto(`${BASE}/admin/inventory/waste`, { waitUntil: "networkidle" });
   mark = await lastMoveId();
   await page.getByLabel("Ingredient").selectOption({ label: "Pepperoni" });
@@ -312,7 +306,6 @@ async function main() {
   const wasteText = (await wasteRow.innerText()).replace(/\s+/g, " ");
   check("recent waste lists it with its dollar value", /8 oz Pepperoni.*Burnt.*\$2\.75/.test(wasteText), wasteText);
 
-  // Auto-86 from a count, undone by a delivery
   await db.update(ingredients).set({ outAtMilli: 10 * LB }).where(eq(ingredients.id, mozz));
   await page.goto(`${BASE}/admin/inventory/count?kind=full`, { waitUntil: "networkidle" });
   await fillCount(page, MOZZ, "5");

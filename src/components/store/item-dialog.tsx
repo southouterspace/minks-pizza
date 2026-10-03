@@ -39,7 +39,6 @@ const optionRowClass = (checked: boolean) =>
       : "border-border hover:border-foreground/30",
   );
 
-/** What one selection adds to the unit price: the same rule the server charges. */
 function selectionPrice(group: ModifierGroupView, mod: ModifierView, choice: ToppingChoice): number {
   return group.kind === "toppings"
     ? toppingPriceCents(mod, choice, group.pricing)
@@ -94,7 +93,6 @@ function Segmented<T extends string>({
   );
 }
 
-/** A topping: a checkbox row that opens a half and portion picker once checked. */
 function ToppingOption({
   mod,
   checked,
@@ -160,12 +158,6 @@ function groupHint(group: ModifierGroupView): string {
   return group.maxSelect ? `Up to ${group.maxSelect}` : "Optional";
 }
 
-/**
- * Item customization dialog: radio for single-select groups (maxSelect = 1),
- * checkboxes otherwise; toppings also pick a half and an amount. Defaults
- * are pre-selected. Enforces min/max locally; the server re-validates and
- * re-prices at checkout.
- */
 export function ItemDialog({
   item,
   orderingEnabled,

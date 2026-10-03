@@ -1,7 +1,6 @@
 import type { StockLine } from "@/lib/inventory";
 import { DEFAULT_ENTRY_UNIT, unitsFor } from "@/lib/units";
 
-/** An ingredient as an entry form needs it: which units it can be entered in, and which one to start with. */
 export type EntryIngredient = {
   id: number;
   name: string;
@@ -20,7 +19,6 @@ export function toEntry(line: StockLine): EntryIngredient {
   };
 }
 
-/** Consecutive runs by storage area; the input is already in walk order. */
 export function byArea<T extends { storageArea: string }>(rows: readonly T[]): { area: string; rows: T[] }[] {
   const groups: { area: string; rows: T[] }[] = [];
   for (const row of rows) {

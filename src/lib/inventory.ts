@@ -34,7 +34,6 @@ import {
 } from "@/lib/recipes";
 import { DEFAULT_PORTIONS } from "@/lib/toppings";
 
-/** Builds `(values (…), (…))` from rows of integer-or-null cells. */
 function intRows(rows: readonly (readonly (number | null)[])[]): SQL {
   return sql`(values ${sql.join(
     rows.map((cells) => sql`(${sql.join(cells.map((c) => sql`${c}::integer`), sql`, `)})`),
@@ -42,7 +41,6 @@ function intRows(rows: readonly (readonly (number | null)[])[]): SQL {
   )})`;
 }
 
-/** `intRows` for two columns, or an empty two-column relation. */
 function pairs(rows: readonly (readonly [number, number])[]): SQL {
   return rows.length === 0 ? sql`(select null::integer, null::integer where false)` : intRows(rows);
 }
@@ -59,16 +57,12 @@ async function portionSettings() {
   return row ?? DEFAULT_PORTIONS;
 }
 
-/** What an order would use and cost, computed once so the sync statement can be built synchronously. */
 export type OrderUsagePlan = {
   orderId: string;
-  /** Ingredient → milli base units, rounded. */
   usage: ReadonlyMap<number, number>;
-  /** order_items.id → food cost in cents. */
   lineCosts: readonly (readonly [number, number])[];
 };
 
-/** Reads the order's lines, their recipes and current unit costs. */
 export async function planOrderUsage(orderId: string): Promise<OrderUsagePlan> {
   const [lines, settings] = await Promise.all([
     db
@@ -287,7 +281,6 @@ function restore(ingredientId: number) {
   `);
 }
 
-/** Current on hand per ingredient (milli base units), every ingredient present. */
 export async function onHand(ingredientIds?: readonly number[]): Promise<Map<number, number>> {
   const rows = await db
     .select({
@@ -304,9 +297,7 @@ export async function onHand(ingredientIds?: readonly number[]): Promise<Map<num
 export type NewMove = {
   ingredientId: number;
   kind: InventoryMoveKind;
-  /** Signed: receipts positive, waste negative, counts the variance. */
   qtyMilli: number;
-  /** Defaults to the ingredient's current unit cost. */
   unitCostMillicents?: number;
   countId?: number | null;
   wasteReason?: WasteReason | null;
@@ -314,7 +305,6 @@ export type NewMove = {
   operatorId?: number | null;
 };
 
-/** Appends ledger rows, then re-checks stock-outs. */
 export async function recordMoves(moves: readonly NewMove[]): Promise<void> {
   if (moves.length === 0) return;
   await db.insert(inventoryMoves).values(
@@ -328,11 +318,6 @@ export async function recordMoves(moves: readonly NewMove[]): Promise<void> {
   await syncStockOuts();
 }
 
-// ---------------------------------------------------------------------------
-// Counts, waste, receiving: reads and writes behind /admin/inventory
-// ---------------------------------------------------------------------------
-
-/** How an ingredient's stock reads on the overview. Out wins over low; neither applies until it is tracked. */
 export type StockStatus = "out" | "low" | "uncounted" | "ok";
 
 export type StockLine = {
@@ -359,7 +344,6 @@ function stockStatus(r: {
   return "ok";
 }
 
-/** Active ingredients in walk order: storage area, then shelf order. */
 export async function stockLines(): Promise<StockLine[]> {
   const [{ rows }, packs] = await Promise.all([
     db.execute<{
@@ -405,11 +389,6 @@ export async function stockLines(): Promise<StockLine[]> {
 
 export type SpotRule = "usage" | "value";
 
-/**
- * The five ingredients a spot count checks: highest theoretical dollar usage
- * over the last 7 days (what sales moved, at the cost they moved at), and
- * with no sales in that window, highest on-hand value.
- */
 export async function spotCountPreset(): Promise<{ ids: number[]; rule: SpotRule }> {
   const { rows } = await db.execute<{ id: number; usage: string }>(sql`
     select i.id,
@@ -463,18 +442,10 @@ export async function recordCount(input: {
   };
 }
 
-/** A unit-cost change bigger than this, against the previous delivery, gets flagged. */
 const PRICE_ALERT_PCT = 5;
 
 export type PriceChange = { name: string; pct: number };
 
-/**
- * Posts a delivery: a `receive` move per line at that line's cost, and each
- * ingredient's unit cost becomes its latest delivered price. Returns the
- * lines whose price moved more than 5% from the ingredient's previous
- * delivery, read in the same statement so the new rows can't be mistaken
- * for the previous ones.
- */
 export async function recordDelivery(input: {
   vendor: string | null;
   operatorId: number | null;
@@ -547,11 +518,6 @@ export type InventoryAlerts = {
   low: { name: string; onHandMilli: number; baseUnit: BaseUnit }[];
 };
 
-/**
- * What the admin banner shows: every stock-out with what it 86'd, and every
- * tracked ingredient at or below its low-stock level that isn't out. Reads
- * only ingredients that have a stock-out row or a low-stock level.
- */
 export async function inventoryAlerts(): Promise<InventoryAlerts> {
   const { rows } = await db.execute<{
     name: string;

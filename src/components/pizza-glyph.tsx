@@ -7,7 +7,6 @@ const FILL: Record<Placement, string> = {
   right: "M8 1a7 7 0 0 1 0 14Z",
 };
 
-/** A pie with the covered part filled: which half (or all) a topping goes on. */
 export function PizzaGlyph({ placement, className }: { placement: Placement; className?: string }) {
   return (
     <svg viewBox="0 0 16 16" aria-hidden="true" className={cn("size-4 shrink-0", className)}>

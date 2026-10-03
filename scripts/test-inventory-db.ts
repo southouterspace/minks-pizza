@@ -79,7 +79,6 @@ async function main() {
   const large = pick("Size", 'Large 14"');
   const handTossed = pick("Crust", "Hand Tossed");
 
-  // The test owns its items and toppings so seeded recipes never leak into the numbers.
   const [category] = await db.select().from(categories).where(eq(categories.name, "Build Your Own"));
   const [cheesePizza, pepClassic] = await db
     .insert(menuItems)

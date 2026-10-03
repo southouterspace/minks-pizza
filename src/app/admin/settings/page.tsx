@@ -62,7 +62,6 @@ const DEFAULTS = {
   isAcceptingOrders: true,
 };
 
-/** Topping and margin fields: stored in basis points, entered as percents. */
 const PERCENT_FIELDS = [
   {
     name: "halfToppingPricePct",

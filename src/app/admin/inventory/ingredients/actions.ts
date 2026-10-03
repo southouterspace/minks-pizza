@@ -24,10 +24,6 @@ const text = (fd: FormData, name: string) => {
 
 const amount = z.coerce.number().finite();
 
-/**
- * Reads the ingredient form. Packs come first because the cost and the
- * thresholds may be entered in one of them ("$38.50 per case").
- */
 function parseIngredient(fd: FormData): IngredientInput | { error: string } {
   const name = text(fd, "name");
   if (!name) return { error: "Name the ingredient." };
@@ -89,7 +85,6 @@ function parseIngredient(fd: FormData): IngredientInput | { error: string } {
   };
 }
 
-/** Ledger rows and recipe lines that reference the ingredient; either pins its base unit and blocks deletion. */
 async function references(ingredientId: number) {
   const [[moves], [lines]] = await Promise.all([
     db.select({ n: count() }).from(inventoryMoves).where(eq(inventoryMoves.ingredientId, ingredientId)),

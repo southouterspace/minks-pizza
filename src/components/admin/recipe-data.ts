@@ -19,7 +19,6 @@ import type {
   StoredLine,
 } from "@/components/admin/recipe-editor";
 
-/** Every ingredient with its packs, for the recipe grids' pickers and unit selects. */
 export async function recipeIngredients(): Promise<RecipeIngredient[]> {
   const [rows, packs] = await Promise.all([
     db.select().from(ingredients).orderBy(asc(ingredients.name)),
@@ -36,7 +35,6 @@ export async function recipeIngredients(): Promise<RecipeIngredient[]> {
   }));
 }
 
-/** Modifiers of every `size` group, in menu order. */
 export function sizeModifiers() {
   return db
     .select({
@@ -51,7 +49,6 @@ export function sizeModifiers() {
     .orderBy(asc(modifierGroups.sortOrder), asc(modifiers.sortOrder), asc(modifiers.id));
 }
 
-/** Recipe lines owned by modifiers, for the modifiers page. */
 export function modifierRecipeLines() {
   return db
     .select({
@@ -64,10 +61,6 @@ export function modifierRecipeLines() {
     .where(isNotNull(recipeLines.modifierId));
 }
 
-/**
- * The item's recipe grid and what it takes to price a plate: the sizes of its
- * size group, its default options (and their recipes), and the price at each size.
- */
 export async function itemRecipe(item: { id: number; basePriceCents: number }): Promise<{
   sizes: RecipeSize[];
   lines: StoredLine[];

@@ -14,7 +14,6 @@ export type ModifierView = {
   id: number;
   name: string;
   priceDeltaCents: number;
-  /** Null when "extra" is not offered. */
   extraPriceDeltaCents: number | null;
   isDefault: boolean;
 };
@@ -27,7 +26,6 @@ type GroupFields = {
   modifiers: ModifierView[];
 };
 
-/** Toppings groups carry the store's half price so the dialog charges what the server will. */
 export type ModifierGroupView =
   | (GroupFields & { kind: "choice" | "size" })
   | (GroupFields & { kind: "toppings"; pricing: ToppingPriceSettings });

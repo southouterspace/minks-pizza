@@ -61,7 +61,6 @@ function textOrNull(fd: FormData, name: string): string | null {
   return v === "" ? null : v;
 }
 
-/** A JSON-encoded field; null when it doesn't parse, for the schema to refuse. */
 function jsonField(fd: FormData, name: string): unknown {
   try {
     return JSON.parse(textField(fd, name));
@@ -654,7 +653,6 @@ export async function deleteModifierGroup(formData: FormData): Promise<void> {
 // Modifiers
 // ---------------------------------------------------------------------------
 
-/** "Extra" price: only toppings modifiers offer one, and blank means extra isn't offered. */
 function extraPriceField(fd: FormData, kind: ModifierGroupKind): number | null {
   if (kind !== "toppings" || textField(fd, "extraPrice") === "") return null;
   return dollarsToCents(fd, "extraPrice");
@@ -785,10 +783,6 @@ export async function deleteModifier(formData: FormData): Promise<void> {
   revalidateModifiers();
 }
 
-// ---------------------------------------------------------------------------
-// Recipes
-// ---------------------------------------------------------------------------
-
 export type RecipeActionState = { error?: string };
 
 const recipeSchema = z.object({
@@ -804,11 +798,6 @@ const recipeSchema = z.object({
   ),
 });
 
-/**
- * Replaces one owner's recipe. Quantities arrive in the units the grid
- * showed and are converted here against the ingredient's own packs; only
- * modifiers may carry negative (removal) lines.
- */
 export async function saveRecipe(formData: FormData): Promise<RecipeActionState> {
   await requireOperator();
   const parsed = recipeSchema.safeParse({
@@ -891,7 +880,6 @@ function logoUrlOrNull(formData: FormData): string | null {
   return /^https:\/\/\S+$/i.test(raw) ? raw : null;
 }
 
-/** A percent field as basis points, refused outside [min, max] percent. */
 function percentBps(fd: FormData, name: string, min: number, max: number): number {
   return Math.round(z.coerce.number().min(min).max(max).parse(textField(fd, name)) * 100);
 }

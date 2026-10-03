@@ -1,9 +1,3 @@
-/**
- * Topping choices: which modifier groups behave as sizes or toppings, the
- * half/portion options a topping can carry, what each costs the customer and
- * how much of the recipe it uses. Shared by server and client — no I/O.
- */
-
 export const MODIFIER_GROUP_KINDS = ["choice", "size", "toppings"] as const;
 export type ModifierGroupKind = (typeof MODIFIER_GROUP_KINDS)[number];
 
@@ -43,23 +37,16 @@ export type PortionSettings = {
   extraPortionBps: number;
 };
 
-/** The store_settings column defaults, for when the settings row is missing. */
 export const DEFAULT_PORTIONS: PortionSettings = {
   halfPortionBps: 5000,
   lightPortionBps: 5000,
   extraPortionBps: 15000,
 };
 
-/** Round half up to a whole cent after a basis-point multiply. */
 function applyBps(cents: number, bps: number): number {
   return Math.floor((cents * bps + 5_000) / 10_000);
 }
 
-/**
- * What the customer pays for one topping selection. Light costs the regular
- * price; extra uses the modifier's extra price (callers only offer extra when
- * it is set); a half pays the store's half-topping share.
- */
 export function toppingPriceCents(
   mod: { priceDeltaCents: number; extraPriceDeltaCents: number | null },
   choice: ToppingChoice,
@@ -72,7 +59,6 @@ export function toppingPriceCents(
   return choice.placement === "whole" ? base : applyBps(base, settings.halfToppingPriceBps);
 }
 
-/** How much of the topping's recipe one selection uses, in basis points (10000 = all of it). */
 export function selectionFactorBps(choice: ToppingChoice, settings: PortionSettings): number {
   const placement = choice.placement === "whole" ? 10_000 : settings.halfPortionBps;
   const portion =
@@ -84,7 +70,6 @@ export function selectionFactorBps(choice: ToppingChoice, settings: PortionSetti
   return (placement * portion) / 10_000;
 }
 
-/** "Pepperoni (left half, extra)" for tickets and receipts; the bare name when nothing is chosen. */
 export function describeChoice(name: string, choice: Partial<ToppingChoice>): string {
   const parts: string[] = [];
   if (choice.placement && choice.placement !== "whole") {
