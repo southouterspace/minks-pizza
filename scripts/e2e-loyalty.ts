@@ -251,6 +251,9 @@ async function main() {
   const ritaCtx = await browser.newContext({ viewport: { width: 1280, height: 900 } });
   const rita = await ritaCtx.newPage();
   await fillCart(rita, cartLine);
+  await rita.goto(`${BASE}/cart`, { waitUntil: "networkidle" });
+  await rita.getByText("This order earns ~199 points").waitFor();
+  check("cart shows the points this order earns", (await rita.getByTestId("cart-next-reward").count()) === 0);
   await rita.goto(`${BASE}/checkout`, { waitUntil: "networkidle" });
   const panel = rita.getByTestId("loyalty-panel");
   await panel.getByText("Earn 199 points on this order").waitFor();
@@ -328,6 +331,13 @@ async function main() {
 
   // --- Redeem at checkout ---------------------------------------------------
   await fillCart(rita, cartLine);
+  await rita.goto(`${BASE}/cart`, { waitUntil: "networkidle" });
+  await rita.getByTestId("cart-next-reward").waitFor();
+  check(
+    "a member's cart shows progress to the next reward",
+    (await rita.getByTestId("cart-next-reward").textContent()) === "After this order: 598 of 700 points toward Free side.",
+    (await rita.getByTestId("cart-next-reward").textContent()) ?? "",
+  );
   await rita.goto(`${BASE}/checkout`, { waitUntil: "networkidle" });
   check("phone is prefilled from the member", (await rita.locator("#co-phone").inputValue()) === "(555) 010-3101");
   await rita.getByText("Free side").waitFor();
