@@ -414,6 +414,11 @@ complaints are in `docs/promotions-research.md`.
   directions of the form model and the templates. One test round-trips
   every template and reward type; another changes each form field in turn
   and checks the reward moves exactly when the type lists that field.
+- **Free delivery is a delivery-only deal.** The form fixes its order types
+  to delivery and the schema refuses anything else, so the engine's ordinary
+  order-type check tells a pickup customer "Delivery orders only". A zero
+  delivery fee reads "Delivery is already free". The engine's own
+  free-delivery branch and its `deliveryFree` refusal are gone.
 - **Module layout.** `promotion-schema.ts` (zod, stored shape),
   `promotion-engine.ts` (pure evaluator), `promotion-copy.ts` (words),
   `promotion-usage.ts` (what a use is), `checkout.ts` (quote, guard,

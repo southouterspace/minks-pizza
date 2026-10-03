@@ -228,7 +228,7 @@ Valid Tue 3–6 PM. Once per customer. Use code PIZZA10."
 | Setting | What it does |
 |---|---|
 | How customers get it | **Automatically** (applies itself when the cart qualifies) or **With a code** |
-| Reward | % or $ off the order (optional cap), % or $ off items, a deal price on items ("any large $12"), buy X get Y (the discounted units are always the cheapest qualifying ones), free delivery |
+| Reward | % or $ off the order (optional cap), % or $ off items, a deal price on items ("any large $12"), buy X get Y (the discounted units are always the cheapest qualifying ones), free delivery (delivery orders only) |
 | Which items | Any mix of categories, items and modifiers such as a size. Nothing picked means any item |
 | When it applies | Minimum item subtotal, pickup and/or delivery, first and last day, weekly time windows on the store's clock |
 | Limits | Uses per customer (by phone number), total uses, new customers only (no earlier order on that phone) |

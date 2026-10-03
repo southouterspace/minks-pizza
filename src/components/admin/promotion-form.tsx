@@ -4,7 +4,7 @@ import { useMemo, useState, useTransition } from "react";
 import { Plus, X } from "lucide-react";
 import { savePromotion } from "@/app/admin/promotions/actions";
 import type { MenuCatalog } from "@/lib/promotion-admin";
-import { fromDraft, promotionTemplates, REWARD_FORM, type PromotionDraft, type RewardField } from "@/lib/promotion-codec";
+import { deliveryOnly, fromDraft, promotionTemplates, REWARD_FORM, type PromotionDraft, type RewardField } from "@/lib/promotion-codec";
 import { describeOffer, describeTarget, type TargetNames } from "@/lib/promotion-copy";
 import {
   promotionColumns,
@@ -82,6 +82,7 @@ export function PromotionForm({
   const fields: readonly RewardField[] = REWARD_FORM[draft.rewardType].fields;
   const numberFields = fields.filter((f): f is NumberFieldKey => f in NUMBER_FIELD);
   const buyGet = fields.includes("getTarget");
+  const fixedToDelivery = deliveryOnly(draft.rewardType);
 
   return (
     <form onSubmit={submit} className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_20rem]">
@@ -214,8 +215,8 @@ export function PromotionForm({
             <FieldGroup>
               <NumberField id="promo-min" label="Minimum item subtotal (optional)" prefix="$" value={draft.minSubtotal} onChange={(v) => set("minSubtotal", v)} />
               <div className="flex flex-wrap gap-x-6 gap-y-3">
-                <CheckField id="promo-pickup" label="Pickup" checked={draft.pickup} onChange={(v) => set("pickup", v)} />
-                <CheckField id="promo-delivery" label="Delivery" checked={draft.delivery} onChange={(v) => set("delivery", v)} />
+                <CheckField id="promo-pickup" label="Pickup" checked={draft.pickup && !fixedToDelivery} disabled={fixedToDelivery} onChange={(v) => set("pickup", v)} />
+                <CheckField id="promo-delivery" label="Delivery" checked={draft.delivery || fixedToDelivery} disabled={fixedToDelivery} onChange={(v) => set("delivery", v)} />
               </div>
               <div className="grid gap-4 sm:grid-cols-2">
                 <Field>
@@ -356,16 +357,18 @@ function CheckField({
   id,
   label,
   checked,
+  disabled,
   onChange,
 }: {
   id: string;
   label: string;
   checked: boolean;
+  disabled?: boolean;
   onChange: (v: boolean) => void;
 }) {
   return (
     <Field orientation="horizontal">
-      <Checkbox id={id} checked={checked} onCheckedChange={(v) => onChange(v === true)} />
+      <Checkbox id={id} checked={checked} disabled={disabled} onCheckedChange={(v) => onChange(v === true)} />
       <FieldLabel htmlFor={id} className="font-normal">
         {label}
       </FieldLabel>

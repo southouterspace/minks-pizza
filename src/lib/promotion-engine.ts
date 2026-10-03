@@ -112,7 +112,6 @@ export type Refusal =
   | { kind: "newCustomers" }
   | { kind: "schedule"; schedule: WeeklyWindow[] }
   | { kind: "orderType"; only: OrderType }
-  | { kind: "deliveryFree" }
   | { kind: "short"; shortCents: number }
   | { kind: "noQualifying"; reward: PromotionReward }
   | { kind: "betterDeal"; winners: string[] };
@@ -317,10 +316,6 @@ function firstRefusal(c: PromotionCandidate, input: EvaluateInput): Refusal | nu
   }
   if (!inSchedule(p.schedule, now, timezone)) return { kind: "schedule", schedule: p.schedule ?? [] };
   if (!p.orderTypes.includes(input.orderType)) return { kind: "orderType", only: input.orderType === "pickup" ? "delivery" : "pickup" };
-  if (REWARD_SCOPE[p.reward.type] === "delivery") {
-    if (input.orderType === "pickup") return { kind: "orderType", only: "delivery" };
-    if (input.deliveryFeeCents === 0) return { kind: "deliveryFree" };
-  }
   const short = p.minSubtotalCents - input.subtotalCents;
   if (short > 0) return { kind: "short", shortCents: short };
   if (applyReward(p.reward, freshState(input), input.lines) === 0) return { kind: "noQualifying", reward: p.reward };

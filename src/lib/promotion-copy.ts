@@ -160,8 +160,9 @@ function noQualifyingCopy(reward: PromotionReward, names?: TargetNames): string 
     }
     case "order_percent":
     case "order_amount":
-    case "free_delivery":
       return "Add an item to use this";
+    case "free_delivery":
+      return "Delivery is already free";
   }
 }
 
@@ -191,8 +192,6 @@ export function refusalCopy(
       return `Valid ${describeSchedule(r.schedule)}`;
     case "orderType":
       return r.only === "pickup" ? "Pickup orders only" : "Delivery orders only";
-    case "deliveryFree":
-      return "Delivery is already free";
     case "short":
       return `Add ${formatCents(r.shortCents)} more to use ${ctx.display}`;
     case "noQualifying":

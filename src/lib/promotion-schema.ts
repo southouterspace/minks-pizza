@@ -97,8 +97,8 @@ export const promotionInputSchema = z
     message: "The end date must be on or after the start date",
     path: ["endsOn"],
   })
-  .refine((p) => p.reward.type !== "free_delivery" || p.orderTypes.includes("delivery"), {
-    message: "Free delivery needs delivery orders",
+  .refine((p) => REWARD_SCOPE[p.reward.type] !== "delivery" || (p.orderTypes.length === 1 && p.orderTypes[0] === "delivery"), {
+    message: "Free delivery is for delivery orders only",
     path: ["orderTypes"],
   });
 export type PromotionInput = z.infer<typeof promotionInputSchema>;

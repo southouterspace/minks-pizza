@@ -289,7 +289,8 @@ test("every rejection reason, word for word", () => {
     [coded(promo(base), "MINK-7KQ2-X9", { maxUses: 1, codeUses: 1 }), {}, "This code has been fully redeemed"],
     [coded(promo(base, { isActive: false }), "PAUSED"), {}, "This offer has ended"],
     [coded(promo(base, { archivedAt: NOW }), "GONE"), {}, "This offer has ended"],
-    [coded(promo({ type: "free_delivery" }), "SHIPIT"), {}, "Delivery orders only"],
+    [coded(promo({ type: "free_delivery" }, { orderTypes: ["delivery"] }), "SHIPIT"), {}, "Delivery orders only"],
+    [coded(promo({ type: "free_delivery" }, { orderTypes: ["delivery"] }), "SHIPIT"), { orderType: "delivery", deliveryFeeCents: 0 }, "Delivery is already free"],
   ];
   for (const [c, over, reason] of cases) {
     const e = run([c], over);
@@ -516,6 +517,13 @@ test("each reward type's form shows exactly the fields its reward reads", () => 
     );
     assert.deepEqual(read.sort(), [...REWARD_FORM[t].fields].sort(), t);
   }
+});
+
+test("free delivery is saved for delivery orders only", () => {
+  const input = fromDraft({ ...EMPTY_DRAFT, name: "Free delivery", rewardType: "free_delivery", pickup: true, delivery: false });
+  assert.deepEqual(input.orderTypes, ["delivery"]);
+  const both = promotionInputSchema.safeParse({ ...input, orderTypes: ["pickup", "delivery"] });
+  assert.equal(both.success ? "saved" : both.error.issues[0].message, "Free delivery is for delivery orders only");
 });
 
 console.log(`\n${passed} tests passed`);

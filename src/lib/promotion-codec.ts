@@ -10,6 +10,7 @@ import type { PromotionTerms } from "./promotion-engine";
 import type { MenuCatalog } from "./promotion-admin";
 import {
   ANY_ITEM,
+  REWARD_SCOPE,
   sameTarget,
   type PromotionInput,
   type PromotionReward,
@@ -97,6 +98,9 @@ export const REWARD_FORM = {
   bogo: { label: "Buy X, get Y", fields: ["buyQty", "getQty", "getPercent", "maxApplications", "target", "getTarget"] },
   free_delivery: { label: "Free delivery", fields: [] },
 } as const satisfies Record<RewardType, { label: string; fields: readonly RewardField[] }>;
+
+/** A delivery reward is meaningless on pickup, so the form fixes its order types. */
+export const deliveryOnly = (t: RewardType) => REWARD_SCOPE[t] === "delivery";
 
 /** "12" for 1200, "12.5" for 1250: dollars from cents, percent from basis points. */
 const fromHundredths = (n: number) => (n / 100).toFixed(2).replace(/\.00$/, "");
@@ -190,7 +194,9 @@ export function fromDraft(d: PromotionDraft): PromotionInput {
     trigger: d.trigger,
     reward: rewardOf(d),
     minSubtotalCents: toHundredths(d.minSubtotal),
-    orderTypes: [...(d.pickup ? (["pickup"] as const) : []), ...(d.delivery ? (["delivery"] as const) : [])],
+    orderTypes: deliveryOnly(d.rewardType)
+      ? ["delivery"]
+      : [...(d.pickup ? (["pickup"] as const) : []), ...(d.delivery ? (["delivery"] as const) : [])],
     startsOn: d.startsOn || null,
     endsOn: d.endsOn || null,
     schedule: d.schedule,
