@@ -25,6 +25,7 @@ import {
   storeSettings,
   recipeLines,
 } from "../src/db";
+import { csvResponse } from "../src/lib/csv";
 import { recordMoves } from "../src/lib/inventory";
 import {
   attachBps,
@@ -234,7 +235,7 @@ async function main() {
         { day: "2020-03-03", orders: 2, netSalesCents: 1700, lineSalesCents: 1700, costedSalesCents: 1500, cogsCents: 350 },
       ]);
       assert.deepEqual(report.total, {
-        day: null, orders: 4, netSalesCents: 6175, lineSalesCents: 6175, costedSalesCents: 5975, cogsCents: 1695,
+        orders: 4, netSalesCents: 6175, lineSalesCents: 6175, costedSalesCents: 5975, cogsCents: 1695,
       });
       assert.deepEqual(
         [...report.days, report.total].map((r) => [foodCostBps(r), coverageBps(r)]),
@@ -305,6 +306,20 @@ async function main() {
           expectedMilli: 1_000_000, countedMilli: 1_000_000, varianceMilli: 0, usageCents: 0, varianceCents: 0,
         },
       ]);
+    });
+
+    await test("variance CSV keeps losses as plain negative numbers", async () => {
+      const table = await REPORTS[1].csv(new URLSearchParams(`count=${countB}`));
+      assert.equal(table.filename, `variance-count-${countB}.csv`);
+      assert.deepEqual(
+        table.rows.map((r) => r.map((cell, i) => (i === 2 ? typeof cell : cell))),
+        [
+          [`${tag} Mozzarella`, "g", "string", 4900, 2000, 50, 1100, 5750, 5700, -50, "11.00", "-0.50"],
+          [`${tag} Pepperoni`, "g", "string", 1000, 0, 0, 197.5, 802.5, 800, -2.5, "3.95", "-0.05"],
+        ],
+      );
+      const text = await csvResponse(table.filename, table.header, table.rows).text();
+      assert.equal(text.split("\r\n")[1].split(",").slice(3).join(","), "4900,2000,50,1100,5750,5700,-50,11.00,-0.50");
     });
 
     await test("variance defaults to the latest count; an unknown id falls back to it", async () => {

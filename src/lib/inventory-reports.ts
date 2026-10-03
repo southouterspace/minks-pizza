@@ -105,9 +105,7 @@ function soldIn(range: DateRange, timezone: string) {
 // Food cost %
 // ---------------------------------------------------------------------------
 
-export type FoodCostRow = {
-  /** YYYY-MM-DD, or null on the totals row. */
-  day: string | null;
+export type FoodCostTotals = {
   orders: number;
   /** Σ order subtotals: items and modifiers, no tax, tips or fees. */
   netSalesCents: number;
@@ -119,15 +117,18 @@ export type FoodCostRow = {
   cogsCents: number;
 };
 
+/** One store-local day, YYYY-MM-DD. */
+export type FoodCostRow = FoodCostTotals & { day: string };
+
 /** Theoretical food cost over the sales it is known for, so unknown lines don't read as free. */
-export const foodCostBps = (r: FoodCostRow) => ratioBps(r.cogsCents, r.costedSalesCents);
-export const coverageBps = (r: FoodCostRow) => ratioBps(r.costedSalesCents, r.lineSalesCents);
+export const foodCostBps = (r: FoodCostTotals) => ratioBps(r.cogsCents, r.costedSalesCents);
+export const coverageBps = (r: FoodCostTotals) => ratioBps(r.costedSalesCents, r.lineSalesCents);
 
 export type FoodCostReport = {
   range: DateRange;
   timezone: string;
   days: FoodCostRow[];
-  total: FoodCostRow;
+  total: FoodCostTotals;
 };
 
 export async function foodCostReport(params: ReportParams): Promise<FoodCostReport> {
@@ -174,16 +175,15 @@ export async function foodCostReport(params: ReportParams): Promise<FoodCostRepo
     costedSalesCents: Number(r.costed_sales),
     cogsCents: Number(r.cogs),
   }));
-  const total = days.reduce<FoodCostRow>(
+  const total = days.reduce<FoodCostTotals>(
     (t, d) => ({
-      day: null,
       orders: t.orders + d.orders,
       netSalesCents: t.netSalesCents + d.netSalesCents,
       lineSalesCents: t.lineSalesCents + d.lineSalesCents,
       costedSalesCents: t.costedSalesCents + d.costedSalesCents,
       cogsCents: t.cogsCents + d.cogsCents,
     }),
-    { day: null, orders: 0, netSalesCents: 0, lineSalesCents: 0, costedSalesCents: 0, cogsCents: 0 },
+    { orders: 0, netSalesCents: 0, lineSalesCents: 0, costedSalesCents: 0, cogsCents: 0 },
   );
   return { range, timezone, days, total };
 }
@@ -540,8 +540,8 @@ export const REPORTS = [
       return {
         filename: `food-cost-${range.from}-to-${range.to}.csv`,
         header: ["Day", "Orders", "Net sales", "COGS", "Food cost %", "Cost known for % of sales"],
-        rows: [...days, total].map((r) => [
-          r.day ?? "Total",
+        rows: [...days, { ...total, day: "Total" }].map((r) => [
+          r.day,
           r.orders,
           dollarsCell(r.netSalesCents),
           dollarsCell(r.cogsCents),
@@ -555,7 +555,8 @@ export const REPORTS = [
     slug: "variance",
     title: "Variance",
     async csv(params) {
-      const { count, rows } = await varianceReport(params);
+      const [{ count, rows }, timezone] = await Promise.all([varianceReport(params), getStoreTimezone()]);
+      const local = (d: Date) => d.toLocaleString("sv-SE", { timeZone: timezone, hour12: false }).slice(0, 16);
       return {
         filename: `variance-count-${count?.id ?? "none"}.csv`,
         header: [
@@ -565,7 +566,7 @@ export const REPORTS = [
         rows: rows.map((r) => [
           r.name,
           r.baseUnit,
-          r.since?.toISOString() ?? "first move",
+          r.since ? local(r.since) : "first move",
           qtyCell(r.openingMilli),
           qtyCell(r.receivedMilli),
           qtyCell(r.wastedMilli),
