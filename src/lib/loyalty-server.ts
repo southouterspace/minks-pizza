@@ -238,30 +238,36 @@ export async function memberByReferralCode(code: string): Promise<LoyaltyMember 
 }
 
 /**
- * Enrolls a normalized phone, or returns the member who already has it. A
- * referral link only counts for a phone new to the program.
+ * A phone that just proved itself with a login code: enrolls it, or marks the
+ * existing member verified and fills in a missing name. A referral link only
+ * counts for a phone new to the program.
  */
-export async function findOrCreateMember(
+export async function enrollVerifiedMember(
   phone: string,
-  details: { name?: string | null; referredById?: number | null } = {},
-): Promise<{ member: LoyaltyMember; created: boolean }> {
+  details: { name: string | null; referredById: number | null },
+): Promise<LoyaltyMember> {
   for (let attempt = 0; ; attempt++) {
     try {
-      const [created] = await db
+      const [member] = await db
         .insert(loyaltyMembers)
         .values({
           phone,
           name: details.name || null,
           referralCode: newReferralCode(),
-          referredById: details.referredById ?? null,
+          referredById: details.referredById,
+          verifiedAt: new Date(),
         })
-        .onConflictDoNothing({ target: loyaltyMembers.phone })
+        .onConflictDoUpdate({
+          target: loyaltyMembers.phone,
+          set: {
+            name: sql`coalesce(${loyaltyMembers.name}, excluded.name)`,
+            verifiedAt: sql`coalesce(${loyaltyMembers.verifiedAt}, excluded.verified_at)`,
+          },
+        })
         .returning();
-      if (created) return { member: created, created: true };
-      const [existing] = await db.select().from(loyaltyMembers).where(eq(loyaltyMembers.phone, phone));
-      return { member: existing, created: false };
+      return member;
     } catch (err) {
-      // Phone conflicts are absorbed above, so a unique violation here is a
+      // Phone conflicts become updates above, so a unique violation here is a
       // referral-code collision: roll a new code.
       if (pgCode(err) !== "23505" || attempt >= 3) throw err;
     }

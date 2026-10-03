@@ -3,11 +3,11 @@ import { createHmac, randomInt, timingSafeEqual } from "node:crypto";
 import { cookies } from "next/headers";
 import { SignJWT, jwtVerify } from "jose";
 import { and, count, desc, eq, gt, isNull, sql } from "drizzle-orm";
-import { db, loyaltyLoginCodes, loyaltyMembers } from "@/db";
+import { db, loyaltyLoginCodes } from "@/db";
 import { normalizePhone } from "@/lib/loyalty";
 import {
   claimRecentOrders,
-  findOrCreateMember,
+  enrollVerifiedMember,
   getLoyaltySettings,
   getMember,
   memberByReferralCode,
@@ -99,24 +99,22 @@ export async function verifyLoginCode(
     return { ok: false, error: "That code isn't right. Check it and try again." };
   }
 
+  // Enrolling, claiming and refreshing are idempotent, so they run before the
+  // code is spent: if one fails, the customer can try the same code again.
+  const referrer = details.referralCode ? await memberByReferralCode(details.referralCode) : null;
+  const member = await enrollVerifiedMember(phone, {
+    name: details.name ?? null,
+    referredById: referrer?.id ?? null,
+  });
+  await claimRecentOrders(member);
+  await refreshMember(member.id);
+
   const [consumed] = await db
     .update(loyaltyLoginCodes)
     .set({ consumedAt: new Date() })
     .where(and(eq(loyaltyLoginCodes.id, pending.id), isNull(loyaltyLoginCodes.consumedAt)))
     .returning({ id: loyaltyLoginCodes.id });
   if (!consumed) return { ok: false, error: "That code was already used. Send a new one." };
-
-  const referrer = details.referralCode ? await memberByReferralCode(details.referralCode) : null;
-  const { member } = await findOrCreateMember(phone, {
-    name: details.name,
-    referredById: referrer?.id ?? null,
-  });
-  await db
-    .update(loyaltyMembers)
-    .set({ verifiedAt: new Date(), ...(details.name && !member.name ? { name: details.name } : {}) })
-    .where(eq(loyaltyMembers.id, member.id));
-  await claimRecentOrders(member);
-  await refreshMember(member.id);
   await setMemberSession(member.id);
   return { ok: true, memberId: member.id };
 }
