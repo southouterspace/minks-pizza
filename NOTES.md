@@ -562,6 +562,18 @@ the webhook route and the admin UI are untested against real services.
 - Destructive e2e (creating/removing operator accounts) must not run against the
   production database. `mcp__Neon__create_branch` makes an isolated copy in
   seconds; point `MINKS_DATABASE_URL` at it and delete the branch afterwards.
+- `db.execute(sql…)` is a thenable. Returned from an async function, the
+  caller's `await` runs it, so it is gone before `db.batch` sees it. Build
+  batch statements synchronously (`inventorySyncStatement(plan)`).
+- drizzle-kit 0.31 can't read back `UNIQUE NULLS NOT DISTINCT`. Every push
+  offered to truncate the table to re-add it, and a non-interactive push
+  failed. `recipe_lines` uses a `coalesce` expression index instead, which
+  push rebuilds each time, harmlessly.
+- React resets a form after its action finishes, which snapped controlled
+  unit selects back to their first option. The count and receive forms submit
+  through `onSubmit` + `useTransition` instead.
+- `e2e-operator.ts` expects an order on the live board and `owner@minks.example`
+  / `pizza-test-1234` to exist. On a fresh test branch, create both first.
 
 - React 19 resets a `<form>` after its action finishes. A Base UI `Switch`
   inside one snaps its hidden checkbox back to the first-render value, so the
@@ -801,3 +813,69 @@ review. Both rewrote checkout, so the merge chose one shape for it:
   once the server has priced the cart.
 - The loyalty points-multiplier form moved to `loyalty-promotion-form.tsx`,
   since `promotion-form.tsx` is the deals form.
+
+## Session 9 — Pizza topping inventory (issue #11)
+
+**Ask:** issue #11. Toppings by half and portion, ingredients with per-size
+recipes, stock depleted by completed orders, counts, waste and deliveries,
+food-cost reports and auto-86. See README → Inventory and food cost.
+
+- **Group kind, not names.** `modifier_groups.kind` (choice, size, toppings)
+  decides which group sizes recipes and which offers halves and portions. The
+  KDS name regexes remain only for order lines placed before #11.
+- **Structured choice on the order line.** `OrderItemModifier` gains
+  `modifierId`, `placement` and `portion`. The client sends `{id, placement,
+  portion}`; `priceCart` reprices with `toppingPriceCents`, the same pure
+  function the dialog uses, so the displayed total is the charged total.
+- **Integer units everywhere.** Quantities are milli base units (1 g = 1000),
+  costs are millicents per base unit. Each ingredient's usage for an order is
+  rounded once, at the end.
+- **Recipes per owner per size.** A size line beats the "all sizes" line.
+  Halves and portions are factors in Settings. Negative lines on an option
+  model removals, and a line's usage is clamped at zero.
+- **Append-only ledger, convergent sync.** On hand is the sum of
+  `inventory_moves`. `inventorySyncStatement` brings an order's sale moves to
+  "full usage if completed and not refunded, else nothing" and inserts only
+  the difference. It runs in the same `db.batch` as every status move (admin,
+  KDS handoff, KDS recall), reads the status inside the statement, and running
+  it twice changes nothing. Recall from completed gives the stock back.
+- **A count is the variance.** A count posts counted − on hand, computed in the
+  insert statement, so the count move *is* the variance since the previous
+  count. The variance report reads it straight off the ledger.
+- **Auto-86 with crossing semantics.** `syncStockOuts` keeps one `stock_outs`
+  row per out ingredient, listing what it turned off. Restoring turns those
+  back on unless another stock-out still lists them. An operator re-enabling
+  an item leaves the row, so later sales don't re-86 it. Only ingredients
+  that have been received or counted are judged: before that, on hand is just
+  minus sales, and a threshold would 86 the menu on day one.
+- **Food cost % divides by costed sales**, the line totals with a known
+  cost. Coverage is shown beside it, so unknown-cost lines never pass as free.
+
+**Tested** against throwaway branches of the `minks-kds-test` Neon project:
+`test-inventory-domain` (12), `test-ticket-line` (4), `test-unit-entry` (5),
+`test-inventory-db` (12), `test-inventory-reports` (10) and the e2e scripts
+`e2e-toppings` (19), `e2e-recipes` (40), `e2e-inventory-ops` (28),
+`e2e-reports` (22) and `e2e-inventory-story` (32: storefront order → KDS
+handoff → depletion → recall → auto-86 banner → delivery restores → variance
+report, run twice). All earlier scripts still pass.
+
+### Merging inventory with promotions, loyalty, delivery and staff
+
+The default branch rewrote checkout and order transitions while #11 was in
+review. The merge keeps one path for each:
+
+- **Pricing.** `priceCart` in `orders.ts` is still where a line is priced, and
+  `quoteCheckout` (`checkout.ts`) is its only caller. The structured topping
+  choice (`{id, placement, portion}`), `toppingPriceCents` and the
+  placement/portion validation live in `priceCart`, so deals, rewards and tax
+  all see the topping price. `toCartLineInput` in `cart-context.tsx` builds the
+  payload for both the live quote and `placeOrder`; the quote used to send bare
+  ids, which would have priced a half extra topping as a whole regular one.
+- **Transitions.** `transitionStatements` carries the stock reconcile itself,
+  next to the loyalty `ON_ENTER` statements, whenever a move enters or leaves
+  `completed`. Every caller (admin, KDS handoff and recall, the e2e harness's
+  cancel) gets it without adding a statement, and only `syncStockOuts` stays at
+  the call site because it runs after the batch commits. The function became
+  async because the usage plan is computed in TypeScript first.
+- **Schema.** Both sides' tables, enums and `store_settings` columns. The
+  `recipe_lines` coalesce index stays (see Gotchas).

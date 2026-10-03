@@ -112,6 +112,9 @@ export function KitchenDisplay({ initial, storeName }: { initial: KdsSnapshot; s
   // action finished must not overwrite the action's result.
   const version = useRef(0);
   const inFlight = useRef(0);
+  // Taps update the screen at once but reach the server in order: a handoff
+  // sent before its bump commits would be refused as stale.
+  const sendQueue = useRef<Promise<unknown>>(Promise.resolve());
 
   const view: KdsView = prefs.screen === "ready" ? "all" : prefs.screen;
   const screenNow = now + offsetMs;
@@ -203,12 +206,16 @@ export function KitchenDisplay({ initial, storeName }: { initial: KdsSnapshot; s
       inFlight.current += 1;
       const mine = version.current;
       setSnapshot((s) => applyLocally(s, action, new Date(Date.now() + offsetMs).toISOString()));
-      try {
-        const res = await fetch("/api/kds", {
+      const send = sendQueue.current.then(() =>
+        fetch("/api/kds", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify(action),
-        });
+        }),
+      );
+      sendQueue.current = send.catch(() => undefined);
+      try {
+        const res = await send;
         if (!res.ok) throw new Error(String(res.status));
         const next = (await res.json()) as KdsSnapshot;
         if (version.current === mine) receive(next);

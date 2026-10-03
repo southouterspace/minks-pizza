@@ -1,6 +1,7 @@
 // Not server-only: the order e2e and the loyalty tests transition orders the way the app does.
 import { and, eq, inArray, sql, type SQL } from "drizzle-orm";
 import { db, orderDiscounts, orderEvents, orders } from "@/db";
+import { inventorySyncStatement, planOrderUsage, syncStockOuts } from "@/lib/inventory";
 import { bpsOf, formatCents } from "@/lib/money";
 import { getSettings } from "@/lib/orders";
 import { discountedTotals } from "@/lib/promotion-engine";
@@ -83,11 +84,14 @@ const ON_ENTER: Partial<Record<OrderStatus, (orderId: string) => BatchItem<"pg">
 
 /**
  * A logged status move from any of `from` into `to`, stamping the columns
- * `statusTimestamps` names, followed by what entering `to` sets off. `when`
- * adds a condition (the KDS uses it to move only when the items say so).
- * Spread into a `db.batch`; the first result is the move's logged rows.
+ * `statusTimestamps` names, followed by what entering `to` sets off and, when
+ * the move enters or leaves `completed`, the stock reconcile (a completed
+ * order holds its usage; any other holds none). `when` adds a condition (the
+ * KDS uses it to move only when the items say so). Spread into a `db.batch`;
+ * the first result is the move's logged rows. Call `syncStockOuts` after the
+ * batch commits.
  */
-export function transitionStatements(args: {
+export async function transitionStatements(args: {
   orderId: string;
   from: readonly OrderStatus[];
   to: OrderStatus;
@@ -114,7 +118,11 @@ export function transitionStatements(args: {
     actor: args.actor,
     now: args.now,
   });
-  return [move, ...(ON_ENTER[args.to]?.(args.orderId) ?? [])] as const;
+  const stock =
+    args.to === "completed" || args.from.includes("completed")
+      ? [inventorySyncStatement(await planOrderUsage(args.orderId))]
+      : [];
+  return [move, ...(ON_ENTER[args.to]?.(args.orderId) ?? []), ...stock] as const;
 }
 
 export async function transitionOrder(args: {
@@ -138,8 +146,10 @@ export async function transitionOrder(args: {
   if (args.to === "canceled" && !args.cancelReason) {
     return { ok: false, reason: "Pick a reason for canceling." };
   }
-  const [{ rows }] = await db.batch(transitionStatements({ ...args, from: [order.status], now: new Date() }));
-  return rows.length > 0 ? { ok: true } : { ok: false, reason: STALE };
+  const [{ rows }] = await db.batch(await transitionStatements({ ...args, from: [order.status], now: new Date() }));
+  if (rows.length === 0) return { ok: false, reason: STALE };
+  await syncStockOuts({ orderId: args.orderId });
+  return { ok: true };
 }
 
 export async function adjustPromisedTime(args: {

@@ -7,11 +7,14 @@ import { z } from "zod";
 import {
   categories,
   db,
+  ingredientPacks,
+  ingredients,
   itemModifierGroups,
   menuItems,
   modifierGroups,
   modifiers,
   operators,
+  recipeLines,
   storeLogo,
   storeSettings,
   type DayHours,
@@ -28,6 +31,8 @@ import { cancelCourier, dispatchCourier } from "@/lib/delivery/dispatch";
 import { COURIER_PROVIDERS, CourierError } from "@/lib/delivery/types";
 import { OrderError } from "@/lib/orders";
 import { STORE_TIMEZONES } from "@/lib/hours";
+import { MODIFIER_GROUP_KINDS, type ModifierGroupKind } from "@/lib/toppings";
+import { unitFor } from "@/lib/unit-entry";
 import { KITCHEN_STATIONS, type KitchenStation } from "@/lib/kds";
 import { DEFAULT_STAFF_RULES, DEFAULT_TIMEZONE, parseStaffRules } from "@/lib/timeclock";
 import {
@@ -56,6 +61,14 @@ import {
 import { compSchema } from "@/lib/validation";
 
 export type AuthFormState = { error?: string };
+
+function jsonField(fd: FormData, name: string): unknown {
+  try {
+    return JSON.parse(textField(fd, name));
+  } catch {
+    return null;
+  }
+}
 
 /** Kitchen-display routing for a category; blank or unknown → "kitchen". */
 function stationField(fd: FormData): KitchenStation {
@@ -617,6 +630,7 @@ export async function saveItem(formData: FormData): Promise<void> {
 
 function parseGroupFields(fd: FormData): {
   name: string;
+  kind: ModifierGroupKind;
   minSelect: number;
   maxSelect: number | null;
 } {
@@ -630,7 +644,8 @@ function parseGroupFields(fd: FormData): {
     maxSelect = null;
   }
   if (maxSelect !== null && maxSelect < minSelect) maxSelect = minSelect;
-  return { name, minSelect, maxSelect };
+  const kind = z.enum(MODIFIER_GROUP_KINDS).catch("choice").parse(textField(fd, "kind"));
+  return { name, kind, minSelect, maxSelect };
 }
 
 export async function createModifierGroup(formData: FormData): Promise<void> {
@@ -670,6 +685,11 @@ export async function deleteModifierGroup(formData: FormData): Promise<void> {
 // Modifiers
 // ---------------------------------------------------------------------------
 
+function extraPriceField(fd: FormData, kind: ModifierGroupKind): number | null {
+  if (kind !== "toppings" || textField(fd, "extraPrice") === "") return null;
+  return dollarsToCents(fd, "extraPrice");
+}
+
 /**
  * Default semantics: for single-select groups (maxSelect = 1) a default acts
  * like a radio — setting one clears the others in the group.
@@ -704,7 +724,7 @@ export async function createModifier(formData: FormData): Promise<void> {
   const isDefault = checkbox(formData, "isDefault");
 
   const [group] = await db
-    .select({ id: modifierGroups.id, maxSelect: modifierGroups.maxSelect })
+    .select({ id: modifierGroups.id, maxSelect: modifierGroups.maxSelect, kind: modifierGroups.kind })
     .from(modifierGroups)
     .where(eq(modifierGroups.id, groupId));
   if (!group) return;
@@ -725,6 +745,7 @@ export async function createModifier(formData: FormData): Promise<void> {
     groupId,
     name,
     priceDeltaCents,
+    extraPriceDeltaCents: extraPriceField(formData, group.kind),
     isDefault,
     sortOrder: (last?.sortOrder ?? -1) + 1,
   });
@@ -740,14 +761,15 @@ export async function updateModifier(formData: FormData): Promise<void> {
   const isDefault = checkbox(formData, "isDefault");
 
   const [modifier] = await db
-    .select({ id: modifiers.id, groupId: modifiers.groupId })
+    .select({ id: modifiers.id, groupId: modifiers.groupId, kind: modifierGroups.kind })
     .from(modifiers)
+    .innerJoin(modifierGroups, eq(modifierGroups.id, modifiers.groupId))
     .where(eq(modifiers.id, modifierId));
   if (!modifier) return;
 
   await db
     .update(modifiers)
-    .set({ name, priceDeltaCents })
+    .set({ name, priceDeltaCents, extraPriceDeltaCents: extraPriceField(formData, modifier.kind) })
     .where(eq(modifiers.id, modifierId));
   await applyDefault(modifier.groupId, modifierId, isDefault);
   revalidateModifiers();
@@ -793,6 +815,86 @@ export async function deleteModifier(formData: FormData): Promise<void> {
   revalidateModifiers();
 }
 
+export type RecipeActionState = { error?: string };
+
+const recipeSchema = z.object({
+  owner: z.enum(["item", "modifier"]),
+  ownerId: z.coerce.number().int().positive(),
+  lines: z.array(
+    z.object({
+      ingredientId: z.number().int().positive(),
+      sizeModifierId: z.number().int().positive().nullable(),
+      qty: z.number().finite(),
+      unit: z.string(),
+    }),
+  ),
+});
+
+export async function saveRecipe(formData: FormData): Promise<RecipeActionState> {
+  await requireOperator();
+  const parsed = recipeSchema.safeParse({
+    owner: textField(formData, "owner"),
+    ownerId: textField(formData, "ownerId"),
+    lines: jsonField(formData, "lines"),
+  });
+  if (!parsed.success) return { error: "Every quantity must be a number." };
+  const { owner, ownerId, lines } = parsed.data;
+
+  const ids = [...new Set(lines.map((l) => l.ingredientId))];
+  const [found, packs, sizeIds] = await Promise.all([
+    ids.length ? db.select().from(ingredients).where(inArray(ingredients.id, ids)) : [],
+    ids.length
+      ? db.select().from(ingredientPacks).where(inArray(ingredientPacks.ingredientId, ids))
+      : [],
+    db
+      .select({ id: modifiers.id })
+      .from(modifiers)
+      .innerJoin(modifierGroups, eq(modifierGroups.id, modifiers.groupId))
+      .where(eq(modifierGroups.kind, "size")),
+  ]);
+  const byId = new Map(found.map((i) => [i.id, i]));
+  const sizes = new Set(sizeIds.map((s) => s.id));
+
+  const rows: (typeof recipeLines.$inferInsert)[] = [];
+  const seen = new Set<string>();
+  for (const line of lines) {
+    const ingredient = byId.get(line.ingredientId);
+    if (!ingredient) return { error: "An ingredient in this recipe no longer exists." };
+    const unit = unitFor(
+      line.unit,
+      ingredient.baseUnit,
+      packs.filter((p) => p.ingredientId === ingredient.id),
+    );
+    if (!unit) return { error: `${ingredient.name} can't be measured in ${line.unit}.` };
+    if (line.sizeModifierId !== null && !sizes.has(line.sizeModifierId)) {
+      return { error: "That size no longer exists." };
+    }
+    const qtyMilli = Math.round(line.qty * unit.baseQtyMilli);
+    if (qtyMilli === 0) continue;
+    if (qtyMilli < 0 && owner === "item") {
+      return { error: `${ingredient.name}: only options can remove an ingredient.` };
+    }
+    const key = `${line.ingredientId}:${line.sizeModifierId}`;
+    if (seen.has(key)) return { error: `${ingredient.name} is listed twice.` };
+    seen.add(key);
+    rows.push({
+      menuItemId: owner === "item" ? ownerId : null,
+      modifierId: owner === "modifier" ? ownerId : null,
+      sizeModifierId: line.sizeModifierId,
+      ingredientId: line.ingredientId,
+      qtyMilli,
+    });
+  }
+
+  const ownerColumn = owner === "item" ? recipeLines.menuItemId : recipeLines.modifierId;
+  await db.batch([
+    db.delete(recipeLines).where(eq(ownerColumn, ownerId)),
+    ...(rows.length ? [db.insert(recipeLines).values(rows)] : []),
+  ]);
+  revalidatePath(owner === "item" ? `/admin/menu/items/${ownerId}` : "/admin/modifiers");
+  return {};
+}
+
 // ---------------------------------------------------------------------------
 // Store settings
 // ---------------------------------------------------------------------------
@@ -808,6 +910,10 @@ function logoUrlOrNull(formData: FormData): string | null {
   const raw = textField(formData, "logoUrl");
   if (!raw) return null;
   return /^https:\/\/\S+$/i.test(raw) ? raw : null;
+}
+
+function percentBps(fd: FormData, name: string, min: number, max: number): number {
+  return Math.round(z.coerce.number().min(min).max(max).parse(textField(fd, name)) * 100);
 }
 
 export async function saveSettings(formData: FormData): Promise<void> {
@@ -862,6 +968,11 @@ export async function saveSettings(formData: FormData): Promise<void> {
     deliveryMinimumCents: dollarsToCents(formData, "deliveryMinimum"),
     taxRateBps: Math.round(taxPercent * 100),
     timezone: timezoneField(formData),
+    halfToppingPriceBps: percentBps(formData, "halfToppingPricePct", 0, 100),
+    halfPortionBps: percentBps(formData, "halfPortionPct", 0, 100),
+    lightPortionBps: percentBps(formData, "lightPortionPct", 0, 100),
+    extraPortionBps: percentBps(formData, "extraPortionPct", 100, 300),
+    minMarginBps: percentBps(formData, "minMarginPct", 0, 100),
     weekStartsOn: Math.min(6, intField(formData, "weekStartsOn", DEFAULT_STAFF_RULES.weekStartsOn)),
     ...parseStaffRules((name) => textField(formData, name)),
     updatedAt: new Date(),

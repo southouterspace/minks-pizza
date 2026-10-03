@@ -19,6 +19,7 @@ import {
 import type { KitchenStation } from "@/lib/kds";
 import type { AppliedDiscount } from "@/lib/promotion-engine";
 import type { RedemptionCheck } from "@/lib/promotion-usage";
+import { DEFAULT_CHOICE, toppingPriceCents } from "@/lib/toppings";
 import type { CheckoutInput } from "@/lib/validation";
 
 export type PricedLine = {
@@ -55,11 +56,6 @@ export const getSettings = cache(async (): Promise<StoreSettings> => {
   return settings;
 });
 
-/**
- * Server-side pricing: the client's cart carries only ids + quantities; every
- * price comes from the database here. Also enforces availability and modifier
- * group min/max rules.
- */
 export async function priceCart(
   lines: CheckoutInput["lines"],
   orderType: "pickup" | "delivery",
@@ -113,21 +109,41 @@ export async function priceCart(
     const countByGroup = new Map<number, number>();
     let unitPrice = item.basePriceCents;
 
-    for (const modId of line.modifierIds) {
-      const mod = modById.get(modId);
+    for (const selection of line.modifiers) {
+      const mod = modById.get(selection.id);
       const group = mod ? groupById.get(mod.groupId) : undefined;
       if (!mod || !group || !allowedGroupIds.has(mod.groupId) || !mod.isAvailable) {
         throw new OrderError(
           `An option on "${item.name}" is no longer available. Please re-add it to your cart.`,
         );
       }
+      const isTopping = group.kind === "toppings";
+      const choice = {
+        placement: selection.placement ?? DEFAULT_CHOICE.placement,
+        portion: selection.portion ?? DEFAULT_CHOICE.portion,
+      };
+      if (!isTopping && (choice.placement !== "whole" || choice.portion !== "regular")) {
+        throw new OrderError(
+          `"${mod.name}" on "${item.name}" can't be split or portioned. Please re-add it to your cart.`,
+        );
+      }
+      if (choice.portion === "extra" && mod.extraPriceDeltaCents === null) {
+        throw new OrderError(
+          `Extra ${mod.name} isn't offered on "${item.name}". Please re-add it to your cart.`,
+        );
+      }
+      const priceDeltaCents = isTopping
+        ? toppingPriceCents(mod, choice, settings)
+        : mod.priceDeltaCents;
       chosen.push({
+        modifierId: mod.id,
         groupName: group.name,
         modifierName: mod.name,
-        priceDeltaCents: mod.priceDeltaCents,
+        priceDeltaCents,
+        ...(isTopping ? choice : {}),
       });
       countByGroup.set(mod.groupId, (countByGroup.get(mod.groupId) ?? 0) + 1);
-      unitPrice += mod.priceDeltaCents;
+      unitPrice += priceDeltaCents;
     }
 
     for (const groupId of allowedGroupIds) {
@@ -149,7 +165,7 @@ export async function priceCart(
     return {
       itemId: item.id,
       categoryId: item.categoryId,
-      modifierIds: line.modifierIds,
+      modifierIds: line.modifiers.map((m) => m.id),
       itemName: item.name,
       quantity: line.quantity,
       unitPriceCents: unitPrice,

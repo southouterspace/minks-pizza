@@ -21,6 +21,7 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { cn } from "@/lib/utils";
+import { describeChoice } from "@/lib/toppings";
 
 export const metadata: Metadata = { title: "Order status" };
 export const dynamic = "force-dynamic";
@@ -205,7 +206,7 @@ export default async function OrderPage({
                   </p>
                   {item.modifiers.length > 0 ? (
                     <p className="mt-0.5 text-xs text-muted-foreground">
-                      {item.modifiers.map((m) => m.modifierName).join(" · ")}
+                      {item.modifiers.map((m) => describeChoice(m.modifierName, m)).join(" · ")}
                     </p>
                   ) : null}
                   {item.notes ? (

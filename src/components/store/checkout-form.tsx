@@ -4,7 +4,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useMemo, useRef, useState, useTransition } from "react";
 import { ShoppingBag } from "lucide-react";
-import { useCart } from "@/components/cart-context";
+import { toCartLineInput, useCart } from "@/components/cart-context";
 import { formatCents } from "@/lib/money";
 import { placeOrder } from "@/app/(store)/actions";
 import { Button, buttonVariants } from "@/components/ui/button";
@@ -30,6 +30,7 @@ import { PromoCodeField, QuoteTotals, useCheckoutQuote } from "@/components/stor
 import { Textarea } from "@/components/ui/textarea";
 import { cn } from "@/lib/utils";
 import { LoyaltyPanel } from "@/components/store/checkout-loyalty";
+import { describeChoice } from "@/lib/toppings";
 
 export type CheckoutConfig = {
   storeName: string;
@@ -148,12 +149,7 @@ export function CheckoutForm({ config }: { config: CheckoutConfig }) {
         expectedTotalCents: totalCents ?? undefined,
         joinLoyalty: config.loyalty && !member ? joinLoyalty : false,
         rewardId,
-        lines: lines.map((l) => ({
-          itemId: l.itemId,
-          quantity: l.quantity,
-          modifierIds: l.modifiers.map((m) => m.id),
-          notes: l.notes,
-        })),
+        lines: lines.map(toCartLineInput),
       });
       if (result.ok) {
         clear();
@@ -418,8 +414,8 @@ export function CheckoutForm({ config }: { config: CheckoutConfig }) {
                     </span>{" "}
                     {line.itemName}
                     {line.modifiers.length > 0 ? (
-                      <span className="block truncate text-xs text-muted-foreground">
-                        {line.modifiers.map((m) => m.modifierName).join(", ")}
+                      <span className="block text-xs text-muted-foreground">
+                        {line.modifiers.map((m) => describeChoice(m.modifierName, m)).join(", ")}
                       </span>
                     ) : null}
                   </span>

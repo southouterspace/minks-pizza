@@ -59,11 +59,11 @@ async function placeOrders() {
       {
         itemId: item("Cheese Pizza"),
         quantity: 2,
-        modifierIds: [pick("Size", 'Large 14"'), pick("Crust", "Thin Crust"), pick("Extra Toppings", "Pepperoni")],
+        modifiers: [pick("Size", 'Large 14"'), pick("Crust", "Thin Crust"), pick("Extra Toppings", "Pepperoni")].map((id) => ({ id })),
         notes: "well done",
       },
-      { itemId: item("Garlic Knots (6)"), quantity: 1, modifierIds: [] },
-      { itemId: item("Soda (2-Liter)"), quantity: 1, modifierIds: [] },
+      { itemId: item("Garlic Knots (6)"), quantity: 1, modifiers: [] },
+      { itemId: item("Soda (2-Liter)"), quantity: 1, modifiers: [] },
     ],
   });
   const b = await createOrder({
@@ -78,7 +78,7 @@ async function placeOrders() {
       {
         itemId: item("Margherita"),
         quantity: 1,
-        modifierIds: [pick("Size", 'Medium 12"'), pick("Crust", "Hand Tossed")],
+        modifiers: [pick("Size", 'Medium 12"'), pick("Crust", "Hand Tossed")].map((id) => ({ id })),
       },
     ],
   });
@@ -224,7 +224,7 @@ async function main() {
     customerName: "Carol Late",
     customerPhone: "(555) 010-3333",
     tipCents: 0,
-    lines: [{ itemId: item("Cheese Pizza"), quantity: 1, modifierIds: [pick("Size", 'Small 10"'), pick("Crust", "Hand Tossed")] }],
+    lines: [{ itemId: item("Cheese Pizza"), quantity: 1, modifiers: [pick("Size", 'Small 10"'), pick("Crust", "Hand Tossed")].map((id) => ({ id })) }],
   });
   const ticketC = page.getByTestId(`kds-ticket-${c.orderNumber}`);
   await ticketC.waitFor({ timeout: 10_000 });

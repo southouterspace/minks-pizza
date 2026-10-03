@@ -57,10 +57,48 @@ const DEFAULTS = {
   deliveryMinimumCents: 0,
   taxRateBps: 0,
   timezone: DEFAULT_TIMEZONE,
+  halfToppingPriceBps: 5000,
+  halfPortionBps: 5000,
+  lightPortionBps: 5000,
+  extraPortionBps: 15000,
+  minMarginBps: 7000,
   ...STAFF_DEFAULTS,
   isPublished: false,
   isAcceptingOrders: true,
 };
+
+const PERCENT_FIELDS = [
+  {
+    name: "halfToppingPricePct",
+    key: "halfToppingPriceBps",
+    label: "Half topping price",
+    hint: "Share of a topping's price charged for a half.",
+  },
+  {
+    name: "halfPortionPct",
+    key: "halfPortionBps",
+    label: "Half portion",
+    hint: "Share of the topping a half uses.",
+  },
+  {
+    name: "lightPortionPct",
+    key: "lightPortionBps",
+    label: "Light portion",
+    hint: "Share of the topping light uses.",
+  },
+  {
+    name: "extraPortionPct",
+    key: "extraPortionBps",
+    label: "Extra portion",
+    hint: "Extra uses this much of the topping (100–300%).",
+  },
+  {
+    name: "minMarginPct",
+    key: "minMarginBps",
+    label: "Minimum margin",
+    hint: "Items below this gross margin are flagged.",
+  },
+] as const;
 
 export default async function SettingsPage({
   searchParams,
@@ -436,6 +474,33 @@ export default async function SettingsPage({
 
         <FieldSet>
           <FieldLegend className="w-full border-b border-border pb-2 text-sm!">
+            Toppings and margins
+          </FieldLegend>
+          <Card>
+            <div className="grid gap-4 px-4 sm:grid-cols-2">
+              {PERCENT_FIELDS.map((f) => (
+                <Field key={f.name}>
+                  <FieldLabel htmlFor={`s-${f.name}`}>{f.label} (%)</FieldLabel>
+                  <Input
+                    id={`s-${f.name}`}
+                    name={f.name}
+                    type="number"
+                    min={f.key === "extraPortionBps" ? 100 : 0}
+                    max={f.key === "extraPortionBps" ? 300 : 100}
+                    step="0.01"
+                    required
+                    defaultValue={settings[f.key] / 100}
+                    className="tabular-nums"
+                  />
+                  <FieldDescription>{f.hint}</FieldDescription>
+                </Field>
+              ))}
+            </div>
+          </Card>
+        </FieldSet>
+
+        <FieldSet>
+          <FieldLegend className="w-full border-b border-border pb-2 text-sm!">
             Staff &amp; payroll
           </FieldLegend>
           <FieldDescription>
@@ -473,7 +538,7 @@ export default async function SettingsPage({
           </Card>
         </FieldSet>
 
-        <FieldSet>
+        <FieldSet className="min-w-0">
           <FieldLegend className="w-full border-b border-border pb-2 text-sm!">
             Hours
           </FieldLegend>
@@ -499,7 +564,7 @@ export default async function SettingsPage({
                       Closed
                     </FieldLabel>
                   </Field>
-                  <div className="ml-auto flex items-center gap-2">
+                  <div className="ml-auto flex flex-wrap items-center gap-2">
                     <FieldLabel
                       htmlFor={`open-${day}`}
                       className="text-xs! font-normal! text-muted-foreground"

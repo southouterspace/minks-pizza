@@ -103,9 +103,9 @@ export async function menuFixture() {
         { id: crust.id, groupName: "Crust", modifierName: crust.name, priceDeltaCents: crust.priceDeltaCents },
       ],
     },
-    orderLines: [{ itemId: pizza.id, quantity: 1, modifierIds: [large.id, crust.id] }],
+    orderLines: [{ itemId: pizza.id, quantity: 1, modifiers: [{ id: large.id }, { id: crust.id }] }],
     /** Below the delivery minimum. */
-    knotsLines: [{ itemId: knots.id, quantity: 1, modifierIds: [] }],
+    knotsLines: [{ itemId: knots.id, quantity: 1, modifiers: [] }],
     timezone: store.timezone,
   };
 }

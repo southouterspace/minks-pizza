@@ -3,7 +3,7 @@
 import { useMemo, useState } from "react";
 import { Minus, Plus } from "lucide-react";
 import { toast } from "sonner";
-import type { MenuItemView, ModifierGroupView } from "@/lib/menu";
+import type { MenuItemView, ModifierGroupView, ModifierView } from "@/lib/menu";
 import { formatCents } from "@/lib/money";
 import { useCart, type CartModifier } from "@/components/cart-context";
 import { Button } from "@/components/ui/button";
@@ -20,6 +20,15 @@ import { Label } from "@/components/ui/label";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { Textarea } from "@/components/ui/textarea";
 import { cn } from "@/lib/utils";
+import {
+  DEFAULT_CHOICE,
+  PORTION_LABEL,
+  toppingPriceCents,
+  type Placement,
+  type Portion,
+  type ToppingChoice,
+} from "@/lib/toppings";
+import { PizzaGlyph } from "@/components/pizza-glyph";
 
 /** Row shell shared by the radio and checkbox variants of an option. */
 const optionRowClass = (checked: boolean) =>
@@ -30,6 +39,116 @@ const optionRowClass = (checked: boolean) =>
       : "border-border hover:border-foreground/30",
   );
 
+function selectionPrice(group: ModifierGroupView, mod: ModifierView, choice: ToppingChoice): number {
+  return group.kind === "toppings"
+    ? toppingPriceCents(mod, choice, group.pricing)
+    : mod.priceDeltaCents;
+}
+
+const PLACEMENT_OPTIONS: { value: Placement; label: string }[] = [
+  { value: "left", label: "Left" },
+  { value: "whole", label: "Whole" },
+  { value: "right", label: "Right" },
+];
+
+function Segmented<T extends string>({
+  label,
+  value,
+  options,
+  onChange,
+}: {
+  label: string;
+  value: T;
+  options: { value: T; label: string; icon?: React.ReactNode }[];
+  onChange: (value: T) => void;
+}) {
+  return (
+    <div
+      role="radiogroup"
+      aria-label={label}
+      className="grid auto-cols-fr grid-flow-col gap-0.5 rounded-lg border border-border bg-background p-0.5"
+    >
+      {options.map((o) => {
+        const active = o.value === value;
+        return (
+          <button
+            key={o.value}
+            type="button"
+            role="radio"
+            aria-checked={active}
+            onClick={() => onChange(o.value)}
+            className={cn(
+              "flex h-10 items-center justify-center gap-1.5 rounded-md px-2 text-sm transition-colors sm:h-9",
+              active
+                ? "bg-foreground font-medium text-background"
+                : "text-muted-foreground hover:bg-muted hover:text-foreground",
+            )}
+          >
+            {o.icon}
+            {o.label}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+function ToppingOption({
+  mod,
+  checked,
+  choice,
+  priceCents,
+  onToggle,
+  onChoice,
+}: {
+  mod: ModifierView;
+  checked: boolean;
+  choice: ToppingChoice;
+  priceCents: number;
+  onToggle: () => void;
+  onChoice: (patch: Partial<ToppingChoice>) => void;
+}) {
+  const portions: Portion[] =
+    mod.extraPriceDeltaCents === null ? ["light", "regular"] : ["light", "regular", "extra"];
+  return (
+    <div data-topping={mod.name} className={cn(optionRowClass(checked), "block p-0")}>
+      <label className="flex cursor-pointer items-center justify-between gap-3 px-3.5 py-2.5">
+        <span className="flex items-center gap-3">
+          <Checkbox checked={checked} onCheckedChange={onToggle} />
+          {mod.name}
+          {checked && choice.placement !== "whole" ? (
+            <PizzaGlyph placement={choice.placement} className="text-muted-foreground" />
+          ) : null}
+        </span>
+        {priceCents !== 0 ? (
+          <span className="shrink-0 tabular-nums text-muted-foreground">
+            +{formatCents(priceCents)}
+          </span>
+        ) : null}
+      </label>
+      {checked ? (
+        <div className="grid gap-2 border-t border-border px-3.5 py-3 sm:grid-cols-2">
+          <Segmented
+            label={`${mod.name} placement`}
+            value={choice.placement}
+            options={PLACEMENT_OPTIONS.map((o) => ({
+              ...o,
+              icon: <PizzaGlyph placement={o.value} />,
+            }))}
+            onChange={(placement) => onChoice({ placement })}
+          />
+          <Segmented
+            label={`${mod.name} amount`}
+            value={choice.portion}
+            options={portions.map((p) => ({ value: p, label: PORTION_LABEL[p] }))}
+            onChange={(portion) => onChoice({ portion })}
+          />
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
 function groupHint(group: ModifierGroupView): string {
   if (group.minSelect > 0) {
     return group.maxSelect === 1
@@ -39,11 +158,6 @@ function groupHint(group: ModifierGroupView): string {
   return group.maxSelect ? `Up to ${group.maxSelect}` : "Optional";
 }
 
-/**
- * Item customization dialog: radio for single-select groups (maxSelect = 1),
- * checkboxes otherwise. Defaults are pre-selected. Enforces min/max locally;
- * the server re-validates at checkout.
- */
 export function ItemDialog({
   item,
   orderingEnabled,
@@ -54,8 +168,8 @@ export function ItemDialog({
   onClose: () => void;
 }) {
   const { addLine } = useCart();
-  const [selected, setSelected] = useState<Set<number>>(() => {
-    const initial = new Set<number>();
+  const [selected, setSelected] = useState<Map<number, ToppingChoice>>(() => {
+    const initial = new Map<number, ToppingChoice>();
     for (const group of item.modifierGroups) {
       const defaults = group.modifiers.filter((m) => m.isDefault);
       const picks =
@@ -65,7 +179,7 @@ export function ItemDialog({
             ? group.modifiers.slice(0, group.minSelect)
             : [];
       for (const p of picks.slice(0, group.maxSelect ?? picks.length)) {
-        initial.add(p.id);
+        initial.set(p.id, DEFAULT_CHOICE);
       }
     }
     return initial;
@@ -78,34 +192,45 @@ export function ItemDialog({
     const group = item.modifierGroups.find((g) => g.id === groupId);
     if (!group) return;
     setSelected((prev) => {
-      const next = new Set(prev);
+      const next = new Map(prev);
       const groupModIds = group.modifiers.map((m) => m.id);
       if (group.maxSelect === 1) {
         // radio behavior
         for (const id of groupModIds) next.delete(id);
-        next.add(modId);
+        next.set(modId, DEFAULT_CHOICE);
       } else if (next.has(modId)) {
         next.delete(modId);
       } else {
         const count = groupModIds.filter((id) => next.has(id)).length;
         if (group.maxSelect !== null && count >= group.maxSelect) return prev;
-        next.add(modId);
+        next.set(modId, DEFAULT_CHOICE);
       }
       return next;
     });
   };
 
+  const setChoice = (modId: number, patch: Partial<ToppingChoice>) =>
+    setSelected((prev) => {
+      const current = prev.get(modId);
+      return current ? new Map(prev).set(modId, { ...current, ...patch }) : prev;
+    });
+
   const chosen: CartModifier[] = useMemo(
     () =>
       item.modifierGroups.flatMap((g) =>
-        g.modifiers
-          .filter((m) => selected.has(m.id))
-          .map((m) => ({
-            id: m.id,
-            groupName: g.name,
-            modifierName: m.name,
-            priceDeltaCents: m.priceDeltaCents,
-          })),
+        g.modifiers.flatMap((m) => {
+          const choice = selected.get(m.id);
+          if (!choice) return [];
+          return [
+            {
+              id: m.id,
+              groupName: g.name,
+              modifierName: m.name,
+              priceDeltaCents: selectionPrice(g, m, choice),
+              ...(g.kind === "toppings" ? choice : {}),
+            },
+          ];
+        }),
       ),
     [item, selected],
   );
@@ -157,7 +282,24 @@ export function ItemDialog({
                 </span>
               </legend>
 
-              {group.maxSelect === 1 ? (
+              {group.kind === "toppings" ? (
+                <div className="mt-3 grid gap-2">
+                  {group.modifiers.map((mod) => {
+                    const choice = selected.get(mod.id);
+                    return (
+                      <ToppingOption
+                        key={mod.id}
+                        mod={mod}
+                        checked={choice !== undefined}
+                        choice={choice ?? DEFAULT_CHOICE}
+                        priceCents={selectionPrice(group, mod, choice ?? DEFAULT_CHOICE)}
+                        onToggle={() => toggle(group.id, mod.id)}
+                        onChoice={(patch) => setChoice(mod.id, patch)}
+                      />
+                    );
+                  })}
+                </div>
+              ) : group.maxSelect === 1 ? (
                 <RadioGroup
                   className="mt-3"
                   value={

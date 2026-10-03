@@ -4,9 +4,11 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import {
   CalendarClock,
+  ChartColumn,
   ClipboardList,
   Gift,
   History,
+  Package,
   Settings,
   SlidersHorizontal,
   Tag,
@@ -25,9 +27,11 @@ const LINKS = [
     exact: false,
     icon: SlidersHorizontal,
   },
+  { href: "/admin/inventory", label: "Inventory", exact: false, icon: Package },
+  { href: "/admin/reports", label: "Reports", exact: false, icon: ChartColumn },
   { href: "/admin/promotions", label: "Promotions", exact: false, icon: Tag },
-  { href: "/admin/staff", label: "Staff", exact: false, icon: CalendarClock },
   { href: "/admin/loyalty", label: "Loyalty", exact: false, icon: Gift },
+  { href: "/admin/staff", label: "Staff", exact: false, icon: CalendarClock },
   { href: "/admin/settings", label: "Settings", exact: false, icon: Settings },
   { href: "/admin/team", label: "Team", exact: false, icon: Users },
 ];

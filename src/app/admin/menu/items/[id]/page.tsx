@@ -10,7 +10,10 @@ import {
   modifiers,
 } from "@/db";
 import { requireOperator } from "@/lib/auth";
+import Link from "next/link";
 import { ItemForm } from "@/components/admin/item-form";
+import { RecipeEditor } from "@/components/admin/recipe-editor";
+import { itemRecipe, recipeIngredients } from "@/components/admin/recipe-data";
 
 export const dynamic = "force-dynamic";
 
@@ -45,6 +48,7 @@ export default async function EditItemPage({
   const allModifiers = await db
     .select({ id: modifiers.id, groupId: modifiers.groupId })
     .from(modifiers);
+  const [recipe, allIngredients] = await Promise.all([itemRecipe(item), recipeIngredients()]);
   const links = await db
     .select({ groupId: itemModifierGroups.groupId })
     .from(itemModifierGroups)
@@ -77,6 +81,34 @@ export default async function EditItemPage({
           selectedGroupIds={links.map((l) => l.groupId)}
         />
       </div>
+
+      <section className="mt-10 max-w-3xl border-t border-border pt-6" aria-labelledby="recipe-heading">
+        <h2 id="recipe-heading" className="text-sm font-semibold">
+          Recipe
+        </h2>
+        <p className="mt-1 mb-4 text-sm text-muted-foreground">
+          What one plate uses, by size. Toppings and other options add their own recipes on the{" "}
+          <Link href="/admin/modifiers" className="underline underline-offset-2 hover:text-foreground">
+            Modifiers
+          </Link>{" "}
+          page; costs come from{" "}
+          <Link
+            href="/admin/inventory/ingredients"
+            className="underline underline-offset-2 hover:text-foreground"
+          >
+            Ingredients
+          </Link>
+          .
+        </p>
+        <RecipeEditor
+          owner={{ kind: "item", id: item.id }}
+          sizes={recipe.sizes}
+          ingredients={allIngredients}
+          lines={recipe.lines}
+          allowRemoval={false}
+          plate={recipe.plate}
+        />
+      </section>
     </div>
   );
 }

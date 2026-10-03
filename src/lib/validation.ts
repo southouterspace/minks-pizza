@@ -1,9 +1,16 @@
 import { z } from "zod";
+import { PLACEMENTS, PORTIONS } from "@/lib/toppings";
+
+export const cartModifierSchema = z.object({
+  id: z.number().int().positive(),
+  placement: z.enum(PLACEMENTS).optional(),
+  portion: z.enum(PORTIONS).optional(),
+});
 
 export const cartLineSchema = z.object({
   itemId: z.number().int().positive(),
   quantity: z.number().int().min(1).max(50),
-  modifierIds: z.array(z.number().int().positive()).max(50),
+  modifiers: z.array(cartModifierSchema).max(50),
   notes: z.string().trim().max(500).optional(),
 });
 
