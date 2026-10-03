@@ -205,13 +205,13 @@ export function TimeClock({ initial, storeName }: { initial: KioskBoard; storeNa
           aria-label="Back to admin"
         >
           <ArrowLeft className="size-4" aria-hidden="true" />
-          <span className="font-semibold">{storeName}</span>
+          <span className="hidden font-semibold sm:inline">{storeName}</span>
         </Link>
-        <span className="ml-auto flex items-center gap-1.5 text-sm text-zinc-400" data-testid="tc-on-clock">
+        <span className="ml-auto flex items-center gap-1.5 text-sm whitespace-nowrap text-zinc-400" data-testid="tc-on-clock">
           <Users className="size-4" aria-hidden="true" />
           {board.onClock} on the clock
         </span>
-        <span className="text-2xl font-black tabular-nums" suppressHydrationWarning>
+        <span className="text-2xl font-black whitespace-nowrap tabular-nums" suppressHydrationWarning>
           {formatClock(screenNow, tz)}
         </span>
       </header>
