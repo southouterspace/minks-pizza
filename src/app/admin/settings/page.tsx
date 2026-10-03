@@ -26,6 +26,8 @@ import { Input } from "@/components/ui/input";
 import { NativeSelect, NativeSelectOption } from "@/components/ui/native-select";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import type { HalfToppingRule } from "@/lib/pricing";
+import { POS_SETTING_LIMITS } from "@/lib/settings";
+import { defaultSettings } from "@/lib/settings-server";
 import { US_TIMEZONES } from "@/lib/store-time";
 
 export const dynamic = "force-dynamic";
@@ -45,40 +47,6 @@ const HALF_RULES: { value: HalfToppingRule; label: string; example: string }[] =
   },
 ];
 
-const DEFAULTS = {
-  name: "My Pizzeria",
-  tagline: null as string | null,
-  logoUrl: null as string | null,
-  logoUploadedAt: null as Date | null,
-  phone: null as string | null,
-  email: null as string | null,
-  addressLine1: null as string | null,
-  addressLine2: null as string | null,
-  city: null as string | null,
-  state: null as string | null,
-  zip: null as string | null,
-  hours: null as DayHours[] | null,
-  pickupEnabled: true,
-  deliveryEnabled: false,
-  pickupPrepMinutes: 20,
-  deliveryPrepMinutes: 45,
-  kdsWarnMinutes: 10,
-  kdsLateMinutes: 15,
-  kdsOvenMinutes: 7,
-  deliveryFeeCents: 0,
-  deliveryMinimumCents: 0,
-  taxRateBps: 0,
-  halfToppingRule: "average" as HalfToppingRule,
-  extraToppingBps: 20_000,
-  discountApprovalCents: 500,
-  ovenCapacityPies: 6,
-  makeMinutes: 3,
-  posLockSeconds: 120,
-  timezone: "America/Chicago",
-  isPublished: false,
-  isAcceptingOrders: true,
-};
-
 export default async function SettingsPage({
   searchParams,
 }: {
@@ -93,7 +61,7 @@ export default async function SettingsPage({
     .select()
     .from(storeSettings)
     .where(eq(storeSettings.id, 1));
-  const settings = row ?? DEFAULTS;
+  const settings = row ?? defaultSettings();
 
   const hoursByDay = new Map<number, DayHours>(
     (settings.hours ?? []).map((h) => [h.day, h]),
@@ -424,9 +392,7 @@ export default async function SettingsPage({
                 id="s-extra"
                 name="extraToppingMultiplier"
                 type="number"
-                min="1"
-                max="5"
-                step="0.25"
+                {...POS_SETTING_LIMITS.extraToppingMultiplier}
                 required
                 defaultValue={settings.extraToppingBps / 10_000}
                 className="tabular-nums"
@@ -439,9 +405,7 @@ export default async function SettingsPage({
                 id="s-discount"
                 name="discountApproval"
                 type="number"
-                min="0"
-                max="1000"
-                step="0.01"
+                {...POS_SETTING_LIMITS.discountApprovalDollars}
                 required
                 defaultValue={centsToDollars(settings.discountApprovalCents)}
                 className="tabular-nums"
@@ -454,9 +418,7 @@ export default async function SettingsPage({
                 id="s-lock"
                 name="posLockSeconds"
                 type="number"
-                min="15"
-                max="3600"
-                step="1"
+                {...POS_SETTING_LIMITS.posLockSeconds}
                 required
                 defaultValue={settings.posLockSeconds}
                 className="tabular-nums"
@@ -469,9 +431,7 @@ export default async function SettingsPage({
                 id="s-oven-cap"
                 name="ovenCapacityPies"
                 type="number"
-                min="1"
-                max="50"
-                step="1"
+                {...POS_SETTING_LIMITS.ovenCapacityPies}
                 required
                 defaultValue={settings.ovenCapacityPies}
                 className="tabular-nums"
@@ -483,9 +443,7 @@ export default async function SettingsPage({
                 id="s-make"
                 name="makeMinutes"
                 type="number"
-                min="0"
-                max="60"
-                step="1"
+                {...POS_SETTING_LIMITS.makeMinutes}
                 required
                 defaultValue={settings.makeMinutes}
                 className="tabular-nums"

@@ -78,6 +78,8 @@ async function settingsFlow(page: Page) {
   const [before] = await db.select().from(storeSettings).where(eq(storeSettings.id, 1));
   try {
     await page.goto(`${BASE}/admin/settings`, { waitUntil: "networkidle" });
+    const lockInput = page.locator('input[name="posLockSeconds"]');
+    check("the auto-lock input carries the server's bounds", [await lockInput.getAttribute("min"), await lockInput.getAttribute("max")], ["15", "3600"]);
     await page.getByText("Higher half", { exact: true }).click();
     await page.fill('input[name="extraToppingMultiplier"]', "1.5");
     await page.fill('input[name="discountApproval"]', "7.50");
