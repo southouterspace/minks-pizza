@@ -31,6 +31,8 @@ export const checkoutSchema = z
     orderNotes: z.string().trim().max(1000).optional(),
     tipCents: z.number().int().min(0).max(50_000),
     lines: z.array(cartLineSchema).min(1, "Your cart is empty").max(50),
+    joinLoyalty: z.boolean().optional(),
+    rewardId: z.number().int().positive().nullable().optional(),
   })
   .superRefine((data, ctx) => {
     if (data.orderType === "delivery") {

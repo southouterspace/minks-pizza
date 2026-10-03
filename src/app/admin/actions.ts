@@ -2,7 +2,7 @@
 
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
-import { asc, desc, eq, inArray } from "drizzle-orm";
+import { and, asc, desc, eq, inArray } from "drizzle-orm";
 import { z } from "zod";
 import {
   categories,
@@ -26,6 +26,11 @@ import {
   verifyPassword,
 } from "@/lib/auth";
 import { KITCHEN_STATIONS, type KitchenStation } from "@/lib/kds";
+import {
+  cancellationStatements,
+  completionStatements,
+  getLoyaltySettings,
+} from "@/lib/loyalty-server";
 
 export type AuthFormState = { error?: string };
 
@@ -289,21 +294,27 @@ export async function updateOrderStatus(formData: FormData): Promise<void> {
   const status = orderStatusSchema.parse(textField(formData, "status"));
 
   const [order] = await db
-    .select({ id: orders.id, status: orders.status })
+    .select({ id: orders.id, status: orders.status, loyaltyMemberId: orders.loyaltyMemberId })
     .from(orders)
     .where(eq(orders.id, orderId));
   if (!order) return;
   if (!STATUS_TRANSITIONS[order.status]?.includes(status)) return;
 
   const now = new Date();
-  await db
-    .update(orders)
-    .set({
-      status,
-      updatedAt: now,
-      ...(status === "ready" ? { readyAt: now } : {}),
-    })
-    .where(eq(orders.id, orderId));
+  await db.batch([
+    db
+      .update(orders)
+      .set({
+        status,
+        updatedAt: now,
+        ...(status === "ready" ? { readyAt: now } : {}),
+      })
+      .where(and(eq(orders.id, orderId), eq(orders.status, order.status))),
+    ...(status === "completed"
+      ? completionStatements(order, await getLoyaltySettings())
+      : []),
+    ...(status === "canceled" ? cancellationStatements(orderId) : []),
+  ]);
   revalidatePath("/admin");
 }
 

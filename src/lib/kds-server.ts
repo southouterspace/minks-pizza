@@ -1,6 +1,7 @@
 import "server-only";
 import { and, asc, desc, eq, gte, inArray, isNull, ne, sql } from "drizzle-orm";
 import { db, orderItems, orders, storeSettings } from "@/db";
+import { completionStatements, getLoyaltySettings } from "@/lib/loyalty-server";
 import {
   bumpPlan,
   type ItemStage,
@@ -228,8 +229,16 @@ export async function applyKdsAction(action: KdsAction): Promise<void> {
     return;
   }
 
-  await db
-    .update(orders)
-    .set({ status: "completed", updatedAt: now })
-    .where(and(eq(orders.id, action.orderId), eq(orders.status, "ready")));
+  const [order] = await db
+    .select({ id: orders.id, loyaltyMemberId: orders.loyaltyMemberId })
+    .from(orders)
+    .where(eq(orders.id, action.orderId));
+  if (!order) return;
+  await db.batch([
+    db
+      .update(orders)
+      .set({ status: "completed", updatedAt: now })
+      .where(and(eq(orders.id, action.orderId), eq(orders.status, "ready"))),
+    ...completionStatements(order, await getLoyaltySettings()),
+  ]);
 }
