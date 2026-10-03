@@ -16,15 +16,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { keepUnlocked, lockTerminal, mutateOrderAction, readOrder, switchEmployee } from "@/app/pos/actions";
-import type {
-  Actor,
-  Approval,
-  Board,
-  DrawerEventKind,
-  OrderView,
-  PosMenu,
-  TenderInput,
-} from "@/lib/orders";
+import { dueCents, type Actor, type Approval, type Board, type DrawerEventKind, type OrderView, type PosMenu, type TenderInput } from "@/lib/orders";
 import * as outbox from "@/lib/pos-outbox";
 import { defaultSelections, needsBuilder } from "@/lib/pos-client/builder";
 import { draftLine, draftReducer, draftTotals, emptyDraft, findItem, isPhoneFirst, toSubmitRequest, type Draft, type DraftLine, type Mode } from "@/lib/pos-client/draft";
@@ -42,7 +34,7 @@ import { LockScreen, ManagerPinDialog } from "./pin-pad";
 import { PizzaBuilder } from "./pizza-builder";
 import { FallbackTicket, Receipt, slipLines, usePrinter } from "./print";
 import { CloseShiftDialog, DrawerDialog, OpenShiftDialog } from "./shift-dialogs";
-import { TenderDialog } from "./tender-dialog";
+import { TenderDialog, type TenderOutcome } from "./tender-dialog";
 import { Tap } from "./touch";
 
 const POLL_MS = 4_000;
@@ -66,6 +58,15 @@ type Pane =
   | { kind: "builder"; item: MenuItem; initial: { selections: Selection[]; quantity: number; notes: string | null; lineId?: string } }
   | { kind: "board" }
   | { kind: "order"; order: OrderView };
+
+/** Paying for the draft as it was when Pay was tapped; `placed` once the first tender sent it. */
+type Checkout = {
+  title: string;
+  draft: Draft;
+  dueCents: number;
+  /** `order` is null while the order waits in the outbox. */
+  placed: { orderId: string; order: OrderView | null } | null;
+};
 
 type PendingApproval = {
   label: string;
@@ -105,12 +106,7 @@ export function PosTerminal({
   const [draft, dispatch] = useReducer(draftReducer, undefined, () => emptyDraft());
   const [pane, setPane] = useState<Pane>({ kind: "menu" });
   const [sending, setSending] = useState(false);
-  const [paying, setPaying] = useState<{
-    key: string;
-    tenders: TenderInput[];
-    /** Set once the paid order went to the outbox; `order` is null when it was queued, not sent. */
-    submitted: { order: OrderView | null } | null;
-  } | null>(null);
+  const [checkout, setCheckout] = useState<Checkout | null>(null);
   const [approval, setApproval] = useState<PendingApproval | null>(null);
   const [dialog, setDialog] = useState<null | { kind: "open_shift" } | { kind: "close_shift"; shiftId: string } | { kind: "drawer"; drawer: DrawerEventKind } | { kind: "outbox" }>(null);
   const [prefs, setPrefs] = useState<Prefs>({ dark: false, lockAfterOrder: false });
@@ -138,7 +134,7 @@ export function PosTerminal({
 
   const lock = useCallback(() => {
     setStaff(null);
-    setPaying(null);
+    setCheckout(null);
     setApproval((a) => {
       a?.resolve(null);
       return null;
@@ -320,16 +316,19 @@ export function PosTerminal({
 
   const quoteFor = (mode: Mode) => (mode === "delivery" ? board?.quote.deliveryMinutes : board?.quote.pickupMinutes) ?? 20;
 
-  const finishDraft = useCallback(
-    (mode: Mode) => {
-      dispatch({ type: "reset", mode: mode === "dine_in" ? "dine_in" : "walk_in" });
-      setPane({ kind: "menu" });
-      if (prefs.lockAfterOrder) lock();
-    },
-    [prefs.lockAfterOrder, lock],
-  );
+  const finishOrder = () => {
+    setPane({ kind: "menu" });
+    if (prefs.lockAfterOrder) lock();
+  };
 
+  /** Hands the draft to the outbox and clears it once the outbox holds it. */
   const submitDraft = async (d: Draft, tenders: TenderInput[]): Promise<{ ok: boolean; order: OrderView | null }> => {
+    const result = await sendDraft(d, tenders);
+    if (result.ok) dispatch({ type: "reset", mode: d.mode === "dine_in" ? "dine_in" : "walk_in" });
+    return result;
+  };
+
+  const sendDraft = async (d: Draft, tenders: TenderInput[]): Promise<{ ok: boolean; order: OrderView | null }> => {
     const req = toSubmitRequest(d, quoteFor(d.mode), tenders);
     setSending(true);
     const out = await outbox.submit(req);
@@ -372,9 +371,8 @@ export function PosTerminal({
       }
       return;
     }
-    const mode = draft.mode;
     const { ok } = await submitDraft(draft, []);
-    if (ok) finishDraft(mode);
+    if (ok) finishOrder();
   };
 
   const pay = () => {
@@ -383,21 +381,49 @@ export function PosTerminal({
       setDialog({ kind: "open_shift" });
       return;
     }
-    setPaying({ key: draft.orderId, tenders: [], submitted: null });
+    setCheckout({
+      title: `Pay new ${isPhoneFirst(draft.mode) ? "phone" : draft.mode === "dine_in" ? "dine-in" : "walk-in"} order`,
+      draft,
+      dueCents: draftTotals(draft, menu).totalCents,
+      placed: null,
+    });
   };
 
-  const draftTotal = draftTotals(draft, menu).totalCents;
-
-  const closePaying = async () => {
-    const p = paying;
-    setPaying(null);
-    if (!p) return;
-    if (p.submitted) return finishDraft(draft.mode);
-    if (p.tenders.length > 0) {
-      // Money was taken: the order must be recorded with it.
-      const { ok } = await submitDraft(draft, p.tenders);
-      if (ok) finishDraft(draft.mode);
+  /**
+   * The first tender submits the order with it through the outbox, so money
+   * taken is on the order (or queued in IndexedDB) before the next guest
+   * pays. Later tenders are payments against that order.
+   */
+  const takeTender = async (c: Checkout, tender: TenderInput): Promise<TenderOutcome> => {
+    if (!c.placed) {
+      const { ok, order } = await submitDraft(c.draft, [tender]);
+      if (!ok) return null;
+      setCheckout({ ...c, placed: { orderId: c.draft.orderId, order } });
+      return { dueCents: order ? dueCents(order.totals) : c.dueCents - tender.amountCents };
     }
+    const { orderId } = c.placed;
+    if (!c.placed.order) {
+      await outbox.drain();
+      if ((await outbox.entries()).some((e) => e.orderId === orderId)) {
+        notify.error("This order hasn't reached the server yet. Take the rest once the connection is back.");
+        return null;
+      }
+    }
+    const r = await act("Payment", (approval) => mutateOrderAction({ orderId, mutation: { kind: "tender", tender }, approval }));
+    if (!r || !("order" in r)) return null;
+    setCheckout({ ...c, placed: { orderId, order: r.order } });
+    return { dueCents: dueCents(r.order.totals) };
+  };
+
+  const payLater = async (c: Checkout) => {
+    if (!c.placed && !(await submitDraft(c.draft, [])).ok) return;
+    setCheckout(null);
+    finishOrder();
+  };
+
+  const closeCheckout = (c: Checkout) => {
+    setCheckout(null);
+    if (c.placed) finishOrder();
   };
 
 
@@ -592,32 +618,17 @@ export function PosTerminal({
         </div>
       </div>
 
-      {paying && (
+      {checkout && (
         <TenderDialog
-          key={paying.key}
+          key={checkout.draft.orderId}
           open
-          title={`Pay new ${isPhoneFirst(draft.mode) ? "phone" : draft.mode === "dine_in" ? "dine-in" : "walk-in"} order`}
-          dueCents={draftTotal}
-          lines={draft.lines.map((l) => ({ lineId: l.lineId, label: `${l.quantity} × ${l.name}`, cents: l.unitPriceCents * l.quantity }))}
-          onTender={async (t) => {
-            const tenders = [...paying.tenders, t];
-            const remaining = draftTotal - tenders.reduce((s, x) => s + x.amountCents, 0);
-            if (remaining > 0) {
-              setPaying({ ...paying, tenders });
-              return { dueCents: remaining };
-            }
-            const { ok, order } = await submitDraft(draft, tenders);
-            if (!ok) return null;
-            setPaying({ ...paying, tenders, submitted: { order } });
-            return { dueCents: 0 };
-          }}
-          onPayLater={async () => {
-            const { ok } = await submitDraft(draft, paying.tenders);
-            setPaying(null);
-            if (ok) finishDraft(draft.mode);
-          }}
-          onReceipt={() => paying.submitted?.order && receipt(paying.submitted.order)}
-          onClose={() => void closePaying()}
+          title={checkout.title}
+          dueCents={checkout.dueCents}
+          lines={checkout.draft.lines.map((l) => ({ lineId: l.lineId, label: `${l.quantity} × ${l.name}`, cents: l.unitPriceCents * l.quantity }))}
+          onTender={(t) => takeTender(checkout, t)}
+          onPayLater={() => void payLater(checkout)}
+          onReceipt={() => checkout.placed?.order && receipt(checkout.placed.order)}
+          onClose={() => closeCheckout(checkout)}
         />
       )}
 

@@ -68,8 +68,8 @@ async function signIn(page: Page) {
 const startedAt = new Date();
 
 /** The newest order this run created that matches `where`. */
-async function newestOrder(where: SQL) {
-  const rows = await db.select().from(orders).where(and(where, gte(orders.placedAt, startedAt)));
+async function newestOrder(where: SQL, since = startedAt) {
+  const rows = await db.select().from(orders).where(and(where, gte(orders.placedAt, since)));
   return rows.sort((a, b) => b.placedAt.getTime() - a.placedAt.getTime())[0];
 }
 
@@ -583,6 +583,47 @@ async function main() {
   await page.getByTestId("staff-menu").click();
   await page.getByRole("menuitemcheckbox", { name: "Dark screen" }).click();
   await page.keyboard.press("Escape");
+
+  // --- Idle lock in the middle of a split payment keeps the money that was taken --------------
+  await page.clock.install();
+  await page.reload({ waitUntil: "networkidle" });
+  await page.getByTestId("staff-menu").click();
+  await page.getByRole("menuitem", { name: "Open shift…" }).click();
+  await page.getByLabel("Starting bank").fill("100.00");
+  await page.getByTestId("open-shift-confirm").click();
+  await page.getByTestId("open-shift").waitFor({ state: "detached" });
+  await page.getByRole("button", { name: "New order" }).click();
+  await page.getByRole("radio", { name: "Walk-in" }).click();
+  await page.getByRole("tab", { name: "Sides & Salads" }).click();
+  await page.locator('[data-item="Garlic Knots (6)"]').click();
+  const payPressedAt = new Date();
+  await page.getByTestId("pay").click();
+  await page.getByRole("button", { name: "Split 3 ways" }).click();
+  check("guest 1 of 3 owes $2.16 of the $6.48 knots", (await page.getByTestId("tender-due").innerText()) === "$2.16");
+  await page.getByTestId("cash-exact").click();
+  await page.getByText("Guest 2 of 3").waitFor();
+  await page.clock.fastForward(130_000);
+  check("the idle timer locks the terminal mid-split", await page.getByTestId("lock-screen").waitFor({ timeout: 5_000 }).then(() => true, () => false));
+  const splitOrder = await eventually(async () => (await newestOrder(eq(orders.channel, "walk_in"), payPressedAt)) !== undefined);
+  const knotsOrder = await newestOrder(eq(orders.channel, "walk_in"), payPressedAt);
+  const takenBeforeLock = knotsOrder ? (await tendersOf(knotsOrder.id)).map((t) => t.amountCents) : [];
+  check("guest 1's $2.16 is on a recorded $6.48 order after the lock", splitOrder && knotsOrder.totalCents === 648 && takenBeforeLock.join() === "216", JSON.stringify(takenBeforeLock));
+  await page.keyboard.type("5678");
+  await page.getByTestId("order-panel").waitFor();
+  check("unlocking starts a clean new order", (await page.getByTestId("draft-total").innerText()) === "$0.00");
+  if (knotsOrder) {
+    await page.getByTestId("tab-board").click();
+    await page.getByLabel("Search open orders").fill(`#${knotsOrder.orderNumber}`);
+    await page.locator(`[data-order="${knotsOrder.orderNumber}"]`).click();
+    await page.getByTestId("order-pay").click();
+    check("the open order still owes the other $4.32", (await page.getByTestId("tender-due").innerText()) === "$4.32");
+    await page.getByTestId("cash-exact").click();
+    await page.getByTestId("paid").waitFor();
+    await page.getByTestId("tender-done").click();
+    const settled = await orderRow(knotsOrder.id);
+    const allTenders = (await tendersOf(knotsOrder.id)).map((t) => t.amountCents).sort((a, b) => a - b);
+    check("the rest is collected after unlock: $2.16 + $4.32 = $6.48 paid", settled.paidCents === 648 && allTenders.join() === "216,432", JSON.stringify(allTenders));
+  }
 
   // --- Auto-lock after idle -------------------------------------------------------------------
   await db.update(storeSettings).set({ posLockSeconds: 3 }).where(eq(storeSettings.id, 1));
