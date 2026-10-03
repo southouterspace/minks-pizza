@@ -174,8 +174,9 @@ export type DashboardStats = {
 };
 
 /**
- * The store-local day so far. Net sales are item subtotals of orders that
- * weren't canceled: tax, tips and delivery fees are not sales.
+ * The store-local day so far. Net sales are item subtotals, less reward
+ * discounts, of orders that weren't canceled: tax, tips and delivery fees are
+ * not sales.
  */
 async function getDashboardStats(now: Date, timezone: string): Promise<DashboardStats> {
   const today = sql`(${orders.placedAt} at time zone ${timezone})::date = (${now.toISOString()}::timestamptz at time zone ${timezone})::date`;
@@ -185,7 +186,7 @@ async function getDashboardStats(now: Date, timezone: string): Promise<Dashboard
       .select({
         orders: sql<number>`count(*) filter (where ${today})`.mapWith(Number),
         kept: sql<number>`count(*) filter (where ${kept})`.mapWith(Number),
-        netSalesCents: sql<number>`coalesce(sum(${orders.subtotalCents}) filter (where ${kept}), 0)`.mapWith(Number),
+        netSalesCents: sql<number>`coalesce(sum(${orders.subtotalCents} - ${orders.discountCents}) filter (where ${kept}), 0)`.mapWith(Number),
         canceled: sql<number>`count(*) filter (where ${today} and ${orders.status} = 'canceled')`.mapWith(Number),
         readySeconds: sql<string | null>`avg(extract(epoch from ${orders.readyAt} - ${orders.placedAt})) filter (where ${today} and ${orders.readyAt} is not null)`,
       })
@@ -221,11 +222,11 @@ export async function getBoard(now: Date) {
   return { active, stats, timezone };
 }
 
-/** Non-canceled order subtotals per store-local date, for [from, to). */
+/** Non-canceled order subtotals, less reward discounts, per store-local date, for [from, to). */
 export async function salesByDate(from: Date, to: Date, tz: string): Promise<Map<LocalDate, number>> {
   const day = sql<string>`to_char(${orders.placedAt} at time zone ${tz}, 'YYYY-MM-DD')`;
   const rows = await db
-    .select({ day, cents: sql<number>`sum(${orders.subtotalCents})::int` })
+    .select({ day, cents: sql<number>`sum(${orders.subtotalCents} - ${orders.discountCents})::int` })
     .from(orders)
     .where(and(ne(orders.status, "canceled"), gte(orders.placedAt, from), lt(orders.placedAt, to)))
     .groupBy(sql`1`);

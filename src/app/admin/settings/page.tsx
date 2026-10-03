@@ -9,7 +9,7 @@ import {
   toggleAcceptingOrders,
   togglePublished,
 } from "@/app/admin/actions";
-import { ToggleSwitchForm } from "@/components/admin/toggle-switch-form";
+import { ActionSwitch } from "@/components/admin/action-switch";
 import { LogoField } from "@/components/admin/logo-field";
 import { centsToDollars } from "@/lib/money";
 import { DEFAULT_STAFF_RULES, DEFAULT_TIMEZONE, ruleInputValue, STAFF_RULE_FIELDS, type StaffRules } from "@/lib/timeclock";
@@ -99,7 +99,7 @@ export default async function SettingsPage({
               )}
             </p>
           </div>
-          <ToggleSwitchForm
+          <ActionSwitch
             action={togglePublished}
             checked={settings.isPublished}
             label={settings.isPublished ? "Unpublish store" : "Publish store"}
@@ -118,7 +118,7 @@ export default async function SettingsPage({
               )}
             </p>
           </div>
-          <ToggleSwitchForm
+          <ActionSwitch
             action={toggleAcceptingOrders}
             checked={settings.isAcceptingOrders}
             label={

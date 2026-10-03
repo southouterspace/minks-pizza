@@ -28,6 +28,8 @@ import { Label } from "@/components/ui/label";
 import { Separator } from "@/components/ui/separator";
 import { Textarea } from "@/components/ui/textarea";
 import { cn } from "@/lib/utils";
+import { LoyaltyPanel } from "@/components/store/checkout-loyalty";
+import { useCheckoutPreview } from "@/components/store/use-checkout-preview";
 
 export type CheckoutConfig = {
   storeName: string;
@@ -40,6 +42,10 @@ export type CheckoutConfig = {
   deliveryFeeCents: number;
   deliveryMinimumCents: number;
   taxRateBps: number;
+  loyalty: {
+    programName: string;
+    member: { name: string | null; phone: string; pointsBalance: number } | null;
+  } | null;
 };
 
 const TIP_PRESETS = [0, 10, 15, 20];
@@ -56,8 +62,11 @@ export function CheckoutForm({ config }: { config: CheckoutConfig }) {
   const [customTip, setCustomTip] = useState("");
   const [error, setError] = useState<string | null>(null);
 
-  const [name, setName] = useState("");
-  const [phone, setPhone] = useState("");
+  const member = config.loyalty?.member ?? null;
+  const [name, setName] = useState(member?.name ?? "");
+  const [phone, setPhone] = useState(member?.phone ?? "");
+  const [joinLoyalty, setJoinLoyalty] = useState(true);
+  const [rewardId, setRewardId] = useState<number | null>(null);
   const [email, setEmail] = useState("");
   const [address1, setAddress1] = useState("");
   const [address2, setAddress2] = useState("");
@@ -75,10 +84,13 @@ export function CheckoutForm({ config }: { config: CheckoutConfig }) {
     return Math.round((subtotalCents * tipPercent) / 100);
   }, [tipPercent, customTip, subtotalCents]);
 
-  const taxCents = taxFromBps(subtotalCents, config.taxRateBps);
-  const deliveryFeeCents =
-    orderType === "delivery" ? config.deliveryFeeCents : 0;
-  const totalCents = subtotalCents + taxCents + deliveryFeeCents + tipCents;
+  const preview = useCheckoutPreview(lines, orderType, rewardId, { withRewards: member !== null });
+  const quote = preview.status === "ok" ? preview.quote : null;
+  // Every total comes from one place: the server's quote for this exact cart,
+  // or, until it arrives, a local estimate with no reward applied.
+  const totals = quote ?? estimateTotals(subtotalCents, orderType, config);
+  const totalCents = totals.totalCents + tipCents;
+  const rewardError = quote?.rewardError ?? null;
 
   const belowMinimum =
     orderType === "delivery" && subtotalCents < config.deliveryMinimumCents;
@@ -131,6 +143,8 @@ export function CheckoutForm({ config }: { config: CheckoutConfig }) {
         zip,
         orderNotes,
         tipCents,
+        joinLoyalty: config.loyalty && !member ? joinLoyalty : false,
+        rewardId,
         lines: lines.map((l) => ({
           itemId: l.itemId,
           quantity: l.quantity,
@@ -295,6 +309,18 @@ export function CheckoutForm({ config }: { config: CheckoutConfig }) {
             </section>
           ) : null}
 
+          {config.loyalty ? (
+            <LoyaltyPanel
+              programName={config.loyalty.programName}
+              member={member}
+              preview={quote ?? (preview.status === "loading" ? preview.previous : null)}
+              rewardId={rewardId}
+              onRewardChange={setRewardId}
+              joinLoyalty={joinLoyalty}
+              onJoinChange={setJoinLoyalty}
+            />
+          ) : null}
+
           {/* Tip */}
           <section>
             <h2 className="text-sm font-semibold">
@@ -400,19 +426,25 @@ export function CheckoutForm({ config }: { config: CheckoutConfig }) {
             <dl className="space-y-1.5 text-sm">
               <div className="flex justify-between">
                 <dt className="text-muted-foreground">Subtotal</dt>
-                <dd className="tabular-nums">{formatCents(subtotalCents)}</dd>
+                <dd className="tabular-nums">{formatCents(totals.subtotalCents)}</dd>
               </div>
-              {taxCents > 0 ? (
-                <div className="flex justify-between">
-                  <dt className="text-muted-foreground">Tax</dt>
-                  <dd className="tabular-nums">{formatCents(taxCents)}</dd>
+              {totals.discountCents > 0 ? (
+                <div className="flex justify-between" data-testid="discount-line">
+                  <dt className="text-muted-foreground">Reward</dt>
+                  <dd className="tabular-nums text-success">−{formatCents(totals.discountCents)}</dd>
                 </div>
               ) : null}
-              {deliveryFeeCents > 0 ? (
+              {totals.taxCents > 0 ? (
+                <div className="flex justify-between">
+                  <dt className="text-muted-foreground">Tax</dt>
+                  <dd className="tabular-nums">{formatCents(totals.taxCents)}</dd>
+                </div>
+              ) : null}
+              {totals.deliveryFeeCents > 0 ? (
                 <div className="flex justify-between">
                   <dt className="text-muted-foreground">Delivery fee</dt>
                   <dd className="tabular-nums">
-                    {formatCents(deliveryFeeCents)}
+                    {formatCents(totals.deliveryFeeCents)}
                   </dd>
                 </div>
               ) : null}
@@ -424,8 +456,14 @@ export function CheckoutForm({ config }: { config: CheckoutConfig }) {
               ) : null}
               <div className="flex justify-between border-t border-border pt-2 text-base font-semibold">
                 <dt>Total</dt>
-                <dd className="tabular-nums">{formatCents(totalCents)}</dd>
+                <dd className="tabular-nums" data-testid="order-total">{formatCents(totalCents)}</dd>
               </div>
+              {quote?.pointsEarned ? (
+                <div className="flex justify-between pt-1 text-xs text-muted-foreground" data-testid="points-to-earn">
+                  <dt>Points you&apos;ll earn{quote.promoName ? ` (${quote.promoName})` : ""}</dt>
+                  <dd className="tabular-nums">+{quote.pointsEarned.toLocaleString()}</dd>
+                </div>
+              ) : null}
             </dl>
 
             {belowMinimum ? (
@@ -436,6 +474,14 @@ export function CheckoutForm({ config }: { config: CheckoutConfig }) {
                 to your cart.
               </p>
             ) : null}
+            {rewardError ? (
+              <p className="mt-4 text-sm text-destructive">{rewardError}</p>
+            ) : null}
+            {preview.status === "error" ? (
+              <p role="alert" className="mt-4 text-sm text-destructive" data-testid="preview-error">
+                {preview.error} The total above is an estimate.
+              </p>
+            ) : null}
             {error ? (
               <p role="alert" className="mt-4 text-sm text-destructive">
                 {error}
@@ -444,7 +490,7 @@ export function CheckoutForm({ config }: { config: CheckoutConfig }) {
 
             <Button
               type="submit"
-              disabled={pending || belowMinimum || !config.acceptingOrders}
+              disabled={pending || belowMinimum || !config.acceptingOrders || rewardError !== null}
               className="mt-5 h-11! w-full"
             >
               {pending
@@ -462,4 +508,16 @@ export function CheckoutForm({ config }: { config: CheckoutConfig }) {
       </form>
     </div>
   );
+}
+
+function estimateTotals(subtotalCents: number, orderType: "pickup" | "delivery", config: CheckoutConfig) {
+  const taxCents = taxFromBps(subtotalCents, config.taxRateBps);
+  const deliveryFeeCents = orderType === "delivery" ? config.deliveryFeeCents : 0;
+  return {
+    subtotalCents,
+    discountCents: 0,
+    taxCents,
+    deliveryFeeCents,
+    totalCents: subtotalCents + taxCents + deliveryFeeCents,
+  };
 }

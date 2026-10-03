@@ -45,3 +45,17 @@ export function centsField(fd: FormData, name: string): number | null {
 export function optionalIdField(fd: FormData, name: string): number | null {
   return textField(fd, name) === "" ? null : idField(fd, name);
 }
+
+/**
+ * Every field as trimmed text, keyed by name, for a zod schema that names
+ * the form's own fields. Names in `arrays` keep all their values.
+ */
+export function formFields(fd: FormData, arrays: readonly string[] = []): Record<string, string | string[]> {
+  const out: Record<string, string | string[]> = {};
+  for (const name of new Set(fd.keys())) {
+    out[name] = arrays.includes(name)
+      ? fd.getAll(name).filter((v): v is string => typeof v === "string")
+      : textField(fd, name);
+  }
+  return out;
+}

@@ -34,6 +34,7 @@ const COLUMNS: Column[] = [
   ["Phone", (o) => o.customerPhone],
   ["Email", (o) => o.customerEmail],
   ["Subtotal", (o) => dollars(o.subtotalCents)],
+  ["Reward discount", (o) => dollars(o.discountCents)],
   ["Tax", (o) => dollars(o.taxCents)],
   ["Delivery fee", (o) => dollars(o.deliveryFeeCents)],
   ["Tip", (o) => dollars(o.tipCents)],

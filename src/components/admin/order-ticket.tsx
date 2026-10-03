@@ -14,6 +14,9 @@ export function addressLine(o: OrderDetail): string | null {
 export function Totals({ order, className }: { order: OrderDetail; className?: string }) {
   const rows: [string, number][] = [
     ["Subtotal", order.subtotalCents],
+    ...(order.discountCents > 0
+      ? [[order.loyaltyRewardName ?? "Reward", -order.discountCents] as [string, number]]
+      : []),
     ["Tax", order.taxCents],
     ...(order.deliveryFeeCents > 0 ? [["Delivery fee", order.deliveryFeeCents] as [string, number]] : []),
     ...(order.tipCents > 0 ? [["Tip", order.tipCents] as [string, number]] : []),
@@ -23,7 +26,7 @@ export function Totals({ order, className }: { order: OrderDetail; className?: s
       {rows.map(([label, cents]) => (
         <div key={label} className="flex justify-between gap-6">
           <dt className="text-muted-foreground print:text-black">{label}</dt>
-          <dd className="tabular-nums">{formatCents(cents)}</dd>
+          <dd className="tabular-nums">{cents < 0 ? `−${formatCents(-cents)}` : formatCents(cents)}</dd>
         </div>
       ))}
       <div className="flex justify-between gap-6 border-t pt-1.5 font-semibold">

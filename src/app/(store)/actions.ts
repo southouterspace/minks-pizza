@@ -1,7 +1,9 @@
 "use server";
 
-import { checkoutSchema } from "@/lib/validation";
-import { createOrder, OrderError } from "@/lib/orders";
+import { checkoutSchema, previewSchema } from "@/lib/validation";
+import { createOrder, getSettings, OrderError, quoteOrder } from "@/lib/orders";
+import { getCurrentMember } from "@/lib/member-auth";
+import { rewardOptions, type RewardOption } from "@/lib/loyalty-server";
 
 export type PlaceOrderResult =
   | { ok: true; orderId: string }
@@ -23,7 +25,7 @@ export async function placeOrder(input: unknown): Promise<PlaceOrderResult> {
   }
 
   try {
-    const order = await createOrder(parsed.data);
+    const order = await createOrder(parsed.data, await getCurrentMember());
     return { ok: true, orderId: order.id };
   } catch (err) {
     if (err instanceof OrderError) {
@@ -34,5 +36,47 @@ export async function placeOrder(input: unknown): Promise<PlaceOrderResult> {
       ok: false,
       error: "Something went wrong placing your order. Please try again.",
     };
+  }
+}
+
+export type CheckoutPreview =
+  | {
+      ok: true;
+      subtotalCents: number;
+      discountCents: number;
+      taxCents: number;
+      deliveryFeeCents: number;
+      totalCents: number; // before tip
+      pointsEarned: number | null;
+      promoName: string | null;
+      rewardError: string | null;
+      /** With `withRewards`, for signed-in members: each active reward and whether it fits this cart. */
+      rewards: RewardOption[];
+    }
+  | { ok: false; error: string };
+
+export async function previewCheckout(input: unknown): Promise<CheckoutPreview> {
+  const parsed = previewSchema.safeParse(input);
+  if (!parsed.success) return { ok: false, error: "Invalid cart." };
+  try {
+    const [member, store] = await Promise.all([getCurrentMember(), getSettings()]);
+    const q = await quoteOrder(parsed.data, member);
+    const rewards =
+      parsed.data.withRewards && member && q.loyalty ? await rewardOptions(q.lines, store.timezone) : [];
+    return {
+      ok: true,
+      rewards,
+      subtotalCents: q.subtotalCents,
+      discountCents: q.discountCents,
+      taxCents: q.taxCents,
+      deliveryFeeCents: q.deliveryFeeCents,
+      totalCents: q.totalCents,
+      pointsEarned: q.loyalty?.pointsEarned ?? null,
+      promoName: q.loyalty?.promoName ?? null,
+      rewardError: q.loyalty?.redemption.status === "rejected" ? q.loyalty.redemption.error : null,
+    };
+  } catch (err) {
+    if (err instanceof OrderError) return { ok: false, error: err.message };
+    throw err;
   }
 }
