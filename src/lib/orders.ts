@@ -212,6 +212,36 @@ export type OrderMutation =
   | { kind: "split_by_item"; lineIds: string[]; newOrderId: string }
   | { kind: "handoff" };
 
+/**
+ * The fact row a mutation creates, keyed by a client-minted id, when it
+ * creates one. A replay of that fact is a no-op.
+ */
+export function factId(m: OrderMutation): string | null {
+  switch (m.kind) {
+    case "discount":
+    case "comp":
+    case "refund":
+      return m.id;
+    case "tender":
+      return m.tender.id;
+    case "split_by_item":
+      return m.newOrderId;
+    case "add_lines":
+    case "fire":
+    case "void_line":
+    case "set_customer":
+    case "set_fulfillment":
+    case "set_schedule":
+    case "cancel":
+    case "handoff":
+      return null;
+  }
+}
+
+export function hasFact(o: OrderView, id: string): boolean {
+  return o.adjustments.some((a) => a.id === id) || o.tenders.some((t) => t.id === id);
+}
+
 export type Approval = { managerPin: string };
 
 export type RequiredRole = "cashier" | "manager";

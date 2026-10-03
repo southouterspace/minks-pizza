@@ -7,7 +7,9 @@ import type { ShiftReport } from "@/lib/reports";
 import { getShiftReport } from "@/lib/reports-server";
 import type { StaffContext } from "@/lib/staff";
 
-export async function getOpenShift() {
+export type Shift = typeof shifts.$inferSelect;
+
+export async function getOpenShift(): Promise<Shift | null> {
   const [shift] = await db.select().from(shifts).where(isNull(shifts.closedAt));
   return shift ?? null;
 }
