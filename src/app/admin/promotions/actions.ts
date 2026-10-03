@@ -10,7 +10,7 @@ import { getSettings } from "@/lib/orders";
 import { displayCode, normalizeCode } from "@/lib/promo-code";
 import { promotionColumns, promotionInputSchema } from "@/lib/promotion-schema";
 
-export type PromotionFormState = { error?: string; field?: string };
+export type PromotionFormState = { error?: string };
 
 const promotionId = z.number().int().positive();
 
@@ -36,7 +36,7 @@ export async function savePromotion(
   const parsed = promotionInputSchema.safeParse(input);
   if (!parsed.success) {
     const issue = parsed.error.issues[0];
-    return { error: issue?.message ?? "Check the form.", field: issue?.path.join(".") };
+    return { error: issue?.message ?? "Check the form." };
   }
   const { timezone } = await getSettings();
   const values = { ...promotionColumns(parsed.data, timezone), updatedAt: new Date() };
@@ -46,7 +46,7 @@ export async function savePromotion(
     const code = parsed.data.trigger === "code" ? displayCode(sharedCode ?? "") : "";
     if (code) {
       const problem = codeProblem(code);
-      if (problem) return { error: problem, field: "code" };
+      if (problem) return { error: problem };
     }
     try {
       // One transaction, so a taken code never leaves a half-made deal behind.
@@ -62,7 +62,7 @@ export async function savePromotion(
       ]);
       savedId = row.id;
     } catch (err) {
-      if (isUniqueViolation(err)) return { error: takenMessage(code), field: "code" };
+      if (isUniqueViolation(err)) return { error: takenMessage(code) };
       throw err;
     }
   } else {

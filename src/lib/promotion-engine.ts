@@ -452,7 +452,11 @@ export function discountedTotals(args: {
 export const PROMOTION_STATUSES = ["active", "scheduled", "expired", "paused", "used_up", "archived"] as const;
 export type PromotionStatus = (typeof PROMOTION_STATUSES)[number];
 
-/** Derived from the data, never stored. */
+/**
+ * Derived from the data, never stored. firstRefusal checks the same facts
+ * in the customer's order, so the two can differ: a deal both used up and
+ * not yet started reads "Used up" here and "Starts Oct 10" at checkout.
+ */
 export function promotionStatus(
   p: Pick<PromotionTerms, "isActive" | "archivedAt" | "startsAt" | "endsAt" | "totalLimit">,
   usage: { uses: number },

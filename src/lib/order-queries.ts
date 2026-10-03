@@ -5,6 +5,7 @@ import {
   count,
   desc,
   eq,
+  getTableColumns,
   gte,
   ilike,
   inArray,
@@ -14,7 +15,6 @@ import {
   type SQL,
 } from "drizzle-orm";
 import { z } from "zod";
-import { getTableColumns } from "drizzle-orm";
 import { db, orderDiscounts, orderEvents, orderItems, orders, storeSettings } from "@/db";
 import { ACTIVE_STATUSES, isLate, ORDER_STATUSES } from "@/lib/order-workflow";
 

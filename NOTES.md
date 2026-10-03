@@ -479,16 +479,18 @@ complaints are in `docs/promotions-research.md`.
 
 **Tested** against a throwaway Neon branch (`promotions-test`):
 
-- `scripts/test-promotions.ts`, 32 tests against literal cents and strings:
+- `scripts/test-promotions.ts`, 34 tests against literal cents and strings:
   every reward type, the BOGO cheapest-unit rule, stacking against the best
   exclusive deal, a stack that can't go below zero, every rejection reason,
   nudges, code and phone normalization, weekly windows across the Nov 1 DST
   change and overnight, store-day boundaries in spring and fall, totals
-  (tax after item discounts), offer sentences, derived status, the lost-race
-  sentences, and the form codec round trip over every template and reward
-  type.
-- `scripts/e2e-promotions.ts`, 48 checks (including a preset comp that
-  leaves a limit-1 deal redeemable), passing against
+  (tax after item discounts), offer sentences, derived status, the
+  deal-changed messages, the form codec round trip over every template and
+  reward type, each form field against the reward it moves, and free
+  delivery saved as delivery-only.
+- `scripts/e2e-promotions.ts`, 51 checks (including a preset comp that
+  leaves a limit-1 deal redeemable, and the cart quoting delivery with
+  pickup switched off), passing against
   `next build && next start` (the first 45 also passed against `next dev`
   before the review): see the script header. Screenshots of the
   deals strip, cart under and over the minimum, checkout, confirmation, the
