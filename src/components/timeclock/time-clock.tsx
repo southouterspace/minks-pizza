@@ -540,7 +540,7 @@ function EmployeeHome({
 
       <Panel title="Next 7 days" className="mt-4">
         {view.upcoming.length === 0 ? (
-          <p className="text-zinc-400">No published shifts yet.</p>
+          <p className="text-zinc-400">Nothing scheduled after today.</p>
         ) : (
           <ShiftList shifts={view.upcoming} tz={tz} withDay />
         )}
