@@ -1,6 +1,7 @@
 import type { ReactNode } from "react";
 import { Tag } from "lucide-react";
 import { formatCents } from "@/lib/money";
+import type { DiscountSource } from "@/lib/promotion-schema";
 import { cn } from "@/lib/utils";
 
 export type TotalsDiscount = {
@@ -32,11 +33,19 @@ export function orderTotals(o: {
   tipCents: number;
   totalCents: number;
   discountCents: number;
-  discounts: { id: number; label: string; amountCents: number }[];
+  /** A loyalty discount's points read from the order; one reward per order. */
+  loyaltyPointsRedeemed?: number;
+  discounts: { id: number; label: string; amountCents: number; source: DiscountSource }[];
 }): Totals {
+  const points = o.loyaltyPointsRedeemed ?? 0;
   return {
     ...o,
-    discounts: o.discounts.map((d) => ({ key: d.id, label: d.label, amountCents: d.amountCents })),
+    discounts: o.discounts.map((d) => ({
+      key: d.id,
+      label: d.label,
+      amountCents: d.amountCents,
+      detail: d.source === "loyalty" && points > 0 ? `Reward · ${points.toLocaleString()} points` : undefined,
+    })),
   };
 }
 

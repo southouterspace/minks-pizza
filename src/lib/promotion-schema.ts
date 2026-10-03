@@ -16,7 +16,8 @@ export type OrderType = (typeof ORDER_TYPES)[number];
 export const DISCOUNT_TARGETS = ["items", "delivery"] as const;
 export type DiscountTarget = (typeof DISCOUNT_TARGETS)[number];
 
-export const DISCOUNT_SOURCES = ["promotion", "comp"] as const;
+export const DISCOUNT_SOURCES = ["promotion", "comp", "loyalty"] as const;
+export type DiscountSource = (typeof DISCOUNT_SOURCES)[number];
 
 const id = z.number().int().positive();
 const cents = z.number().int().min(1).max(1_000_000);

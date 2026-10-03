@@ -3,7 +3,7 @@
  * summaries, refusals, nudges, a deal lost to a race, status labels. The
  * evaluator returns data; this module owns the words.
  */
-import { DAY_NAMES, formatTime } from "./hours";
+import { DAY_NAMES, formatHhmm } from "./zoned";
 import { formatCents } from "./money";
 import type { Nudge, PromotionStatus, PromotionTerms, Refusal } from "./promotion-engine";
 import { REWARD_SCOPE, sameTarget, type PromotionReward, type Target, type WeeklyWindow } from "./promotion-schema";
@@ -45,8 +45,8 @@ function describeDays(days: number[]): string {
 
 /** "3–6 PM", "11 AM–2 PM". */
 function describeHours(start: string, end: string): string {
-  const a = formatTime(start);
-  const b = formatTime(end);
+  const a = formatHhmm(start);
+  const b = formatHhmm(end);
   const suffix = a.slice(-2);
   return suffix === b.slice(-2) ? `${a.slice(0, -3)}–${b}` : `${a}–${b}`;
 }

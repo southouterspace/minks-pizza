@@ -26,10 +26,24 @@ import {
   promotions,
   storeSettings,
 } from "../src/db";
-import { placeOrder } from "../src/app/(store)/actions";
+import { createOrder } from "../src/lib/checkout";
+import { OrderError } from "../src/lib/orders";
+import { checkoutSchema } from "../src/lib/validation";
 
 const BASE = process.env.E2E_BASE_URL ?? "http://localhost:3000";
 const SHOT_DIR = process.env.E2E_SHOT_DIR ?? "/tmp/e2e-promotions";
+
+/** The placeOrder action for a guest, without the session read the action makes. */
+async function placeOrder(input: unknown): Promise<{ ok: true; orderId: string } | { ok: false; error: string }> {
+  const parsed = checkoutSchema.safeParse(input);
+  if (!parsed.success) return { ok: false, error: parsed.error.issues[0]?.message ?? "Invalid order." };
+  try {
+    return { ok: true, orderId: (await createOrder(parsed.data)).id };
+  } catch (err) {
+    if (err instanceof OrderError) return { ok: false, error: err.message };
+    throw err;
+  }
+}
 const EMAIL = "promotions-e2e@minks.example";
 const NAME = "Promo Tester";
 const PASSWORD = "pizza-test-1234";

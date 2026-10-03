@@ -1,4 +1,6 @@
+import { cache } from "react";
 import { eq, getTableColumns, inArray, sql, type Column, type SQL } from "drizzle-orm";
+import type { BatchItem } from "drizzle-orm/batch";
 import type { PgTable } from "drizzle-orm/pg-core";
 import {
   categories,
@@ -43,14 +45,15 @@ export class OrderError extends Error {}
 
 export type StoreSettings = typeof storeSettings.$inferSelect;
 
-export async function getSettings(): Promise<StoreSettings> {
+/** Read once per request (React cache); outside a render it reads every time. */
+export const getSettings = cache(async (): Promise<StoreSettings> => {
   const [settings] = await db
     .select()
     .from(storeSettings)
     .where(eq(storeSettings.id, 1));
   if (!settings) throw new OrderError("Store is not configured yet.");
   return settings;
-}
+});
 
 /**
  * Server-side pricing: the client's cart carries only ids + quantities; every
@@ -176,6 +179,14 @@ export type NewOrder = {
   /** Including the tip. */
   totalCents: number;
   discounts: AppliedDiscount[];
+  /** Null when the program is off. */
+  loyalty: {
+    /** The signed-in member, or null for a guest (who may be enrolled after). */
+    memberId: number | null;
+    /** The reward the member spends points on; recorded as an items discount. */
+    reward: { name: string; pointsCost: number; discountCents: number } | null;
+    pointsEarned: number;
+  } | null;
 };
 
 /**
@@ -194,18 +205,40 @@ function insertRowsWhere<T extends PgTable>(table: T, rows: T["$inferInsert"][],
 }
 
 /**
- * Inserts the order, its lines, its "placed" event and its redemptions as
+ * Inserts the order, its lines, its "placed" event and its discounts as
  * one statement that writes nothing unless the redemption guard holds, after
  * the lock that lets the guard see any order that won a race.
  * Returns null when the guard failed (a deal's limit went to another order
  * after the quote). Drizzle's builders can't make an insert conditional on
  * another table, hence the SQL template.
+ *
+ * `after` adds statements to the same transaction, run once the order is
+ * read back; each must write nothing when the order row is missing.
  */
-export async function insertOrder(o: NewOrder, check: RedemptionCheck): Promise<typeof orders.$inferSelect | null> {
+export async function insertOrder(
+  o: NewOrder,
+  check: RedemptionCheck,
+  after: (orderId: string) => BatchItem<"pg">[] = () => [],
+): Promise<typeof orders.$inferSelect | null> {
   const { input } = o;
   const orderId = crypto.randomUUID();
   const placedAt = new Date();
   const placed = sql`exists (select 1 from placed)`;
+  const reward = o.loyalty?.reward ?? null;
+  const discountRows: (typeof orderDiscounts.$inferInsert)[] = [
+    ...o.discounts.map((a) => ({
+      orderId,
+      promotionId: a.promotionId,
+      codeId: a.codeId,
+      label: a.label,
+      amountCents: a.amountCents,
+      target: a.target,
+      source: "promotion" as const,
+    })),
+    ...(reward && reward.discountCents > 0
+      ? [{ orderId, label: reward.name, amountCents: reward.discountCents, target: "items" as const, source: "loyalty" as const }]
+      : []),
+  ];
   const children = [
     insertRowsWhere(orderEvents, [{ orderId, type: "placed", toStatus: "new", actor: "Customer", createdAt: placedAt }], placed),
     insertRowsWhere(
@@ -223,23 +256,7 @@ export async function insertOrder(o: NewOrder, check: RedemptionCheck): Promise<
       })),
       placed,
     ),
-    ...(o.discounts.length
-      ? [
-          insertRowsWhere(
-            orderDiscounts,
-            o.discounts.map((a) => ({
-              orderId,
-              promotionId: a.promotionId,
-              codeId: a.codeId,
-              label: a.label,
-              amountCents: a.amountCents,
-              target: a.target,
-              source: "promotion" as const,
-            })),
-            placed,
-          ),
-        ]
-      : []),
+    ...(discountRows.length ? [insertRowsWhere(orderDiscounts, discountRows, placed)] : []),
   ];
   const order = insertRowsWhere(
     orders,
@@ -263,6 +280,10 @@ export async function insertOrder(o: NewOrder, check: RedemptionCheck): Promise<
         deliveryFeeCents: o.deliveryFeeCents,
         tipCents: input.tipCents,
         totalCents: o.totalCents,
+        loyaltyMemberId: o.loyalty?.memberId ?? null,
+        loyaltyRewardName: reward?.name ?? null,
+        loyaltyPointsRedeemed: reward?.pointsCost ?? 0,
+        loyaltyPointsEarned: o.loyalty?.pointsEarned ?? 0,
       },
     ],
     check.guard,
@@ -273,6 +294,6 @@ export async function insertOrder(o: NewOrder, check: RedemptionCheck): Promise<
     select id from placed`);
   // Read back in the same transaction; no row means the guard failed.
   const read = db.select().from(orders).where(eq(orders.id, orderId));
-  const [, , [row]] = await db.batch([db.execute(check.lock), place, read]);
+  const [, , [row]] = await db.batch([db.execute(check.lock), place, read, ...after(orderId)]);
   return row ?? null;
 }

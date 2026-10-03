@@ -4,6 +4,7 @@ import { notFound } from "next/navigation";
 import { ArrowLeft, Phone } from "lucide-react";
 import { addOrderNoteAction, recordPaymentAction } from "@/app/admin/actions";
 import { requireOperator } from "@/lib/auth";
+import { courierProviders } from "@/lib/delivery/providers";
 import { formatCents } from "@/lib/money";
 import {
   canComp,
@@ -14,8 +15,9 @@ import {
   PAYMENT_METHOD_LABEL,
   PAYMENT_METHODS,
 } from "@/lib/order-workflow";
-import { getOrderDetail, getStoreTimezone } from "@/lib/order-queries";
+import { getOrderDetail, getStoreTimezone, type OrderDetail } from "@/lib/order-queries";
 import { compPresets } from "@/lib/promotion-admin";
+import type { DiscountSource } from "@/lib/promotion-schema";
 import {
   ActionForm,
   AdvanceButton,
@@ -34,6 +36,7 @@ import {
 } from "@/components/admin/order-status";
 import { addressLine, PrintTicket } from "@/components/admin/order-ticket";
 import { orderTotals, TotalsList } from "@/components/totals-list";
+import { CourierCard } from "@/components/admin/courier-card";
 import { OrderTimeline } from "@/components/admin/order-timeline";
 import { formatDateTime } from "@/components/admin/ui";
 import { Badge } from "@/components/ui/badge";
@@ -44,6 +47,19 @@ import { Textarea } from "@/components/ui/textarea";
 export const dynamic = "force-dynamic";
 
 export const metadata: Metadata = { title: "Order" };
+
+const DISCOUNT_SOURCE_LABEL: Record<DiscountSource, string> = {
+  promotion: "Promotion",
+  comp: "Staff discount",
+  loyalty: "Loyalty reward",
+};
+
+const SOURCE_LABEL: Record<OrderDetail["source"], string> = {
+  web: "Web",
+  doordash: "DoorDash",
+  ubereats: "Uber Eats",
+  grubhub: "Grubhub",
+};
 
 export default async function OrderDetailPage({ params }: PageProps<"/admin/orders/[id]">) {
   await requireOperator();
@@ -82,6 +98,12 @@ export default async function OrderDetailPage({ params }: PageProps<"/admin/orde
               </Badge>
               <PaymentBadge status={order.paymentStatus} method={order.paymentMethod} />
               {late ? <LateBadge /> : null}
+              {order.source !== "web" ? (
+                <Badge variant="outline">
+                  {SOURCE_LABEL[order.source]}
+                  {order.sourceDisplayId ? ` · ${order.sourceDisplayId}` : ""}
+                </Badge>
+              ) : null}
             </h1>
             <p className="mt-1 text-sm text-muted-foreground">
               Placed {formatDateTime(order.placedAt, timeZone)}
@@ -214,7 +236,7 @@ export default async function OrderDetailPage({ params }: PageProps<"/admin/orde
                             <span className="min-w-0">
                               <span className="block truncate">{d.label}</span>
                               <span className="text-xs text-muted-foreground">
-                                {d.source === "comp" ? "Staff discount" : "Promotion"} · −{formatCents(d.amountCents)}
+                                {DISCOUNT_SOURCE_LABEL[d.source]} · −{formatCents(d.amountCents)}
                               </span>
                             </span>
                             {discountable && d.source === "comp" ? (
@@ -266,6 +288,15 @@ export default async function OrderDetailPage({ params }: PageProps<"/admin/orde
                 </ActionForm>
               </CardContent>
             </Card>
+
+            {order.orderType === "delivery" && order.source === "web" ? (
+              <CourierCard
+                orderId={order.id}
+                delivery={order.courierDeliveries[0]}
+                providers={courierProviders().map((p) => ({ id: p.id, label: p.label }))}
+                canRequest={isCooking(order.status) || order.status === "ready"}
+              />
+            ) : null}
           </div>
         </div>
       </div>

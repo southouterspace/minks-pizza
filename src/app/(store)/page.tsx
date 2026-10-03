@@ -5,8 +5,8 @@ import { ComingSoon } from "@/components/store/coming-soon";
 import { StoreStatusBanner } from "@/components/store/status-banner";
 import { RecentOrderLink } from "@/components/store/recent-order-link";
 import { DealsStrip } from "@/components/store/deals-strip";
-import { formatTime, DAY_NAMES } from "@/lib/hours";
 import { getAdvertisedDeals } from "@/lib/promotion-queries";
+import { DAY_NAMES, formatHhmm } from "@/lib/zoned";
 
 export const dynamic = "force-dynamic";
 
@@ -101,7 +101,7 @@ export default async function StorePage() {
                     <dd className="font-medium tabular-nums">
                       {h.closed
                         ? "Closed"
-                        : `${formatTime(h.open)} – ${formatTime(h.close)}`}
+                        : `${formatHhmm(h.open)} – ${formatHhmm(h.close)}`}
                     </dd>
                   </div>
                 ))}

@@ -1,6 +1,6 @@
 ALTER TYPE "public"."order_event_type" ADD VALUE IF NOT EXISTS 'discount';
 
-CREATE TYPE "public"."discount_source" AS ENUM('promotion', 'comp');
+CREATE TYPE "public"."discount_source" AS ENUM('promotion', 'comp', 'loyalty');
 
 CREATE TYPE "public"."discount_target" AS ENUM('items', 'delivery');
 
@@ -74,3 +74,11 @@ CREATE INDEX "order_discounts_code_id_idx" ON "order_discounts" USING btree ("co
 CREATE INDEX "orders_customer_key_idx" ON "orders" USING btree ("customer_key");
 
 CREATE INDEX "promotion_codes_promotion_id_idx" ON "promotion_codes" USING btree ("promotion_id");
+
+-- Until now orders.discount_cents held only a loyalty reward. Give each such
+-- order its ledger row, so discount_cents is again the sum of its rows.
+INSERT INTO "order_discounts" ("order_id", "label", "amount_cents", "target", "source", "created_at")
+SELECT o."id", coalesce(o."loyalty_reward_name", 'Reward'), o."discount_cents", 'items', 'loyalty', o."placed_at"
+FROM "orders" o
+WHERE o."discount_cents" > 0
+  AND NOT EXISTS (SELECT 1 FROM "order_discounts" d WHERE d."order_id" = o."id");

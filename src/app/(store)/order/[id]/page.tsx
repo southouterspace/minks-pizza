@@ -1,9 +1,12 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { asc, eq } from "drizzle-orm";
-import { db, orderDiscounts, orderItems, orders } from "@/db";
-import { formatClock } from "@/lib/hours";
+import { and, asc, desc, eq, notInArray } from "drizzle-orm";
+import { Gift } from "lucide-react";
+import { courierDeliveries, db, orderDiscounts, orderItems, orders } from "@/db";
+import { COURIER_STATUS_LABEL, TERMINAL_COURIER_STATUSES } from "@/lib/delivery/types";
+import { formatClock } from "@/lib/zoned";
+import { orderPointsStatus } from "@/lib/loyalty";
 import { formatCents } from "@/lib/money";
 import { isActive, isCooking } from "@/lib/order-workflow";
 import { getSettings } from "@/lib/orders";
@@ -63,7 +66,7 @@ export default async function OrderPage({
   const [order] = await db.select().from(orders).where(eq(orders.id, id));
   if (!order) notFound();
 
-  const [items, discounts, settings] = await Promise.all([
+  const [items, discounts, settings, [courier]] = await Promise.all([
     db.select().from(orderItems).where(eq(orderItems.orderId, order.id)),
     db
       .select()
@@ -71,6 +74,17 @@ export default async function OrderPage({
       .where(eq(orderDiscounts.orderId, order.id))
       .orderBy(asc(orderDiscounts.id)),
     getSettings(),
+    db
+      .select()
+      .from(courierDeliveries)
+      .where(
+        and(
+          eq(courierDeliveries.orderId, order.id),
+          notInArray(courierDeliveries.status, [...TERMINAL_COURIER_STATUSES]),
+        ),
+      )
+      .orderBy(desc(courierDeliveries.createdAt))
+      .limit(1),
   ]);
 
   const stepIndex = STATUS_STEPS.indexOf(
@@ -113,6 +127,46 @@ export default async function OrderPage({
             />
           ))}
         </ol>
+      ) : null}
+
+      {courier ? (
+        <Card className="mt-6">
+          <CardContent className="flex flex-wrap items-center justify-between gap-3 text-sm">
+            <div>
+              <p className="font-medium">{COURIER_STATUS_LABEL[courier.status]}</p>
+              {courier.courierName ? (
+                <p className="mt-1 text-muted-foreground">
+                  Your driver is {courier.courierName}.
+                </p>
+              ) : null}
+            </div>
+            {courier.trackingUrl ? (
+              <a
+                href={courier.trackingUrl}
+                target="_blank"
+                rel="noreferrer"
+                className={buttonVariants({ variant: "outline" })}
+              >
+                Track your driver
+              </a>
+            ) : null}
+          </CardContent>
+        </Card>
+      ) : null}
+
+      {order.loyaltyMemberId !== null && order.loyaltyPointsEarned > 0 && orderPointsStatus(order.status) !== "Reversed" ? (
+        <p
+          data-testid="order-points"
+          className="mt-6 flex items-center gap-2 rounded-lg bg-muted px-4 py-3 text-sm"
+        >
+          <Gift className="size-4 shrink-0" aria-hidden />
+          {orderPointsStatus(order.status) === "Posted"
+            ? `You earned ${order.loyaltyPointsEarned.toLocaleString()} points.`
+            : `You'll earn ${order.loyaltyPointsEarned.toLocaleString()} points once your order is complete.`}
+          <Link href="/rewards" className="ml-auto font-medium underline underline-offset-4">
+            Rewards
+          </Link>
+        </p>
       ) : null}
 
       {order.orderType === "pickup" && settings.addressLine1 ? (

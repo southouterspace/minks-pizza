@@ -13,11 +13,15 @@ import { cn } from "@/lib/utils";
 const DEBOUNCE_MS = 300;
 
 /**
- * The server's quote for the current cart, codes, order type and phone,
- * re-fetched (debounced) on every change. `pending` is true while the shown
- * quote is for an older cart, so callers can hold the order button.
+ * The server's quote for the current cart, codes, order type, phone and
+ * loyalty reward, re-fetched (debounced) on every change. `pending` is true
+ * while the shown quote is for an older cart, so callers can hold the order
+ * button. `withRewards` also lists a signed-in member's rewards.
  */
-export function useCheckoutQuote(orderType: "pickup" | "delivery", phone = "") {
+export function useCheckoutQuote(
+  orderType: "pickup" | "delivery",
+  { phone = "", rewardId = null, withRewards = false }: { phone?: string; rewardId?: number | null; withRewards?: boolean } = {},
+) {
   const { lines, promoCodes, ready } = useCart();
   const [nonce, setNonce] = useState(0);
   const [result, setResult] = useState<{ key: string; quote: QuoteView | null; error: string | null }>({
@@ -30,6 +34,8 @@ export function useCheckoutQuote(orderType: "pickup" | "delivery", phone = "") {
     orderType,
     customerPhone: phone,
     promoCodes,
+    rewardId,
+    withRewards,
     lines: lines.map((l) => ({
       itemId: l.itemId,
       quantity: l.quantity,
@@ -159,13 +165,13 @@ export function quoteTotals(quote: QuoteView, tipCents: number, onRemoveCode: (c
   return {
     subtotalCents: quote.subtotalCents,
     discounts: quote.discounts.map((d) => ({
-      key: d.promotionId,
+      key: d.key,
       label: d.label,
       amountCents: d.amountCents,
       detail: (
         <>
-          {d.code ? <span className="font-mono">{d.code}</span> : "Applied automatically"}
-          {d.ends ? ` · ${d.ends}` : ""}
+          {d.code ? <span className="font-mono">{d.code}</span> : d.kind === "loyalty" ? "Reward" : "Applied automatically"}
+          {d.note ? ` · ${d.note}` : ""}
         </>
       ),
       action: d.code ? <RemoveCodeButton code={d.code} onRemove={onRemoveCode} /> : null,

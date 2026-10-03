@@ -345,7 +345,286 @@ reasons, payment recording, printing, day stats and a new-order alert.
 - The e2e creates and deletes its own operator. On a database that already
   has operators, `e2e-kds.ts` needs `kitchen@minks.example` to exist.
 
-## Session 6 — Promotions
+## Session 6 — Employee time tracking
+
+**Ask:** let the owner schedule hourly staff around the rush, see who is on
+the clock, keep labor % in check and hand overtime-correct hours to payroll,
+and let staff clock in on a shared tablet with a PIN and no login of their
+own.
+
+**Built:** `/admin/staff` (Overview, Schedule, Timesheets, Employees, Time
+off), the `/timeclock` kiosk, a Staff & payroll settings card, and the CSV
+export at `/api/admin/timesheets`. See README → Staff: scheduling and time
+clock.
+
+- **Data model.** `employees` (separate from `operators`), `employee_roles`
+  with a rate per role, `shifts` (null employee = open shift, null
+  `published_at` = draft), `time_entries` with `time_breaks`,
+  `time_entry_audit`, and `time_off_requests`. New `store_settings` columns
+  hold the timezone and the payroll rules. Everything is additive.
+- **Pure domain** (`src/lib/timeclock.ts`, `src/lib/zoned.ts`): the clock
+  state machine, payroll math, timesheet flags, schedule conflicts,
+  punch-to-shift matching and calendar math. `scripts/test-timeclock.ts`
+  checks them against hand-computed values.
+
+**Design decisions and why:**
+
+- **The clock is a state machine.** `ClockState` is off, working or on a
+  break, and `ALLOWED` lists the actions each state accepts. `planClock`
+  sorts every request into apply, replay or refuse. An applied plan
+  carries a `ClockStep` that already holds the rows it writes, so the
+  kiosk server switches on the step with no fallback. A replay is an action
+  that finds the clock already where it leads, such as a second clock-in,
+  and it answers with the current view instead of an error. The kiosk draws
+  its buttons from the same table. Clocking out from a break is refused, so
+  every break record gets closed.
+- **The database owns "one open punch".** A partial unique index on
+  `time_entries(employee_id) where clock_out_at is null`, and the same for
+  open breaks. The state check handles retries; the index handles two
+  tablets racing, and its violation is caught and answered as a replay.
+- **Calendar math in the store's zone, with Intl only.** Server, tablet and
+  manager may sit in different zones. Every day boundary goes through
+  `zoned.ts`, and `zonedInstant` re-checks the offset once, so a DST night
+  shift comes out an hour short or long, as it really is.
+- **A punch belongs to the day it started.** This is a common payroll
+  convention, and it keeps a 5 PM to 1 AM close on one day.
+- **Overtime without double counting.** Daily overtime and double time come
+  first. Weekly overtime then converts only regular minutes past the weekly
+  threshold, walking the days in order. Pay uses the FLSA weighted average:
+  straight time at each punch's rate, then half (or a full) regular rate as
+  the premium. Cents are rounded once, at the end, with integer arithmetic.
+- **Rates are snapshotted at clock-in**, so a raise never rewrites past pay.
+  A manager edit that changes the role takes that role's current rate.
+- **Every manager change to time is audited with a reason**, with before
+  and after snapshots, and the audit row survives the punch's deletion.
+  Editing an approved punch clears the approval and logs that too.
+- **PINs are HMAC digests, not bcrypt.** The kiosk looks an employee up by
+  PIN alone, which needs a deterministic digest, and the unique index on it
+  rejects duplicates. The key is `SESSION_SECRET`. Brute force is limited
+  only by requiring an operator session on the tablet (see Not built).
+- **Archiving, not deleting.** Payroll history references the employee
+  (`time_entries` uses `on delete restrict`). Archiving refuses while they
+  are on the clock and turns their upcoming shifts into open shifts.
+- **Edits keep a shift's published state**, so staff see a moved shift at
+  once instead of it vanishing until the next publish.
+
+**Spec changes made while building:**
+
+- `computeWeek` takes `now`. Open punches count up to now, and a pure
+  function can't read the clock. It returns per-punch minutes and an `open`
+  marker. Flags come from `entryFlags`, which needs the shift and the audit
+  history that `computeWeek` doesn't have.
+- `shiftConflicts` takes the weekly overtime threshold and week start. The
+  `overtime` conflict can't be decided without them.
+- Added `punchProblem` (validation for hand-entered punches),
+  `remainingShiftMinutes` (the rest of a shift already under way counts
+  toward projected hours) and a partial unique index on open breaks.
+- The CSV is one rectangular table with a `Line` column (`entry` or
+  `total`), so entry lines and summary lines import into one sheet.
+
+**Tested:**
+
+- `scripts/test-timeclock.ts`: 47 pure checks (29 at first; the
+  restructure added the rest). Covered: zoned helpers
+  across both 2026 New York DST changes and an overnight shift; 45 h →
+  5 h overtime and $712.50; two rates → a $41.67 weighted-average premium;
+  California 8/12 plus weekly 40; paid and unpaid breaks; every state ×
+  action and the step each applied plan carries; every conflict and flag;
+  a shift ending at midnight against the next day's time off; the
+  formatting helpers; the settings field parser; the kiosk reducer.
+- `scripts/e2e-timeclock.ts`: 51 checks in a real browser against the
+  `timeclock-test` branch of `autumn-bar-62526195`, asserting both screen
+  and database. Covered: employee with two roles and a PIN, duplicate PIN,
+  schedule and publish, kiosk wrong PIN, clock in, break, clock out with
+  tips, approve, edit with reason (audit and cleared approval), CSV, kiosk
+  time off through approval to the schedule cell, two concurrent clock-ins
+  leaving one open punch, the database refusing a second open punch,
+  manager clock-out, settings, the early clock-in refusal, and 375px
+  layouts.
+
+**Restructure (review follow-up):**
+
+- `timeclock-server.ts` (1141 lines) became `src/lib/staff/`, one
+  module per feature, and every rule those modules or the pages had
+  re-derived now has one home in `timeclock.ts` or `zoned.ts`. Pages
+  render view models and don't query.
+- Multi-row creates are atomic. `nextId` (`src/db/ids.ts`) reserves an
+  identity value so a punch and its breaks and audit row, or an employee
+  and their roles, go in one `db.batch`. Manager clock-out and approval
+  insert their audit rows from the update's `returning` rows in the same
+  statement, so a lost race audits nothing.
+- `time_off_one_live`, a partial unique index on
+  `(employee_id, start_date, end_date) where status <> 'denied'`, makes
+  requestTimeOff a single upsert.
+- Availability is `Record<Weekday, DayRule>` in the domain. The jsonb
+  column keeps its stored shape and is parsed when read.
+- One intended behavior change: the Time off page uses
+  `shiftTouchesTimeOff`, the schedule's overlap rule. A shift ending at
+  midnight no longer conflicts with time off that starts that day.
+
+**Not built:**
+
+- Payroll provider integration (Gusto, ADP). The CSV is the hand-off.
+- Tip pooling ([#5](https://github.com/southouterspace/minks-pizza/issues/5)).
+  Declared tips are recorded per punch only.
+- SMS shift notifications.
+- Shift swaps between staff ([#6](https://github.com/southouterspace/minks-pizza/issues/6)).
+- Geofenced mobile clock-in. The clock is the shared tablet.
+- PIN brute-force lockout and manager reset
+  ([#7](https://github.com/southouterspace/minks-pizza/issues/7)). Today
+  the only protection is that the tablet needs an operator session.
+- California seventh-consecutive-day overtime, and split-shift or
+  meal-penalty pay. The no-meal-break flag only flags.
+## Session 7 — Delivery integrations foundation
+
+**Ask:** lay the groundwork for third-party delivery in both directions,
+sending couriers to our orders and taking in marketplace orders.
+
+**Decisions.**
+
+- **Courier dispatch first.** Uber Direct is the only path that is self-serve
+  end to end today (`docs/delivery-platforms-research.md`, B2), and it keeps
+  the customer on our site. Both adapters sit behind one `CourierProvider`
+  interface in `src/lib/delivery/types.ts`, and each maps its native statuses
+  through a lookup table onto one internal status enum.
+- **DoorDash Drive is sandbox-only.** DoorDash has restricted Drive production
+  access with no timeline (B1). The adapter is built and tested so it can go
+  live when access opens.
+- **No marketplace adapters.** DoorDash, Uber Eats and Grubhub order APIs are
+  partner programs for POS companies (Part A). The schema (`orders.source`,
+  `source_order_id`, `source_display_id`) and `ingestExternalOrder` are the
+  seam a future adapter or middleware plugs into.
+- **Our row id is the provider's external id.** The `courier_deliveries` row
+  exists before the provider call. If the quote fails the row is deleted. If
+  create fails the row is marked canceled, because the provider may have made
+  the delivery anyway and its webhooks need a row to land on.
+- **Statuses only move forward.** Webhooks arrive out of order and retry, so
+  `advanceStatus` never regresses and terminal states stick. The one
+  exception is canceled to returned: a canceled delivery whose food was already
+  picked up comes back to the store. A partial unique index stops an order
+  from having two live couriers.
+- **Webhook inbox.** Every authenticated event goes into `integration_events`
+  keyed on the provider's event id (Uber) or delivery id, event name and time
+  (DoorDash, which sends no event id). A duplicate insert is a no-op.
+- **The customer's tip stays with the store.** Couriers get no tip from us,
+  since the tip on our checkout is for the store staff.
+
+**Tested:** `npm test`, unit tests for status ordering, both adapters with a
+stubbed `fetch` (token caching, request bodies, JWT claims and signature,
+webhook auth and mapping), the delivery request builder and the marketplace
+row mapping. No database or provider credentials were available, so dispatch,
+the webhook route and the admin UI are untested against real services.
+
+## Gotchas hit (for future sessions)
+
+- Playwright `getByRole(name:)` is substring-matching: "Publish store" also
+  matched the "Unpublish store" switch — use `exact: true`.
+- Next dev-tools floating indicator overlapped the admin sidebar footer and
+  intercepted e2e clicks → `devIndicators: false` in next.config.ts.
+- `create-next-app`'s root `src/app/page.tsx` silently shadows a route-group
+  `(store)/page.tsx` for `/`.
+- Pre-installed Chromium requires `executablePath: /opt/pw-browsers/chromium`
+  (version pin mismatch with the npm playwright package).
+- `.env` files are **not** shell scripts. `set -a; . ./.env.e2e` on a Neon URL
+  containing `?a=1&b=2` backgrounds the assignment at the `&` and silently drops
+  the variable — the app then fell through to `.env.local` (production) and the
+  test "failed" for the wrong reason. Quote the values.
+- Playwright: `page.locator("div", { has: … }).last()` returns the *innermost*
+  matching div, which was a sibling of the button under test — so a
+  "no Remove button here" assertion passed vacuously. Anchor row-scoped queries
+  to an explicit `data-testid` instead.
+- The e2e checks the database right after a tap. The screen updates
+  optimistically, so poll the database (`eventually()` in `e2e-kds.ts`)
+  instead of reading it once.
+- Screenshots taken right after a tab click can catch `transition-colors`
+  halfway, so two tabs look selected. Check `aria-pressed`, not pixels.
+- Scripts can't import a module with `import "server-only"`: the package
+  only exists inside Next's bundler. The time clock e2e recomputes the PIN
+  digest with `node:crypto` instead of importing `src/lib/staff/employees.ts`.
+  To call a server module (`order-writes.ts`, `order-queries.ts`,
+  `src/lib/staff/*`) from tsx, point `NODE_PATH` at a directory holding an
+  empty `server-only` package, alongside `node_modules`.
+- `npx tsc --noEmit` on a fresh checkout fails on `LayoutProps` and
+  `PageProps` until `npx next typegen` (or `next dev` / `next build`) has
+  generated the route types.
+- A hydration-mismatch warning about `caret-color: transparent` on the
+  history search input showed up only in e2e runs that take screenshots
+  (Playwright hides the caret for them). Loading and searching without
+  screenshots logs nothing.
+- A server component that imports a plain value (not a component) from a
+  `"use client"` module gets a client reference, not the value. Spreading
+  it yields nothing. Keep shared constants in plain modules.
+- In a single-table select list Drizzle renders `${table.column}` bare
+  (`"id"`). Inside a correlated subquery that bare name binds to the inner
+  table, silently. Spell the outer column out (`orders.id`).
+- Base UI's `Checkbox` puts the `id` on a hidden input; Playwright can't
+  click it. Click the label text instead.
+- Destructive e2e (creating/removing operator accounts) must not run against the
+  production database. `mcp__Neon__create_branch` makes an isolated copy in
+  seconds; point `MINKS_DATABASE_URL` at it and delete the branch afterwards.
+
+- React 19 resets a `<form>` after its action finishes. A Base UI `Switch`
+  inside one snaps its hidden checkbox back to the first-render value, so the
+  next click changes nothing React can see. `ToggleSwitchForm` (now `ActionSwitch`) calls its
+  action in a transition instead of submitting a form.
+- Next's route announcer has `role="alert"`; target form errors by
+  `data-testid`, not `getByRole("alert")`.
+- Drizzle sends `sql` params untyped, so a raw `VALUES (...)` list reads as
+  text. Cast (`::int`, `::jsonb`) or the insert fails on integer columns.
+
+## Loyalty program (session 4)
+
+- Every balance change is one `ledgerStatement` in `src/lib/loyalty-server.ts`:
+  `INSERT ... ON CONFLICT (idem_key) DO NOTHING` feeding an `UPDATE` of the
+  cached balance. It rides inside `db.batch` with the order write that caused
+  it, so the `points_balance >= 0` CHECK rejects an overspend atomically.
+- Program rules are pure in `src/lib/loyalty.ts` (`npm test`), including
+  `applyReward()`, the checkout eligibility ladder.
+- Completion and cancel side effects hang off `ON_ENTER` in
+  `src/lib/order-writes.ts`: every status writer (admin board, KDS, e2e) uses
+  `transitionStatements`, so points post in the same batch as the logged move.
+  `refreshMember` only does what time alone makes due: expiry and birthday.
+- Idempotency keys only deduplicate. Ask the ledger by `kind` (restores,
+  referral sides) or `reverses_entry_id`, never by key prefix.
+- `npm run loyalty:audit` (`auditBalances()` in lib) checks balance =
+  SUM(ledger) and lifetime = SUM(positive lifetime-earning entries).
+- `npm run e2e:loyalty` runs independent `node:test` scenarios
+  (`scripts/e2e/loyalty.e2e.ts`) on the shared `scripts/e2e/harness.ts`
+  against a dev server (`E2E_BASE_URL=http://localhost:3417`). Each scenario
+  makes its own members on fresh phones; the suite owns the program settings
+  and rewards named "E2E …" and restores them, then runs the audit. It is
+  safe to re-run, but still writes orders: test branch only.
+  `E2E_SHOT_DIR=<dir>` adds desktop and 375px screenshots.
+- Sign-in codes go out by Twilio when `TWILIO_ACCOUNT_SID`,
+  `TWILIO_AUTH_TOKEN` and `TWILIO_FROM_NUMBER` are set; in development the
+  code shows on screen; in production without Twilio, sign-in is refused.
+
+## Decisions & findings
+
+- 2026-08-12: Container restarted once mid-session; disk survived, background
+  agents had to be relaunched. Note: keep commits frequent.
+- `.env*` is gitignored by the scaffold — `DATABASE_URL` + `SESSION_SECRET` live in
+  `.env.local` (documented in README; `.env.example` committed).
+- Money is always integer cents. Tax computed at checkout from
+  `store_settings.tax_rate_bps` (basis points) to avoid float drift.
+- The sandbox pre-sets a stale ambient `DATABASE_URL` that `.env` files can't
+  override → app reads `MINKS_DATABASE_URL` first (`src/db/url.ts`).
+- Scaffold's `src/app/page.tsx` shadowed `(store)/page.tsx` for `/` — removed.
+- Hours are informational (viewer-local clock, no store TZ column in v1);
+  order intake is governed by the operator's publish + pause switches. Server
+  enforces: published, accepting, order-type enabled, delivery minimum.
+- Test order #1001 exists in the dev DB (useful for admin inbox demo).
+- Industry research landed (docs/RESEARCH.md): build validated on guest
+  checkout, server-side pricing, modifier architecture, 4-stage tracker.
+  Acted on: double-submit guard, recent-order link. Deferred to roadmap:
+  half-and-half, per-size topping pricing, SMS, delivery zones, allergens.
+- Customer e2e (Playwright, real Chromium): menu → customize (Large/Thin/
+  Pepperoni+Mushrooms = $20.24 ✓) → cart → checkout → confirmation #1002 ✓.
+- Handoff state plan: after operator e2e passes, delete the test operator row
+  and set `is_published=false` so the owner experiences pristine first-run
+  setup (/admin/setup → build menu → publish). Demo orders stay for the inbox.
+
+## Session 8 — Promotions
 
 **Ask:** promotions and coupons an operator can set up in under a minute and
 trust, that a customer can see, understand and not lose. Competitor
@@ -498,69 +777,27 @@ complaints are in `docs/promotions-research.md`.
 - `scripts/test-order-workflow.ts` (9), `scripts/e2e-orders.ts` (60) and
   `scripts/e2e-customer.ts` still pass.
 
-## Gotchas hit (for future sessions)
+### Merging promotions with loyalty and delivery
 
-- Playwright `getByRole(name:)` is substring-matching: "Publish store" also
-  matched the "Unpublish store" switch — use `exact: true`.
-- Next dev-tools floating indicator overlapped the admin sidebar footer and
-  intercepted e2e clicks → `devIndicators: false` in next.config.ts.
-- `create-next-app`'s root `src/app/page.tsx` silently shadows a route-group
-  `(store)/page.tsx` for `/`.
-- Pre-installed Chromium requires `executablePath: /opt/pw-browsers/chromium`
-  (version pin mismatch with the npm playwright package).
-- `.env` files are **not** shell scripts. `set -a; . ./.env.e2e` on a Neon URL
-  containing `?a=1&b=2` backgrounds the assignment at the `&` and silently drops
-  the variable — the app then fell through to `.env.local` (production) and the
-  test "failed" for the wrong reason. Quote the values.
-- Playwright: `page.locator("div", { has: … }).last()` returns the *innermost*
-  matching div, which was a sibling of the button under test — so a
-  "no Remove button here" assertion passed vacuously. Anchor row-scoped queries
-  to an explicit `data-testid` instead.
-- The e2e checks the database right after a tap. The screen updates
-  optimistically, so poll the database (`eventually()` in `e2e-kds.ts`)
-  instead of reading it once.
-- Screenshots taken right after a tab click can catch `transition-colors`
-  halfway, so two tabs look selected. Check `aria-pressed`, not pixels.
-- Scripts can't import a module with `import "server-only"`: the package
-  only exists inside Next's bundler. To call `order-writes.ts` or `order-queries.ts` from tsx,
-  point `NODE_PATH` at a directory holding an empty `server-only` package.
-- A hydration-mismatch warning about `caret-color: transparent` on the
-  history search input showed up only in e2e runs that take screenshots
-  (Playwright hides the caret for them). Loading and searching without
-  screenshots logs nothing.
-- A server component that imports a plain value (not a component) from a
-  `"use client"` module gets a client reference, not the value. Spreading
-  it yields nothing. Keep shared constants in plain modules.
-- In a single-table select list Drizzle renders `${table.column}` bare
-  (`"id"`). Inside a correlated subquery that bare name binds to the inner
-  table, silently. Spell the outer column out (`orders.id`).
-- Base UI's `Checkbox` puts the `id` on a hidden input; Playwright can't
-  click it. Click the label text instead.
-- Destructive e2e (creating/removing operator accounts) must not run against the
-  production database. `mcp__Neon__create_branch` makes an isolated copy in
-  seconds; point `MINKS_DATABASE_URL` at it and delete the branch afterwards.
+Loyalty (#14) and delivery integrations (#12) landed while promotions was in
+review. Both rewrote checkout, so the merge chose one shape for it:
 
-## Decisions & findings
-
-- 2026-08-12: Container restarted once mid-session; disk survived, background
-  agents had to be relaunched. Note: keep commits frequent.
-- `.env*` is gitignored by the scaffold — `DATABASE_URL` + `SESSION_SECRET` live in
-  `.env.local` (documented in README; `.env.example` committed).
-- Money is always integer cents. Tax computed at checkout from
-  `store_settings.tax_rate_bps` (basis points) to avoid float drift.
-- The sandbox pre-sets a stale ambient `DATABASE_URL` that `.env` files can't
-  override → app reads `MINKS_DATABASE_URL` first (`src/db/url.ts`).
-- Scaffold's `src/app/page.tsx` shadowed `(store)/page.tsx` for `/` — removed.
-- Hours are informational (viewer-local clock, no store TZ column in v1);
-  order intake is governed by the operator's publish + pause switches. Server
-  enforces: published, accepting, order-type enabled, delivery minimum.
-- Test order #1001 exists in the dev DB (useful for admin inbox demo).
-- Industry research landed (docs/RESEARCH.md): build validated on guest
-  checkout, server-side pricing, modifier architecture, 4-stage tracker.
-  Acted on: double-submit guard, recent-order link. Deferred to roadmap:
-  half-and-half, per-size topping pricing, SMS, delivery zones, allergens.
-- Customer e2e (Playwright, real Chromium): menu → customize (Large/Thin/
-  Pepperoni+Mushrooms = $20.24 ✓) → cart → checkout → confirmation #1002 ✓.
-- Handoff state plan: after operator e2e passes, delete the test operator row
-  and set `is_published=false` so the owner experiences pristine first-run
-  setup (/admin/setup → build menu → publish). Demo orders stay for the inbox.
+- **One quote.** `checkout.ts` is the only checkout. `quoteCheckout` applies
+  promotions, then the member's reward against what the deals left of the
+  items (capped there, refused if nothing is left), then tax on the items
+  after both. Points are earned on that same net. The loyalty `quoteOrder` and
+  `createOrder` in `orders.ts` are gone.
+- **One ledger.** A reward is an `order_discounts` row with source `loyalty`,
+  so `discount_cents` is always the sum of an order's rows. Comps recompute
+  totals from the rows and would otherwise drop the reward. The migration
+  backfills a row for each earlier order with a reward discount.
+- **One transaction.** The guarded order insert takes the loyalty statements
+  (guest enrollment, the points debit) in the same batch. Both select from the
+  order row, so when the redemption guard refuses the order nobody is enrolled
+  and no points move. A points race still fails on the balance CHECK.
+- **One preview.** `previewCheckout` and `useCheckoutQuote` carry the reward
+  and return points to earn and the member's reward options. Base's
+  `useCheckoutPreview` and its local total estimate are gone: totals show only
+  once the server has priced the cart.
+- The loyalty points-multiplier form moved to `loyalty-promotion-form.tsx`,
+  since `promotion-form.tsx` is the deals form.

@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { Minus, Plus, ShoppingBag } from "lucide-react";
 import { useCart } from "@/components/cart-context";
+import { CartPoints, type CartLoyalty } from "@/components/store/cart-points";
 import { formatCents } from "@/lib/money";
 import { Button, buttonVariants } from "@/components/ui/button";
 import {
@@ -17,7 +18,7 @@ import { Separator } from "@/components/ui/separator";
 import { PromoCodeField, QuoteTotals, useCheckoutQuote } from "@/components/store/promo-summary";
 import { cn } from "@/lib/utils";
 
-export function CartView() {
+export function CartView({ loyalty }: { loyalty: CartLoyalty | null }) {
   const { lines, subtotalCents, updateQuantity, removeLine, removePromoCode, orderType, orderTypes, ready } = useCart();
   const { quote, error } = useCheckoutQuote(orderType);
 
@@ -143,6 +144,7 @@ export function CartView() {
             : "Tip is added at checkout."}
         </p>
       </div>
+      {loyalty ? <CartPoints earn={quote?.loyalty?.pointsEarned ?? null} loyalty={loyalty} /> : null}
 
       <Separator className="mt-6" />
 

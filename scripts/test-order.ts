@@ -25,9 +25,9 @@ async function main() {
       notes: "extra crispy",
     }],
   });
-  // Expected: (1099 + 600 + 0 + 175 + 150) * 2 = 2024*2 = 4048 subtotal, tax 0 (OR), +300 tip = 4348
+  // Expected: (1099 + 600 + 0 + 175 + 150) * 2 = 4048 subtotal, 8.25% tax 334, +300 tip = 4682
   console.log("order #", order.orderNumber, "subtotal", order.subtotalCents, "total", order.totalCents, "status", order.status, "payment", order.paymentStatus);
-  if (order.subtotalCents !== 4048 || order.totalCents !== 4348) throw new Error("PRICE MISMATCH");
+  if (order.subtotalCents !== 4048 || order.totalCents !== 4682) throw new Error("PRICE MISMATCH");
 
   // Invalid: missing required Size
   try {

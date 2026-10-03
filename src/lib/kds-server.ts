@@ -2,7 +2,7 @@ import "server-only";
 import { and, asc, desc, eq, gte, inArray, isNull, ne, sql } from "drizzle-orm";
 import { db, orderItems, orders, storeSettings } from "@/db";
 import { RECALLABLE } from "@/lib/order-workflow";
-import { transitionStatement, type Actor } from "@/lib/order-writes";
+import { transitionStatements, type Actor } from "@/lib/order-writes";
 import {
   bumpPlan,
   type ItemStage,
@@ -147,7 +147,7 @@ function syncStatus(orderId: string, actor: Actor, now: Date) {
       ),
     );
   return [
-    transitionStatement({
+    ...transitionStatements({
       orderId,
       from: ["new", "confirmed"],
       to: "preparing",
@@ -155,7 +155,7 @@ function syncStatus(orderId: string, actor: Actor, now: Date) {
       now,
       when: sql`exists (${touched})`,
     }),
-    transitionStatement({
+    ...transitionStatements({
       orderId,
       from: LINE_STATUSES,
       to: "ready",
@@ -221,7 +221,7 @@ export async function applyKdsAction(
     if (!order || !RECALLABLE.includes(order.status)) return;
     // Back on the line from scratch: a recalled ticket usually means a remake.
     await db.batch([
-      transitionStatement({
+      ...transitionStatements({
         orderId: action.orderId,
         from: RECALLABLE,
         to: "preparing",
@@ -236,11 +236,7 @@ export async function applyKdsAction(
     return;
   }
 
-  await transitionStatement({
-    orderId: action.orderId,
-    from: ["ready"],
-    to: "completed",
-    actor,
-    now,
-  });
+  await db.batch(
+    transitionStatements({ orderId: action.orderId, from: ["ready"], to: "completed", actor, now }),
+  );
 }

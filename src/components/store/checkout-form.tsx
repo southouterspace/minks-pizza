@@ -29,6 +29,7 @@ import { Separator } from "@/components/ui/separator";
 import { PromoCodeField, QuoteTotals, useCheckoutQuote } from "@/components/store/promo-summary";
 import { Textarea } from "@/components/ui/textarea";
 import { cn } from "@/lib/utils";
+import { LoyaltyPanel } from "@/components/store/checkout-loyalty";
 
 export type CheckoutConfig = {
   storeName: string;
@@ -40,6 +41,10 @@ export type CheckoutConfig = {
   deliveryPrepMinutes: number;
   deliveryFeeCents: number;
   deliveryMinimumCents: number;
+  loyalty: {
+    programName: string;
+    member: { name: string | null; phone: string; pointsBalance: number } | null;
+  } | null;
 };
 
 const TIP_PRESETS = [0, 10, 15, 20];
@@ -55,8 +60,11 @@ export function CheckoutForm({ config }: { config: CheckoutConfig }) {
   const [customTip, setCustomTip] = useState("");
   const [error, setError] = useState<string | null>(null);
 
-  const [name, setName] = useState("");
-  const [phone, setPhone] = useState("");
+  const member = config.loyalty?.member ?? null;
+  const [name, setName] = useState(member?.name ?? "");
+  const [phone, setPhone] = useState(member?.phone ?? "");
+  const [joinLoyalty, setJoinLoyalty] = useState(true);
+  const [rewardId, setRewardId] = useState<number | null>(null);
   const [email, setEmail] = useState("");
   const [address1, setAddress1] = useState("");
   const [address2, setAddress2] = useState("");
@@ -64,7 +72,11 @@ export function CheckoutForm({ config }: { config: CheckoutConfig }) {
   const [zip, setZip] = useState("");
   const [orderNotes, setOrderNotes] = useState("");
 
-  const { quote, error: quoteError, pending: quotePending, refresh } = useCheckoutQuote(orderType, phone);
+  const { quote, error: quoteError, pending: quotePending, refresh } = useCheckoutQuote(orderType, {
+    phone,
+    rewardId,
+    withRewards: member !== null,
+  });
   // Tip presets stay a share of the pre-discount subtotal: staff did the full work.
   const subtotalCents = quote?.subtotalCents ?? cartSubtotalCents;
 
@@ -79,6 +91,7 @@ export function CheckoutForm({ config }: { config: CheckoutConfig }) {
   }, [tipPercent, customTip, subtotalCents]);
 
   const totalCents = quote ? quote.totalBeforeTipCents + tipCents : null;
+  const rewardError = quote?.loyalty?.rewardError ?? null;
 
   const belowMinimum =
     orderType === "delivery" && subtotalCents < config.deliveryMinimumCents;
@@ -133,6 +146,8 @@ export function CheckoutForm({ config }: { config: CheckoutConfig }) {
         tipCents,
         promoCodes,
         expectedTotalCents: totalCents ?? undefined,
+        joinLoyalty: config.loyalty && !member ? joinLoyalty : false,
+        rewardId,
         lines: lines.map((l) => ({
           itemId: l.itemId,
           quantity: l.quantity,
@@ -298,6 +313,18 @@ export function CheckoutForm({ config }: { config: CheckoutConfig }) {
             </section>
           ) : null}
 
+          {config.loyalty ? (
+            <LoyaltyPanel
+              programName={config.loyalty.programName}
+              member={member}
+              quote={quote}
+              rewardId={rewardId}
+              onRewardChange={setRewardId}
+              joinLoyalty={joinLoyalty}
+              onJoinChange={setJoinLoyalty}
+            />
+          ) : null}
+
           {/* Tip */}
           <section>
             <h2 className="text-sm font-semibold">
@@ -408,6 +435,12 @@ export function CheckoutForm({ config }: { config: CheckoutConfig }) {
             <div className="space-y-4">
               <PromoCodeField quote={quote} />
               {quote ? <QuoteTotals quote={quote} tipCents={tipCents} onRemoveCode={removePromoCode} /> : null}
+              {quote?.loyalty?.pointsEarned ? (
+                <p className="flex justify-between text-xs text-muted-foreground" data-testid="points-to-earn">
+                  <span>Points you&apos;ll earn{quote.loyalty.promoName ? ` (${quote.loyalty.promoName})` : ""}</span>
+                  <span className="tabular-nums">+{quote.loyalty.pointsEarned.toLocaleString()}</span>
+                </p>
+              ) : null}
             </div>
 
             {belowMinimum ? (
@@ -418,6 +451,9 @@ export function CheckoutForm({ config }: { config: CheckoutConfig }) {
                 to your cart.
               </p>
             ) : null}
+            {rewardError ? (
+              <p className="mt-4 text-sm text-destructive">{rewardError}</p>
+            ) : null}
             {error || quoteError ? (
               <p role="alert" className="mt-4 text-sm text-destructive">
                 {error ?? quoteError}
@@ -426,7 +462,9 @@ export function CheckoutForm({ config }: { config: CheckoutConfig }) {
 
             <Button
               type="submit"
-              disabled={pending || quotePending || totalCents === null || belowMinimum || !config.acceptingOrders}
+              disabled={
+                pending || quotePending || totalCents === null || belowMinimum || !config.acceptingOrders || rewardError !== null
+              }
               className="mt-5 h-11! w-full"
               data-testid="place-order"
             >
@@ -448,3 +486,4 @@ export function CheckoutForm({ config }: { config: CheckoutConfig }) {
     </div>
   );
 }
+

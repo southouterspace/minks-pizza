@@ -18,11 +18,16 @@ const phoneSchema = z
   .regex(/^[\d\s()+.-]+$/, "Enter a valid phone number")
   .refine((s) => s.replace(/\D/g, "").length >= 7, "Enter a valid phone number");
 
+const rewardIdSchema = z.number().int().positive().nullable().optional();
+
 /** What the cart and checkout send for a live quote; the phone may be half-typed. */
 export const previewSchema = z.object({
   orderType: z.enum(["pickup", "delivery"]),
   customerPhone: z.string().max(25).optional(),
   promoCodes: promoCodesSchema,
+  rewardId: rewardIdSchema,
+  /** Also list the signed-in member's rewards and whether each fits the cart. */
+  withRewards: z.boolean().optional(),
   lines: z.array(cartLineSchema).max(50),
 });
 
@@ -50,6 +55,8 @@ export const checkoutSchema = z
     promoCodes: promoCodesSchema,
     /** The total the customer saw on the button; a mismatch refuses the order. */
     expectedTotalCents: z.number().int().min(0).optional(),
+    joinLoyalty: z.boolean().optional(),
+    rewardId: rewardIdSchema,
   })
   .superRefine((data, ctx) => {
     if (data.orderType === "delivery") {

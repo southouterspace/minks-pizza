@@ -9,14 +9,17 @@ import {
   gte,
   ilike,
   inArray,
+  lt,
   lte,
+  ne,
   or,
   sql,
   type SQL,
 } from "drizzle-orm";
 import { z } from "zod";
-import { db, orderDiscounts, orderEvents, orderItems, orders, storeSettings } from "@/db";
+import { courierDeliveries, db, orderDiscounts, orderEvents, orderItems, orders, storeSettings } from "@/db";
 import { ACTIVE_STATUSES, isLate, ORDER_STATUSES } from "@/lib/order-workflow";
+import type { LocalDate } from "@/lib/zoned";
 
 export type OrderWithItems = typeof orders.$inferSelect & {
   items: (typeof orderItems.$inferSelect)[];
@@ -159,6 +162,7 @@ export async function getOrderDetail(id: string) {
       items: { orderBy: (items, { asc }) => [asc(items.id)] },
       events: { orderBy: [asc(orderEvents.createdAt), asc(orderEvents.id)] },
       discounts: { orderBy: [asc(orderDiscounts.id)] },
+      courierDeliveries: { orderBy: [desc(courierDeliveries.createdAt)], limit: 1 },
     },
   });
 }
@@ -225,4 +229,15 @@ export async function getBoard(now: Date) {
     getDashboardStats(now, timezone),
   ]);
   return { active, stats, timezone };
+}
+
+/** Non-canceled order subtotals, less reward discounts, per store-local date, for [from, to). */
+export async function salesByDate(from: Date, to: Date, tz: string): Promise<Map<LocalDate, number>> {
+  const day = sql<string>`to_char(${orders.placedAt} at time zone ${tz}, 'YYYY-MM-DD')`;
+  const rows = await db
+    .select({ day, cents: sql<number>`sum(${orders.subtotalCents} - ${orders.discountCents})::int` })
+    .from(orders)
+    .where(and(ne(orders.status, "canceled"), gte(orders.placedAt, from), lt(orders.placedAt, to)))
+    .groupBy(sql`1`);
+  return new Map(rows.map((r) => [r.day, r.cents]));
 }
