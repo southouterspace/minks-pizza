@@ -89,6 +89,20 @@ describe("tiers", () => {
     assert.equal(r.success, false);
     assert.equal(r.error?.issues[0].message, "The first tier must start at 0 points");
   });
+  it("stores tiers lowest first, whatever order they were entered in", () => {
+    const r = tiersSchema.parse([
+      { name: "Gold", minPoints: 4000, multiplierBps: 12_000 },
+      { name: "Member", minPoints: 0, multiplierBps: 10_000 },
+    ]);
+    assert.deepEqual(r.map((t) => t.name), ["Member", "Gold"]);
+  });
+  it("rejects two tiers starting at the same points", () => {
+    const r = tiersSchema.safeParse([
+      { name: "Member", minPoints: 0, multiplierBps: 10_000 },
+      { name: "Gold", minPoints: 0, multiplierBps: 12_000 },
+    ]);
+    assert.equal(r.error?.issues[0].message, "Two tiers can't start at the same points");
+  });
   it("formats multipliers", () => {
     assert.equal(formatMultiplier(20_000), "2x");
     assert.equal(formatMultiplier(12_500), "1.25x");

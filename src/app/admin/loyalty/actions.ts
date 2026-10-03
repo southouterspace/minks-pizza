@@ -76,6 +76,15 @@ export async function toggleLoyaltyEnabled(): Promise<void> {
   revalidateLoyalty();
 }
 
+const tierRowSchema = z.object({
+  name: z.string(),
+  minPoints: z
+    .string()
+    .regex(/^\d+$/, "Give every tier a whole number of points to start at")
+    .transform(Number),
+  multiplierBps,
+});
+
 const settingsSchema = z.object({
   programName: z.string().trim().min(1, "Name the program").max(60),
   pointsPerDollar: z.coerce.number().int().min(1, "Earn at least 1 point per dollar").max(1000),
@@ -101,13 +110,13 @@ export async function saveLoyaltySettings(formData: FormData): Promise<void> {
   for (let i = 0; formData.has(`tier-name-${i}`); i++) {
     const name = text(formData, `tier-name-${i}`);
     if (!name) continue;
-    const multiplier = multiplierBps.safeParse(text(formData, `tier-multiplier-${i}`));
-    if (!multiplier.success) fail("/admin/loyalty/settings", multiplier.error);
-    tiers.push({
+    const row = tierRowSchema.safeParse({
       name,
-      minPoints: Number.parseInt(text(formData, `tier-min-${i}`) || "0", 10),
-      multiplierBps: multiplier.data,
+      minPoints: text(formData, `tier-min-${i}`),
+      multiplierBps: text(formData, `tier-multiplier-${i}`),
     });
+    if (!row.success) fail("/admin/loyalty/settings", row.error);
+    tiers.push(row.data);
   }
   const parsed = settingsSchema.safeParse({
     programName: text(formData, "programName"),
@@ -118,7 +127,7 @@ export async function saveLoyaltySettings(formData: FormData): Promise<void> {
     refereeBonus: text(formData, "refereeBonus"),
     expirationMonths: text(formData, "expirationMonths") || "never",
     timezone: text(formData, "timezone"),
-    tiers: tiers.toSorted((a, b) => a.minPoints - b.minPoints),
+    tiers,
   });
   if (!parsed.success) fail("/admin/loyalty/settings", parsed.error);
 

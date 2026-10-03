@@ -48,6 +48,7 @@ export type LoyaltyTier = { name: string; minPoints: number; multiplierBps: numb
 /** One tier means no tiers: the storefront hides tier UI until there are two. */
 export const DEFAULT_TIERS: LoyaltyTier[] = [{ name: "Member", minPoints: 0, multiplierBps: 10_000 }];
 
+/** Rows in any order; stored lowest first, which tierFor relies on. */
 export const tiersSchema = z
   .array(
     z.object({
@@ -58,10 +59,11 @@ export const tiersSchema = z
   )
   .min(1, "Add at least one tier")
   .max(8)
+  .transform((t) => t.toSorted((a, b) => a.minPoints - b.minPoints))
   .refine((t) => t[0].minPoints === 0, "The first tier must start at 0 points")
   .refine(
     (t) => t.every((tier, i) => i === 0 || tier.minPoints > t[i - 1].minPoints),
-    "Each tier must need more points than the one before it",
+    "Two tiers can't start at the same points",
   );
 
 /**
@@ -137,9 +139,9 @@ export function earnPoints({
   return Number(raw);
 }
 
+/** `tiers` lowest first, as tiersSchema stores them. */
 export function tierFor(qualifyingPoints: number, tiers: LoyaltyTier[]): LoyaltyTier {
-  const sorted = tiers.toSorted((a, b) => a.minPoints - b.minPoints);
-  return sorted.findLast((t) => t.minPoints <= qualifyingPoints) ?? sorted[0];
+  return tiers.findLast((t) => t.minPoints <= qualifyingPoints) ?? tiers[0];
 }
 
 export type TierProgress = {
@@ -152,10 +154,7 @@ export type TierProgress = {
 
 export function tierProgress(qualifyingPoints: number, tiers: LoyaltyTier[]): TierProgress {
   const tier = tierFor(qualifyingPoints, tiers);
-  const next =
-    tiers
-      .toSorted((a, b) => a.minPoints - b.minPoints)
-      .find((t) => t.minPoints > tier.minPoints) ?? null;
+  const next = tiers.find((t) => t.minPoints > tier.minPoints) ?? null;
   if (!next) return { tier, next: null, pointsToNext: null, fraction: 1 };
   const span = next.minPoints - tier.minPoints;
   return {
