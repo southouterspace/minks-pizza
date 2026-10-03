@@ -44,8 +44,6 @@ export type LoyaltyReward = Omit<typeof loyaltyRewards.$inferSelect, "effect"> &
   price: RewardPrice;
 };
 
-export const INSUFFICIENT_POINTS = "You don't have enough points for that reward anymore.";
-
 /** Member-scoped keys built in SQL, for statements that find the member there. */
 const memberKey = (prefix: string, memberId: SQL) => sql`${prefix} || ${memberId}::text`;
 

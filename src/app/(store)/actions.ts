@@ -3,7 +3,7 @@
 import { z } from "zod";
 import { cartLineSchema, checkoutSchema } from "@/lib/validation";
 import { createOrder, OrderError, quoteOrder } from "@/lib/orders";
-import { getCurrentMember, getCurrentMemberId } from "@/lib/member-auth";
+import { getCurrentMember } from "@/lib/member-auth";
 import { rewardDiscount, rewardValueCents } from "@/lib/loyalty";
 import { listRewards } from "@/lib/loyalty-server";
 
@@ -27,7 +27,7 @@ export async function placeOrder(input: unknown): Promise<PlaceOrderResult> {
   }
 
   try {
-    const order = await createOrder(parsed.data, { memberId: await getCurrentMemberId() });
+    const order = await createOrder(parsed.data, await getCurrentMember());
     return { ok: true, orderId: order.id };
   } catch (err) {
     if (err instanceof OrderError) {
@@ -78,11 +78,7 @@ export async function previewCheckout(input: unknown): Promise<CheckoutPreview> 
   if (!parsed.success) return { ok: false, error: "Invalid cart." };
   try {
     const member = await getCurrentMember();
-    const q = await quoteOrder(parsed.data, {
-      member,
-      rewardId: parsed.data.rewardId,
-      canRedeem: member !== null,
-    });
+    const q = await quoteOrder(parsed.data, member);
     const rewards =
       member && q.loyalty
         ? (await listRewards({ activeOnly: true })).map((r) => ({
@@ -107,7 +103,7 @@ export async function previewCheckout(input: unknown): Promise<CheckoutPreview> 
       totalCents: q.totalCents,
       pointsEarned: q.loyalty?.pointsEarned ?? null,
       promoName: q.loyalty?.promoName ?? null,
-      rewardError: q.loyalty?.rewardError ?? null,
+      rewardError: q.loyalty?.redemption.status === "rejected" ? q.loyalty.redemption.error : null,
     };
   } catch (err) {
     if (err instanceof OrderError) return { ok: false, error: err.message };

@@ -254,6 +254,39 @@ export function rewardDiscount(effect: RewardEffect, lines: DiscountLine[]): Dis
   }
 }
 
+export const INSUFFICIENT_POINTS = "You don't have enough points for that reward anymore.";
+
+/** What a reward needs to be redeemed; the server and the tests both pass real rows. */
+export type RedeemableReward = {
+  name: string;
+  isActive: boolean;
+  effect: RewardEffect;
+  price: { cost: number };
+};
+
+/** The outcome of the reward a customer picked, if any. */
+export type Redemption<R extends RedeemableReward> =
+  | { status: "none" }
+  | { status: "applied"; reward: R; discountCents: number }
+  | { status: "rejected"; error: string };
+
+/**
+ * Whether `reward` (null when the id matched nothing) applies to this cart for
+ * `member` (null when signed out), and for how much.
+ */
+export function applyReward<R extends RedeemableReward>(
+  reward: R | null,
+  member: { pointsBalance: number } | null,
+  lines: DiscountLine[],
+): Redemption<R> {
+  if (!reward || !reward.isActive) return { status: "rejected", error: "That reward is no longer available." };
+  if (!member) return { status: "rejected", error: "Sign in to use your points." };
+  if (member.pointsBalance < reward.price.cost) return { status: "rejected", error: INSUFFICIENT_POINTS };
+  const discount = rewardDiscount(reward.effect, lines);
+  if (!discount.ok) return { status: "rejected", error: `Add a qualifying item to use "${reward.name}".` };
+  return { status: "applied", reward, discountCents: discount.discountCents };
+}
+
 /** The dollar value a reward stands for: the amount off, or the free item's cap. */
 export function rewardValueCents(effect: RewardEffect): number {
   return effect.kind === "amount_off" ? effect.amountOffCents : effect.maxValueCents;

@@ -13,18 +13,26 @@ import {
   storeSettings,
   type OrderItemModifier,
 } from "@/db";
+
+type StoreSettings = typeof storeSettings.$inferSelect;
 import type { KitchenStation } from "@/lib/kds";
-import { earnPoints, normalizePhone, rewardDiscount, tierFor } from "@/lib/loyalty";
 import {
   INSUFFICIENT_POINTS,
-  currentPromotion,
+  activePromotion,
+  applyReward,
+  earnPoints,
+  normalizePhone,
+  tierFor,
+  type Redemption,
+} from "@/lib/loyalty";
+import {
   enrollStatements,
   getLoyaltySettings,
-  getMember,
   getReward,
   isInsufficientPoints,
   ledgerKey,
   ledgerStatement,
+  listPromotions,
   memberByPhone,
   qualifyingPoints,
   type LoyaltyMember,
@@ -70,8 +78,8 @@ export async function getSettings() {
 export async function priceCart(
   lines: CheckoutInput["lines"],
   orderType: "pickup" | "delivery",
+  settings: Pick<StoreSettings, "deliveryFeeCents">,
 ): Promise<PricedCart> {
-  const settings = await getSettings();
 
   const itemIds = [...new Set(lines.map((l) => l.itemId))];
   const items = await db
@@ -180,9 +188,8 @@ export type OrderQuote = PricedCart & {
   totalCents: number; // before tip
   loyalty: {
     programName: string;
-    reward: LoyaltyReward | null;
-    /** Why the chosen reward can't apply; the order would be rejected. */
-    rewardError: string | null;
+    /** A rejected redemption means the order would be refused. */
+    redemption: Redemption<LoyaltyReward>;
     pointsEarned: number;
     promoName: string | null;
   } | null;
@@ -190,43 +197,26 @@ export type OrderQuote = PricedCart & {
 
 /**
  * Prices a cart and applies the loyalty program: the reward discount (tax is
- * on the discounted subtotal) and the points this order will earn.
- * `member` earns; only a `canRedeem` member (signed in) may spend.
+ * on the discounted subtotal) and the points this order will earn. `member`
+ * earns, and spends when `rewardId` is set.
  */
 export async function quoteOrder(
-  input: Pick<CheckoutInput, "lines" | "orderType">,
-  { member, rewardId, canRedeem }: {
-    member: LoyaltyMember | null;
-    rewardId: number | null;
-    canRedeem: boolean;
-  },
+  input: Pick<CheckoutInput, "lines" | "orderType" | "rewardId">,
+  member: LoyaltyMember | null,
 ): Promise<OrderQuote> {
-  const [settings, loyalty, cart] = await Promise.all([
+  const rewardId = input.rewardId ?? null;
+  const [settings, loyalty, promos, reward, qualifying] = await Promise.all([
     getSettings(),
     getLoyaltySettings(),
-    priceCart(input.lines, input.orderType),
+    listPromotions(),
+    rewardId === null ? null : getReward(rewardId),
+    member ? qualifyingPoints(member.id) : 0,
   ]);
+  const cart = await priceCart(input.lines, input.orderType, settings);
 
-  let reward: LoyaltyReward | null = null;
-  let rewardError: string | null = null;
-  let discountCents = 0;
-  if (loyalty.enabled && rewardId !== null) {
-    reward = await getReward(rewardId);
-    const applied = reward ? rewardDiscount(reward.effect, cart.lines) : null;
-    if (!reward || !reward.isActive) {
-      rewardError = "That reward is no longer available.";
-    } else if (!member || !canRedeem) {
-      rewardError = "Sign in to use your points.";
-    } else if (member.pointsBalance < reward.price.cost) {
-      rewardError = INSUFFICIENT_POINTS;
-    } else if (!applied?.ok) {
-      rewardError = `Add a qualifying item to use "${reward.name}".`;
-    } else {
-      discountCents = applied.discountCents;
-    }
-    if (rewardError) reward = null;
-  }
-
+  const redemption: Redemption<LoyaltyReward> =
+    loyalty.enabled && rewardId !== null ? applyReward(reward, member, cart.lines) : { status: "none" };
+  const discountCents = redemption.status === "applied" ? redemption.discountCents : 0;
   const netCents = cart.subtotalCents - discountCents;
   const taxCents = taxFromBps(netCents, settings.taxRateBps);
   const base = {
@@ -237,16 +227,12 @@ export async function quoteOrder(
   };
   if (!loyalty.enabled) return { ...base, loyalty: null };
 
-  const [qualifying, promo] = await Promise.all([
-    member ? qualifyingPoints(member.id) : 0,
-    currentPromotion(loyalty),
-  ]);
+  const promo = activePromotion(promos, new Date(), loyalty.timezone);
   return {
     ...base,
     loyalty: {
       programName: loyalty.programName,
-      reward,
-      rewardError,
+      redemption,
       promoName: promo?.name ?? null,
       pointsEarned: earnPoints({
         netCents,
@@ -267,16 +253,11 @@ export async function quoteOrder(
  * upstream (validation, pricing) and downstream (confirmation page,
  * admin inbox) already works off the persisted order.
  *
- * `ctx.memberId` is the signed-in loyalty member (from the session, never
- * from the client); only they can spend points. A guest who opts in earns
- * on their phone number. The order, its items and the points spent commit
- * in one transaction, so two orders racing for the same points can't both win.
+ * `signedIn` is the member from the session, never from the client; only
+ * they can spend points. A guest who opts in earns on their phone number.
  */
-export async function createOrder(
-  input: CheckoutInput,
-  ctx: { memberId?: number | null } = {},
-) {
-  const settings = await getSettings();
+export async function createOrder(input: CheckoutInput, signedIn: LoyaltyMember | null = null) {
+  const [settings, loyalty] = await Promise.all([getSettings(), getLoyaltySettings()]);
 
   if (!settings.isPublished) {
     throw new OrderError("This store is not accepting online orders yet.");
@@ -292,21 +273,19 @@ export async function createOrder(
   if (input.orderType === "delivery" && !settings.deliveryEnabled) {
     throw new OrderError("Delivery is not available right now.");
   }
+  if (loyalty.enabled && input.rewardId != null && !signedIn) {
+    throw new OrderError("Sign in to use your points.");
+  }
 
-  const signedIn = ctx.memberId != null ? await getMember(ctx.memberId) : null;
   const phone = normalizePhone(input.customerPhone);
   // A guest opting in is enrolled inside the order's batch, so a rejected
   // order enrolls nobody. Until then a new phone earns like any new member.
-  const joiningPhone =
-    !signedIn && input.joinLoyalty && phone && (await getLoyaltySettings()).enabled ? phone : null;
+  const joiningPhone = loyalty.enabled && !signedIn && input.joinLoyalty && phone ? phone : null;
   const member = signedIn ?? (joiningPhone ? await memberByPhone(joiningPhone) : null);
 
-  const quote = await quoteOrder(input, {
-    member,
-    rewardId: input.rewardId ?? null,
-    canRedeem: signedIn !== null,
-  });
-  if (quote.loyalty?.rewardError) throw new OrderError(quote.loyalty.rewardError);
+  const quote = await quoteOrder(input, member);
+  const redemption = quote.loyalty?.redemption ?? { status: "none" };
+  if (redemption.status === "rejected") throw new OrderError(redemption.error);
 
   if (
     input.orderType === "delivery" &&
@@ -328,7 +307,7 @@ export async function createOrder(
   // order with no items, and two orders racing for the same points can't
   // both win.
   const orderId = randomUUID();
-  const reward = quote.loyalty?.reward ?? null;
+  const reward = redemption.status === "applied" ? redemption.reward : null;
   try {
     const [[order]] = await db.batch([
       db

@@ -2,6 +2,7 @@ import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import {
   activePromotion,
+  applyReward,
   birthdayGrantDue,
   birthdaySchema,
   earnPoints,
@@ -181,6 +182,47 @@ describe("rewardDiscount", () => {
       rewardDiscount({ kind: "free_item", categoryIds: [9], maxValueCents: 900 }, lines),
       { ok: false, reason: "no_matching_item" },
     );
+  });
+});
+
+describe("applyReward", () => {
+  const threeOff = {
+    name: "$3 off",
+    isActive: true,
+    effect: { kind: "amount_off" as const, amountOffCents: 300 },
+    price: { cost: 300 },
+  };
+  const freeSide = {
+    name: "Free side",
+    isActive: true,
+    effect: { kind: "free_item" as const, categoryIds: [7], maxValueCents: 999 },
+    price: { cost: 700 },
+  };
+  const pizza = [{ categoryId: 1, unitPriceCents: 1999, quantity: 1 }];
+  const rich = { pointsBalance: 1000 };
+
+  it("applies an affordable reward to a cart it fits", () => {
+    assert.deepEqual(applyReward(threeOff, rich, pizza), { status: "applied", reward: threeOff, discountCents: 300 });
+  });
+  it("rejects a reward that's gone or switched off", () => {
+    const expected = { status: "rejected", error: "That reward is no longer available." };
+    assert.deepEqual(applyReward(null, rich, pizza), expected);
+    assert.deepEqual(applyReward({ ...threeOff, isActive: false }, rich, pizza), expected);
+  });
+  it("asks a signed-out customer to sign in", () => {
+    assert.deepEqual(applyReward(threeOff, null, pizza), { status: "rejected", error: "Sign in to use your points." });
+  });
+  it("rejects a reward the balance can't cover", () => {
+    assert.deepEqual(applyReward(threeOff, { pointsBalance: 299 }, pizza), {
+      status: "rejected",
+      error: "You don't have enough points for that reward anymore.",
+    });
+  });
+  it("asks for a qualifying item when the cart has none", () => {
+    assert.deepEqual(applyReward(freeSide, rich, pizza), {
+      status: "rejected",
+      error: 'Add a qualifying item to use "Free side".',
+    });
   });
 });
 

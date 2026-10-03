@@ -28,7 +28,8 @@ import {
   orders,
 } from "../src/db";
 import { localDate } from "../src/lib/loyalty";
-import { INSUFFICIENT_POINTS, refreshMember } from "../src/lib/loyalty-server";
+import { INSUFFICIENT_POINTS } from "../src/lib/loyalty";
+import { getMember, refreshMember } from "../src/lib/loyalty-server";
 import { transitionOrder } from "../src/lib/order-writes";
 import { createOrder, OrderError } from "../src/lib/orders";
 
@@ -397,8 +398,8 @@ async function main() {
     rewardId: threeOff.id,
   };
   const race = await Promise.allSettled([
-    createOrder(racer, { memberId: afterCancel.id }),
-    createOrder(racer, { memberId: afterCancel.id }),
+    createOrder(racer, await getMember(afterCancel.id)),
+    createOrder(racer, await getMember(afterCancel.id)),
   ]);
   const won = race.filter((r) => r.status === "fulfilled").length;
   const lost = race.filter(
@@ -428,7 +429,7 @@ async function main() {
 
   const benOrder = await createOrder(
     { orderType: "pickup", customerName: BEN.name, customerPhone: BEN.phone, tipCents: 0, lines: orderLines },
-    { memberId: benMember.id },
+    await getMember(benMember.id),
   );
   await completeViaAdmin(op, benOrder.orderNumber, benOrder.id);
   await refreshMember(benMember.id);
@@ -559,11 +560,11 @@ async function main() {
   );
   const caraPending = await createOrder(
     { orderType: "pickup", customerName: CARA.name, customerPhone: CARA.phone, tipCents: 0, lines: orderLines },
-    { memberId: caraMember.id },
+    await getMember(caraMember.id),
   );
   const caraCanceled = await createOrder(
     { orderType: "pickup", customerName: CARA.name, customerPhone: CARA.phone, tipCents: 0, lines: orderLines },
-    { memberId: caraMember.id },
+    await getMember(caraMember.id),
   );
   await cancel(caraCanceled.id);
   await cara.reload({ waitUntil: "networkidle" });
@@ -635,7 +636,7 @@ async function main() {
     "customers see the scheduled increase",
     (await rita.getByTestId("price-increase").first().textContent())?.startsWith("Price going up to 400 on") === true,
   );
-  const protectedOrder = await createOrder(racer, { memberId: ritaMember.id });
+  const protectedOrder = await createOrder(racer, await getMember(ritaMember.id));
   check("redeeming during protection costs the old 300", protectedOrder.loyaltyPointsRedeemed === 300);
   await cancel(protectedOrder.id);
   await op.goto(`${BASE}/admin/loyalty/rewards`, { waitUntil: "networkidle" });
