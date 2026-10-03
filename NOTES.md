@@ -269,7 +269,7 @@ reasons, payment recording, printing, day stats and a new-order alert.
   order goes backwards, and `statusTimestamps("preparing")` clears
   `readyAt`/`completedAt` so a recalled order isn't reported as ready.
 - **Audit trail in the same statement as the change.** Every write in
-  `src/lib/orders-admin.ts` is one data-modifying CTE: lock the order
+  `src/lib/order-writes.ts` is one data-modifying CTE: lock the order
   `for update` only if the guard (`status in (...)`, `payment_status =
   'pending'`, …) still holds, update it, insert the `order_events` row from
   what the update returned. The brief asked for an update + insert in one
@@ -369,7 +369,7 @@ reasons, payment recording, printing, day stats and a new-order alert.
 - Screenshots taken right after a tab click can catch `transition-colors`
   halfway, so two tabs look selected. Check `aria-pressed`, not pixels.
 - Scripts can't import a module with `import "server-only"`: the package
-  only exists inside Next's bundler. To call `orders-admin.ts` from tsx,
+  only exists inside Next's bundler. To call `order-writes.ts` or `order-queries.ts` from tsx,
   point `NODE_PATH` at a directory holding an empty `server-only` package.
 - A hydration-mismatch warning about `caret-color: transparent` on the
   history search input showed up only in e2e runs that take screenshots

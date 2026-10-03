@@ -186,7 +186,7 @@ async function main() {
 
   // --- +10 min ------------------------------------------------------------------
   const before = (await orderRow(b.id)).promisedAt!;
-  await page.getByTestId(`plus10-${b.orderNumber}`).click();
+  await page.getByTestId(`eta10-${b.orderNumber}`).click();
   check(
     "+10 pushes promisedAt by exactly ten minutes",
     await eventually(async () => (await orderRow(b.id)).promisedAt!.getTime() - before.getTime() === 600_000),

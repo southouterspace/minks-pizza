@@ -1,11 +1,9 @@
 import type { Metadata } from "next";
 import Link from "next/link";
-import { asc, inArray } from "drizzle-orm";
-import { db, orders } from "@/db";
 import { requireOperator } from "@/lib/auth";
 import { formatCents } from "@/lib/money";
-import { ACTIVE_STATUSES, type OrderStatus } from "@/lib/order-workflow";
-import { getDashboardStats, getStoreTimezone } from "@/lib/orders-admin";
+import type { OrderStatus } from "@/lib/order-workflow";
+import { getBoard } from "@/lib/order-queries";
 import { cn } from "@/lib/utils";
 import { AutoRefresh } from "@/components/admin/auto-refresh";
 import { BoardCard } from "@/components/admin/board-card";
@@ -28,16 +26,7 @@ const LANES: { title: string; statuses: readonly OrderStatus[]; empty: string }[
 export default async function OrdersBoardPage() {
   await requireOperator();
   const now = new Date();
-
-  const [active, stats, timeZone] = await Promise.all([
-    db.query.orders.findMany({
-      where: inArray(orders.status, [...ACTIVE_STATUSES]),
-      with: { items: true },
-      orderBy: [asc(orders.placedAt)],
-    }),
-    getDashboardStats(now),
-    getStoreTimezone(),
-  ]);
+  const { active, stats, timezone: timeZone } = await getBoard(now);
 
   const kpis = [
     {

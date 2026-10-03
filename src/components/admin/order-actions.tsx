@@ -4,8 +4,19 @@ import { useState, type ReactNode } from "react";
 import { useFormStatus } from "react-dom";
 import { Printer } from "lucide-react";
 import { toast } from "sonner";
-import { cancelOrder, type OrderActionState } from "@/app/admin/actions";
-import { CANCEL_REASONS } from "@/lib/order-workflow";
+import {
+  adjustPromisedTimeAction,
+  cancelOrder,
+  moveOrder,
+  type OrderActionState,
+} from "@/app/admin/actions";
+import {
+  canTransition,
+  CANCEL_REASONS,
+  isCooking,
+  NEXT_ACTION,
+  type OrderStatus,
+} from "@/lib/order-workflow";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -69,16 +80,72 @@ export function SubmitButton({
   );
 }
 
-export function CancelOrderDialog({
+/** The order's one forward move, or nothing when it has none. */
+export function AdvanceButton({
+  orderId,
+  status,
+  size,
+  testId,
+}: {
+  orderId: string;
+  status: OrderStatus;
+  size: "sm" | "default";
+  testId: string;
+}) {
+  const next = NEXT_ACTION[status];
+  if (!next) return null;
+  return (
+    <ActionForm action={moveOrder} orderId={orderId}>
+      <input type="hidden" name="to" value={next.to} />
+      <SubmitButton size={size} data-testid={testId}>
+        {next.label}
+      </SubmitButton>
+    </ActionForm>
+  );
+}
+
+/** Quick pushes to the promised time, offered only while the food is still owed. */
+export function EtaButtons({
   orderId,
   orderNumber,
-  size = "sm",
+  status,
+  minutes,
 }: {
   orderId: string;
   orderNumber: number;
-  size?: "xs" | "sm" | "default";
+  status: OrderStatus;
+  minutes: readonly number[];
+}) {
+  if (!isCooking(status)) return null;
+  return minutes.map((m) => (
+    <ActionForm key={m} action={adjustPromisedTimeAction} orderId={orderId}>
+      <input type="hidden" name="minutes" value={m} />
+      <SubmitButton
+        variant="outline"
+        size="sm"
+        className="tabular-nums"
+        aria-label={`${m > 0 ? "Push" : "Pull"} promised time ${Math.abs(m)} minutes`}
+        data-testid={`eta${m}-${orderNumber}`}
+      >
+        {m > 0 ? `+${m}` : `−${-m}`} min
+      </SubmitButton>
+    </ActionForm>
+  ));
+}
+
+export function CancelOrderDialog({
+  orderId,
+  orderNumber,
+  status,
+  size,
+}: {
+  orderId: string;
+  orderNumber: number;
+  status: OrderStatus;
+  size: "sm" | "default";
 }) {
   const [open, setOpen] = useState(false);
+  if (!canTransition(status, "canceled")) return null;
   return (
     <Dialog open={open} onOpenChange={setOpen}>
       <DialogTrigger

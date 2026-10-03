@@ -240,7 +240,8 @@ src/
   db/            schema.ts (Drizzle), seed.ts, index.ts (client)
   lib/           menu.ts, orders.ts (pricing + creation), auth.ts, validation.ts,
                  order-workflow.ts (order lifecycle rules, pure),
-                 orders-admin.ts (logged order writes, search, stats),
+                 order-writes.ts (logged status/ETA/payment/note writes),
+                 order-queries.ts (board, history search, export, detail, day stats),
                  kds.ts (kitchen display rules, pure), kds-server.ts (queries + actions)
   app/(store)/   customer storefront (menu, cart, checkout, order status)
   app/admin/     operator dashboard (orders board, history + detail, menu,

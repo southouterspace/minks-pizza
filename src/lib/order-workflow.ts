@@ -16,6 +16,17 @@ export type OrderStatus = (typeof ORDER_STATUSES)[number];
 
 export const ACTIVE_STATUSES = ["new", "confirmed", "preparing", "ready"] as const;
 
+/** Food still owed: a passed promise means late, and the promise can still move. */
+export const COOKING_STATUSES = ["new", "confirmed", "preparing"] as const;
+
+export function isActive(status: OrderStatus): boolean {
+  return (ACTIVE_STATUSES as readonly OrderStatus[]).includes(status);
+}
+
+export function isCooking(status: OrderStatus): boolean {
+  return (COOKING_STATUSES as readonly OrderStatus[]).includes(status);
+}
+
 export const TRANSITIONS: Record<OrderStatus, readonly OrderStatus[]> = {
   new: ["confirmed", "canceled"],
   confirmed: ["preparing", "canceled"],
@@ -96,11 +107,33 @@ export const ORDER_EVENT_TYPES = [
 ] as const;
 export type OrderEventType = (typeof ORDER_EVENT_TYPES)[number];
 
-/** Statuses where the food is still owed, so a passed promise means late. */
-const COOKING: readonly OrderStatus[] = ["new", "confirmed", "preparing"];
-
 export function isLate(promisedAt: Date | null, status: OrderStatus, now: Date): boolean {
-  return promisedAt !== null && COOKING.includes(status) && now.getTime() > promisedAt.getTime();
+  return promisedAt !== null && isCooking(status) && now.getTime() > promisedAt.getTime();
+}
+
+/** The timeline headline for one audit event. */
+export function describeEvent(e: {
+  type: OrderEventType;
+  fromStatus: OrderStatus | null;
+  toStatus: OrderStatus | null;
+}): string {
+  switch (e.type) {
+    case "placed":
+      return "Order placed";
+    case "status_changed":
+      if (!e.toStatus) return "Status changed";
+      if (e.toStatus === "canceled") return "Canceled";
+      if (e.toStatus === "preparing" && e.fromStatus && RECALLABLE.includes(e.fromStatus)) {
+        return "Recalled to the kitchen";
+      }
+      return STATUS_META[e.toStatus].label;
+    case "eta_changed":
+      return "Promised time pushed";
+    case "payment_recorded":
+      return "Payment recorded";
+    case "note_added":
+      return "Note";
+  }
 }
 
 /** Whole minutes until the promise, negative once it has passed. */

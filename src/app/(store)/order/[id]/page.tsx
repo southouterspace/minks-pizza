@@ -3,7 +3,9 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import { eq } from "drizzle-orm";
 import { db, orderItems, orders } from "@/db";
+import { formatClock } from "@/lib/hours";
 import { formatCents } from "@/lib/money";
+import { isActive, isCooking } from "@/lib/order-workflow";
 import { getSettings } from "@/lib/orders";
 import { OrderAutoRefresh } from "@/components/store/order-auto-refresh";
 import { buttonVariants } from "@/components/ui/button";
@@ -69,7 +71,7 @@ export default async function OrderPage({
   const stepIndex = STATUS_STEPS.indexOf(
     order.status as (typeof STATUS_STEPS)[number],
   );
-  const active = order.status !== "completed" && order.status !== "canceled";
+  const active = isActive(order.status);
   const label = STATUS_LABELS[order.status] ?? STATUS_LABELS.new;
 
   return (
@@ -87,14 +89,9 @@ export default async function OrderPage({
           Reason: {order.cancelReason}
         </p>
       ) : null}
-      {active && order.status !== "ready" && order.promisedAt ? (
+      {isCooking(order.status) && order.promisedAt ? (
         <p className="mt-3 text-sm font-medium" data-testid="ready-around">
-          Ready around{" "}
-          {order.promisedAt.toLocaleTimeString("en-US", {
-            hour: "numeric",
-            minute: "2-digit",
-            timeZone: settings.timezone,
-          })}
+          Ready around {formatClock(order.promisedAt, settings.timezone)}
         </p>
       ) : null}
 

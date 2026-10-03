@@ -29,11 +29,6 @@ export function formatDateTime(d: Date, timeZone?: string): string {
   });
 }
 
-/** "6:45 PM" on the store's clock. */
-export function formatClock(d: Date, timeZone: string): string {
-  return d.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit", timeZone });
-}
-
 /** Compact elapsed time: "45s", "12m", "1h 05m". */
 export function formatAge(since: Date, now: Date): string {
   const seconds = Math.max(0, Math.floor((now.getTime() - since.getTime()) / 1000));

@@ -1,48 +1,18 @@
 import Link from "next/link";
 import { ChevronRight } from "lucide-react";
-import type { orderItems, orders } from "@/db";
-import { adjustPromisedTimeAction, moveOrder } from "@/app/admin/actions";
 import { formatCents } from "@/lib/money";
-import { canTransition, isLate, minutesUntil, NEXT_ACTION } from "@/lib/order-workflow";
+import { isLate } from "@/lib/order-workflow";
+import type { OrderWithItems } from "@/lib/order-queries";
 import { cn } from "@/lib/utils";
 import { Card } from "@/components/ui/card";
-import { ActionForm, CancelOrderDialog, SubmitButton } from "./order-actions";
-import { LateBadge, PaymentBadge, StatusBadge } from "./order-status";
-import { formatAge, formatClock } from "./ui";
+import { AdvanceButton, CancelOrderDialog, EtaButtons } from "./order-actions";
+import { LateBadge, PaymentBadge, PromisedTime, StatusBadge } from "./order-status";
+import { formatAge } from "./ui";
 
-export type BoardOrder = typeof orders.$inferSelect & {
-  items: (typeof orderItems.$inferSelect)[];
-};
-
-export function itemSummary(items: BoardOrder["items"]): string {
+function itemSummary(items: OrderWithItems["items"]): string {
   return items
     .map((i) => (i.quantity > 1 ? `${i.quantity}× ${i.itemName}` : i.itemName))
     .join(", ");
-}
-
-export function PromisedTime({
-  promisedAt,
-  late,
-  now,
-  timeZone,
-}: {
-  promisedAt: Date | null;
-  late: boolean;
-  now: Date;
-  timeZone: string;
-}) {
-  if (!promisedAt) return <span className="text-muted-foreground">No promised time</span>;
-  const minutes = minutesUntil(promisedAt, now);
-  return (
-    <span className={cn("tabular-nums", late ? "font-medium text-destructive" : "text-muted-foreground")}>
-      Promised {formatClock(promisedAt, timeZone)}
-      {late
-        ? ` · ${-minutes} min late`
-        : minutes >= 0 && minutes <= 120
-          ? ` · in ${minutes} min`
-          : ""}
-    </span>
-  );
 }
 
 export function BoardCard({
@@ -50,11 +20,10 @@ export function BoardCard({
   now,
   timeZone,
 }: {
-  order: BoardOrder;
+  order: OrderWithItems;
   now: Date;
   timeZone: string;
 }) {
-  const next = NEXT_ACTION[order.status];
   const late = isLate(order.promisedAt, order.status, now);
   const itemCount = order.items.reduce((n, i) => n + i.quantity, 0);
 
@@ -107,32 +76,25 @@ export function BoardCard({
       </div>
 
       <div className="flex flex-wrap items-center gap-1.5 border-t px-3 pt-2">
-        {next ? (
-          <ActionForm action={moveOrder} orderId={order.id}>
-            <input type="hidden" name="to" value={next.to} />
-            <SubmitButton size="sm" data-testid={`advance-${order.orderNumber}`}>
-              {next.label}
-            </SubmitButton>
-          </ActionForm>
-        ) : null}
-        {(order.status === "ready" ? [] : [5, 10]).map((m) => (
-          <ActionForm key={m} action={adjustPromisedTimeAction} orderId={order.id}>
-            <input type="hidden" name="minutes" value={m} />
-            <SubmitButton
-              size="sm"
-              variant="ghost"
-              className="tabular-nums text-muted-foreground"
-              aria-label={`Push promised time ${m} minutes`}
-              data-testid={`plus${m}-${order.orderNumber}`}
-            >
-              +{m}
-            </SubmitButton>
-          </ActionForm>
-        ))}
+        <AdvanceButton
+          orderId={order.id}
+          status={order.status}
+          size="sm"
+          testId={`advance-${order.orderNumber}`}
+        />
+        <EtaButtons
+          orderId={order.id}
+          orderNumber={order.orderNumber}
+          status={order.status}
+          minutes={[5, 10]}
+        />
         <span className="flex-1" />
-        {canTransition(order.status, "canceled") ? (
-          <CancelOrderDialog orderId={order.id} orderNumber={order.orderNumber} />
-        ) : null}
+        <CancelOrderDialog
+          orderId={order.id}
+          orderNumber={order.orderNumber}
+          status={order.status}
+          size="sm"
+        />
       </div>
     </Card>
   );

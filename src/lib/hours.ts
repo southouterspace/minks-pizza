@@ -21,6 +21,11 @@ export const STORE_TIMEZONES = [
   { value: "Pacific/Honolulu", label: "Hawaii" },
 ] as const;
 
+/** "6:45 PM" on the store's clock. */
+export function formatClock(d: Date, timeZone: string): string {
+  return d.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit", timeZone });
+}
+
 export function formatTime(hhmm: string): string {
   const [h, m] = hhmm.split(":").map(Number);
   const suffix = h >= 12 ? "PM" : "AM";

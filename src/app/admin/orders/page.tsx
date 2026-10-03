@@ -4,7 +4,7 @@ import { Download, SearchX } from "lucide-react";
 import { requireOperator } from "@/lib/auth";
 import { formatCents } from "@/lib/money";
 import { ORDER_STATUSES, STATUS_META } from "@/lib/order-workflow";
-import { PAGE_SIZE, parseOrderFilters, searchOrders, type OrderFilters } from "@/lib/orders-admin";
+import { filterQuery, PAGE_SIZE, parseOrderFilters, searchOrders } from "@/lib/order-queries";
 import { cn } from "@/lib/utils";
 import { PaymentBadge, StatusBadge } from "@/components/admin/order-status";
 import { formatDateTime } from "@/components/admin/ui";
@@ -32,26 +32,13 @@ export const dynamic = "force-dynamic";
 
 export const metadata: Metadata = { title: "Order history" };
 
-/** The filters as a query string, so links and the CSV export share the URL state. */
-function filterQuery(f: OrderFilters, page?: number): string {
-  const params = new URLSearchParams();
-  if (f.q) params.set("q", f.q);
-  if (f.status) params.set("status", f.status);
-  if (f.type) params.set("type", f.type);
-  if (f.from) params.set("from", f.from);
-  if (f.to) params.set("to", f.to);
-  if (page && page > 1) params.set("page", String(page));
-  const s = params.toString();
-  return s ? `?${s}` : "";
-}
-
 export default async function OrderHistoryPage({ searchParams }: PageProps<"/admin/orders">) {
   await requireOperator();
   const filters = parseOrderFilters(await searchParams);
   const { rows, total, page, pageCount, timezone } = await searchOrders(filters);
   const first = total === 0 ? 0 : (page - 1) * PAGE_SIZE + 1;
   const last = Math.min(page * PAGE_SIZE, total);
-  const filtered = Boolean(filters.q || filters.status || filters.type || filters.from || filters.to);
+  const filtered = filterQuery(filters) !== "";
 
   return (
     <div data-wide>

@@ -5,11 +5,15 @@
 import assert from "node:assert/strict";
 import {
   canTransition,
+  describeEvent,
+  isActive,
+  isCooking,
   isLate,
   minutesUntil,
   ORDER_STATUSES,
   statusTimestamps,
   TRANSITIONS,
+  type OrderStatus,
 } from "../src/lib/order-workflow";
 
 let passed = 0;
@@ -88,6 +92,24 @@ test("statusTimestamps per destination", () => {
   assert.deepEqual(statusTimestamps("canceled", now), {
     canceledAt: at("2026-10-03T23:30:00.000Z"),
   });
+});
+
+test("active and cooking statuses", () => {
+  assert.deepEqual(ORDER_STATUSES.filter(isActive), ["new", "confirmed", "preparing", "ready"]);
+  assert.deepEqual(ORDER_STATUSES.filter(isCooking), ["new", "confirmed", "preparing"]);
+});
+
+test("describeEvent headlines", () => {
+  const status = (fromStatus: OrderStatus | null, toStatus: OrderStatus | null) =>
+    describeEvent({ type: "status_changed", fromStatus, toStatus });
+  assert.equal(describeEvent({ type: "placed", fromStatus: null, toStatus: "new" }), "Order placed");
+  assert.equal(status("new", "confirmed"), "Confirmed");
+  assert.equal(status("preparing", "canceled"), "Canceled");
+  assert.equal(status("ready", "preparing"), "Recalled to the kitchen");
+  assert.equal(status("completed", "preparing"), "Recalled to the kitchen");
+  assert.equal(status("confirmed", "preparing"), "Preparing");
+  assert.equal(status(null, null), "Status changed");
+  assert.equal(describeEvent({ type: "eta_changed", fromStatus: null, toStatus: null }), "Promised time pushed");
 });
 
 console.log(`\n${passed} passed`);
