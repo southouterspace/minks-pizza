@@ -15,6 +15,7 @@ import {
 } from "@/components/ui/empty";
 import { Separator } from "@/components/ui/separator";
 import { cn } from "@/lib/utils";
+import { describeChoice } from "@/lib/toppings";
 
 export function CartView() {
   const { lines, subtotalCents, updateQuantity, removeLine, ready } = useCart();
@@ -69,8 +70,8 @@ export function CartView() {
                   {line.modifiers
                     .map((m) =>
                       m.priceDeltaCents
-                        ? `${m.modifierName} (+${formatCents(m.priceDeltaCents)})`
-                        : m.modifierName,
+                        ? `${describeChoice(m.modifierName, m)} (+${formatCents(m.priceDeltaCents)})`
+                        : describeChoice(m.modifierName, m),
                     )
                     .join(" · ")}
                 </p>

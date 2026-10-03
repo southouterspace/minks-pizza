@@ -28,6 +28,7 @@ import { Label } from "@/components/ui/label";
 import { Separator } from "@/components/ui/separator";
 import { Textarea } from "@/components/ui/textarea";
 import { cn } from "@/lib/utils";
+import { describeChoice } from "@/lib/toppings";
 
 export type CheckoutConfig = {
   storeName: string;
@@ -387,8 +388,8 @@ export function CheckoutForm({ config }: { config: CheckoutConfig }) {
                     </span>{" "}
                     {line.itemName}
                     {line.modifiers.length > 0 ? (
-                      <span className="block truncate text-xs text-muted-foreground">
-                        {line.modifiers.map((m) => m.modifierName).join(", ")}
+                      <span className="block text-xs text-muted-foreground">
+                        {line.modifiers.map((m) => describeChoice(m.modifierName, m)).join(", ")}
                       </span>
                     ) : null}
                   </span>

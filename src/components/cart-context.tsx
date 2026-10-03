@@ -8,7 +8,8 @@ import {
   useMemo,
   useState,
 } from "react";
-import type { Placement, Portion } from "@/lib/toppings";
+import { z } from "zod";
+import { DEFAULT_CHOICE, PLACEMENTS, PORTIONS, type Placement, type Portion } from "@/lib/toppings";
 
 export type CartModifier = {
   id: number;
@@ -21,7 +22,7 @@ export type CartModifier = {
 };
 
 export type CartLine = {
-  /** Stable key: item + sorted modifier ids + notes. Same config merges. */
+  /** Stable key: item + sorted modifier choices + notes. Same config merges. */
   key: string;
   itemId: number;
   itemName: string;
@@ -49,8 +50,48 @@ const CartContext = createContext<CartContextValue | null>(null);
 const STORAGE_KEY = "minks-cart-v1";
 
 function lineKey(line: Omit<CartLine, "key">): string {
-  const mods = [...line.modifiers.map((m) => m.id)].sort((a, b) => a - b);
+  const mods = [...line.modifiers]
+    .sort((a, b) => a.id - b.id)
+    .map((m) => {
+      const placement = m.placement ?? DEFAULT_CHOICE.placement;
+      const portion = m.portion ?? DEFAULT_CHOICE.portion;
+      return placement === DEFAULT_CHOICE.placement && portion === DEFAULT_CHOICE.portion
+        ? `${m.id}`
+        : `${m.id}/${placement}/${portion}`;
+    });
   return `${line.itemId}:${mods.join(",")}:${line.notes ?? ""}`;
+}
+
+const storedLineSchema = z.object({
+  itemId: z.number().int().positive(),
+  itemName: z.string(),
+  unitPriceCents: z.number().int(),
+  quantity: z.number().int().min(1),
+  modifiers: z.array(
+    z.object({
+      id: z.number().int().positive(),
+      groupName: z.string(),
+      modifierName: z.string(),
+      priceDeltaCents: z.number().int(),
+      placement: z.enum(PLACEMENTS).optional(),
+      portion: z.enum(PORTIONS).optional(),
+    }),
+  ),
+  notes: z.string().optional(),
+});
+
+/**
+ * Reads a saved cart, including ones saved before toppings had halves and
+ * portions (their modifiers lack both, which means whole and regular). Keys
+ * are recomputed so old lines merge with new ones; unreadable lines drop.
+ */
+function parseStoredCart(raw: string): CartLine[] {
+  const parsed: unknown = JSON.parse(raw);
+  if (!Array.isArray(parsed)) return [];
+  return parsed.flatMap((entry) => {
+    const line = storedLineSchema.safeParse(entry);
+    return line.success ? [{ ...line.data, key: lineKey(line.data) }] : [];
+  });
 }
 
 export function CartProvider({ children }: { children: React.ReactNode }) {
@@ -63,11 +104,8 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     try {
       const raw = localStorage.getItem(STORAGE_KEY);
-      if (raw) {
-        const parsed = JSON.parse(raw);
-        // eslint-disable-next-line react-hooks/set-state-in-effect -- hydration read
-        if (Array.isArray(parsed)) setLines(parsed);
-      }
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- hydration read
+      if (raw) setLines(parseStoredCart(raw));
     } catch {
       // corrupted cart — start fresh
     }
