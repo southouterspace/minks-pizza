@@ -14,7 +14,6 @@ export function chargeRows(t: Charges): { label: string; amount: string }[] {
   return rows;
 }
 
-/** `chargeRows` as `<dt>`/`<dd>` pairs for a two-column `<dl>`. */
 export function ChargeRows({ totals }: { totals: Charges }) {
   return chargeRows(totals).map((r) => (
     <Fragment key={r.label}>

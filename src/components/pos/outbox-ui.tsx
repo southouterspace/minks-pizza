@@ -10,7 +10,6 @@ import { cn } from "@/lib/utils";
 import { notify } from "./notify";
 import { shortId } from "./print";
 
-/** The outbox as React state, and a drain that announces what got through. */
 export function useOutboxQueue(): { queue: outbox.OutboxEntry[]; drain: () => Promise<void> } {
   const [queue, setQueue] = useState<outbox.OutboxEntry[]>([]);
 
