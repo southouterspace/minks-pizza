@@ -166,11 +166,14 @@ type StockRow = {
   out_at_milli: number | null;
   is_active: boolean;
   on_hand: string;
+  tracked: boolean;
   has_row: boolean;
 };
 
 /**
- * Brings `stock_outs` in line with on-hand quantities. An ingredient that
+ * Brings `stock_outs` in line with on-hand quantities. Only an ingredient
+ * that has been received or counted is judged: before that its on hand is
+ * just minus its sales, and a threshold would 86 the menu on day one. One that
  * just crossed its threshold 86's every available item and modifier whose
  * recipe uses it and remembers which; one that came back turns exactly those
  * back on unless another stock-out still lists them. An operator who turns
@@ -183,6 +186,7 @@ export async function syncStockOuts(
   const { rows } = await db.execute<StockRow>(sql`
     select i.id, i.name, i.out_at_milli, i.is_active,
       coalesce(sum(m.qty_milli), 0)::text as on_hand,
+      coalesce(bool_or(m.kind in ('receive', 'count')), false) as tracked,
       (s.ingredient_id is not null) as has_row
     from ${ingredients} i
     left join ${inventoryMoves} m on m.ingredient_id = i.id
@@ -196,7 +200,10 @@ export async function syncStockOuts(
   const restored: number[] = [];
   for (const row of rows) {
     const out =
-      row.is_active && row.out_at_milli !== null && Number(row.on_hand) <= row.out_at_milli;
+      row.is_active &&
+      row.tracked &&
+      row.out_at_milli !== null &&
+      Number(row.on_hand) <= row.out_at_milli;
     if (out && !row.has_row) {
       const { rows: added } = await markOut(row, trigger);
       if (added.length) wentOut.push(row.id);

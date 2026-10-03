@@ -302,6 +302,23 @@ async function main() {
         { kind: "receive", qty: 200_000, cost: 1213, vendor: "Test Foods" },
       ]);
     });
+
+    await test("a never-counted ingredient below its threshold 86's nothing until it is counted", async () => {
+      const [basil] = await db
+        .insert(ingredients)
+        .values({ name: `${tag} Basil`, baseUnit: "g", unitCostMillicents: 3000, outAtMilli: 0 })
+        .returning({ id: ingredients.id });
+      created.push(basil);
+      await db.insert(recipeLines).values({ menuItemId: cheesePizza.id, ingredientId: basil.id, qtyMilli: 5000 });
+      await recordMoves([{ ingredientId: basil.id, kind: "sale", qtyMilli: -5000 }]);
+      assert.deepEqual(await db.select().from(stockOuts).where(eq(stockOuts.ingredientId, basil.id)), []);
+      assert.equal(await available(menuItems, cheesePizza.id), true);
+
+      await recordMoves([{ ingredientId: basil.id, kind: "count", qtyMilli: 5000 }]);
+      const [out] = await db.select().from(stockOuts).where(eq(stockOuts.ingredientId, basil.id));
+      assert.deepEqual(out.menuItemIds, [cheesePizza.id]);
+      assert.equal(await available(menuItems, cheesePizza.id), false);
+    });
   } finally {
     const ids = created.map((r) => r.id);
     if (createdOrders.length) await db.delete(orders).where(inArray(orders.id, createdOrders));
