@@ -233,7 +233,9 @@ customer complaints it answers are in `docs/loyalty-complaints.md`.
   shown on screen.
 - **Bonuses.** Welcome bonus on the first completed order of $15+, a
   birthday bonus, referral bonuses for both sides, and promotions such as
-  double points on Tuesdays.
+  double points on Tuesdays. Welcome and referral bonuses post with the
+  completion that earns them. A referrer already paid for 10 friends in the
+  last year gets nothing for the next one, then or later.
 - **Trust rules.** A raised reward price keeps the old price for 60 days.
   Points expire only after 12 months with no completed order, and the
   rewards page shows the date. Balances never go below zero. Signing in

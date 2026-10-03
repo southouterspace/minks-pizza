@@ -5,7 +5,7 @@
  * that caused it. Not server-only: the order pipeline and scripts import it.
  */
 import { randomInt, randomUUID } from "node:crypto";
-import { and, asc, count, desc, eq, gte, inArray, isNull, max, sql, sum, type SQL } from "drizzle-orm";
+import { and, asc, count, desc, eq, gte, inArray, isNull, sql, sum, type AnyColumn, type SQL } from "drizzle-orm";
 import {
   categories,
   db,
@@ -46,14 +46,18 @@ export type LoyaltyReward = Omit<typeof loyaltyRewards.$inferSelect, "effect"> &
 
 export const INSUFFICIENT_POINTS = "You don't have enough points for that reward anymore.";
 
+/** Member-scoped keys built in SQL, for statements that find the member there. */
+const memberKey = (prefix: string, memberId: SQL) => sql`${prefix} || ${memberId}::text`;
+
+/** Idempotency keys: they only deduplicate, so nothing should query them. */
 export const ledgerKey = {
   earn: (orderId: string) => `earn:order:${orderId}`,
   redeem: (orderId: string) => `redeem:order:${orderId}`,
   redeemRefund: (orderId: string) => `redeem_refund:order:${orderId}`,
-  signup: (memberId: number) => `signup:${memberId}`,
+  signup: (memberId: SQL) => memberKey("signup:", memberId),
   birthday: (memberId: number, year: number) => `birthday:${memberId}:${year}`,
-  referrer: (refereeId: number) => `referral:referrer:${refereeId}`,
-  referee: (refereeId: number) => `referral:referee:${refereeId}`,
+  referrer: (refereeId: SQL) => memberKey("referral:referrer:", refereeId),
+  referee: (refereeId: SQL) => memberKey("referral:referee:", refereeId),
   expire: (memberId: number, lastActivityAt: Date) =>
     `expire:${memberId}:${lastActivityAt.getTime()}`,
   adjust: () => `adjust:${randomUUID()}`,
@@ -70,7 +74,7 @@ type EntrySource = { memberId: number; points: number } | SQL;
 
 export type LedgerEntry = {
   kind: LedgerKind;
-  idemKey: string;
+  idemKey: string | SQL;
   from: EntrySource;
   orderId?: string | null;
   note?: string | null;
@@ -309,42 +313,58 @@ export async function memberStatus(member: LoyaltyMember, settings: LoyaltySetti
 // Lifecycle statements
 // ---------------------------------------------------------------------------
 
-const completedOrderOf = (memberId: number, extra: SQL = sql`true`) => sql`
-  exists (select 1 from orders o
-          where o.loyalty_member_id = ${memberId} and o.status = 'completed' and ${extra})`;
+// Orders completed before completed_at existed carry only updated_at.
+const completedAt = sql`coalesce(o.completed_at, o.updated_at)`;
+
+/** A loyalty setting read inside the statement, so callers needn't load them. */
+const setting = (column: AnyColumn) =>
+  sql`(select ${column} from ${loyaltySettings} where ${loyaltySettings.id} = 1)`;
 
 /**
- * Bonuses that wait for a member's first completed order: the welcome bonus
- * (on an order of at least $15 net) and both sides of a referral. Safe to
- * include anywhere; each pays once per member.
+ * Batch with the move that completes an order: post the points promised at
+ * checkout, restart the member's expiry clock, and settle the bonuses that
+ * wait for a first completed order (the welcome bonus on $15+ net, both
+ * sides of a referral). Each statement re-checks in SQL that the order is
+ * completed, and each bonus pays once per member.
  */
-function settlementStatements(memberId: number, settings: LoyaltySettings) {
+export function completionStatements(orderId: string) {
+  const member = sql`(select o.loyalty_member_id from orders o where o.id = ${orderId} and o.status = 'completed')`;
+  const firstOrderDone = (extra: SQL = sql`true`) => sql`
+    exists (select 1 from orders o
+            where o.loyalty_member_id = ${member} and o.status = 'completed' and ${extra})`;
   return [
     ledgerStatement({
+      kind: "earn",
+      idemKey: ledgerKey.earn(orderId),
+      orderId,
+      from: sql`select o.loyalty_member_id as member_id, o.loyalty_points_earned as points
+                from orders o where o.id = ${orderId} and o.status = 'completed'`,
+    }),
+    db.execute(sql`
+      update loyalty_members m set last_activity_at = greatest(m.last_activity_at, ${completedAt})
+      from orders o
+      where o.id = ${orderId} and o.status = 'completed' and m.id = o.loyalty_member_id`),
+    ledgerStatement({
       kind: "signup_bonus",
-      idemKey: ledgerKey.signup(memberId),
-      from: sql`select ${memberId}::int as member_id, ${settings.signupBonus}::int as points
-                where ${completedOrderOf(
-                  memberId,
-                  sql`o.subtotal_cents - o.discount_cents >= ${SIGNUP_MIN_NET_CENTS}`,
-                )}`,
+      idemKey: ledgerKey.signup(member),
+      from: sql`select ${member} as member_id, ${setting(loyaltySettings.signupBonus)} as points
+                where ${firstOrderDone(sql`o.subtotal_cents - o.discount_cents >= ${SIGNUP_MIN_NET_CENTS}`)}`,
     }),
     ledgerStatement({
       kind: "referee_bonus",
-      idemKey: ledgerKey.referee(memberId),
-      from: sql`select m.id as member_id, ${settings.refereeBonus}::int as points
+      idemKey: ledgerKey.referee(member),
+      from: sql`select m.id as member_id, ${setting(loyaltySettings.refereeBonus)} as points
                 from loyalty_members m
-                where m.id = ${memberId} and m.referred_by_id is not null
-                  and ${completedOrderOf(memberId)}`,
+                where m.id = ${member} and m.referred_by_id is not null`,
     }),
+    // A referrer already at the yearly cap gets nothing for this friend, now or later.
     ledgerStatement({
       kind: "referrer_bonus",
-      idemKey: ledgerKey.referrer(memberId),
+      idemKey: ledgerKey.referrer(member),
       note: "Friend's first order",
-      from: sql`select m.referred_by_id as member_id, ${settings.referrerBonus}::int as points
+      from: sql`select m.referred_by_id as member_id, ${setting(loyaltySettings.referrerBonus)} as points
                 from loyalty_members m
-                where m.id = ${memberId} and m.referred_by_id is not null
-                  and ${completedOrderOf(memberId)}
+                where m.id = ${member} and m.referred_by_id is not null
                   and (select count(*) from loyalty_ledger l
                        where l.member_id = m.referred_by_id
                          and l.kind = 'referrer_bonus'
@@ -353,33 +373,7 @@ function settlementStatements(memberId: number, settings: LoyaltySettings) {
   ];
 }
 
-/**
- * Batch these after the statement that completes an order: post the points
- * promised at checkout, restart the member's expiry clock, and settle any
- * first-order bonuses. Each statement re-checks that the order is completed.
- */
-export function completionStatements(
-  order: { id: string; loyaltyMemberId: number | null },
-  settings: LoyaltySettings,
-) {
-  if (order.loyaltyMemberId === null) return [];
-  return [
-    ledgerStatement({
-      kind: "earn",
-      idemKey: ledgerKey.earn(order.id),
-      orderId: order.id,
-      from: sql`select o.loyalty_member_id as member_id, o.loyalty_points_earned as points
-                from orders o where o.id = ${order.id} and o.status = 'completed'`,
-    }),
-    db.execute(sql`
-      update loyalty_members m set last_activity_at = greatest(m.last_activity_at, o.updated_at)
-      from orders o
-      where o.id = ${order.id} and o.status = 'completed' and m.id = o.loyalty_member_id`),
-    ...settlementStatements(order.loyaltyMemberId, settings),
-  ];
-}
-
-/** Batch after canceling an order: gives back points spent on its reward. */
+/** Batch with the move that cancels an order: gives back points spent on its reward. */
 export function cancellationStatements(orderId: string) {
   return [
     ledgerStatement({
@@ -388,38 +382,39 @@ export function cancellationStatements(orderId: string) {
       orderId,
       from: sql`select l.member_id, -l.points as points
                 from loyalty_ledger l
-                where l.idem_key = ${ledgerKey.redeem(orderId)}
+                where l.order_id = ${orderId} and l.kind = 'redeem'
                   and exists (select 1 from orders o where o.id = ${orderId} and o.status = 'canceled')`,
     }),
   ];
 }
 
 /**
- * Lazy grants for a member: expiry, birthday and first-order settlement.
- * Every one is idempotent, so this runs on every sign-in and page load.
+ * Grants that come due with time alone: expiry and the birthday bonus.
+ * Idempotent, so it runs on sign-in and page loads. Returns the member as
+ * it stands afterwards, or null when there is no such member.
  */
-export async function refreshMember(memberId: number, now = new Date()): Promise<void> {
+export async function refreshMember(memberId: number, now = new Date()): Promise<LoyaltyMember | null> {
   const [member, settings, [last]] = await Promise.all([
     getMember(memberId),
     getLoyaltySettings(),
     db
-      .select({ at: max(orders.updatedAt) })
-      .from(orders)
-      .where(and(eq(orders.loyaltyMemberId, memberId), eq(orders.status, "completed"))),
+      .select({ at: sql<Date | null>`max(${completedAt})`.mapWith((v) => new Date(v)) })
+      .from(sql`${orders} o`)
+      .where(sql`o.loyalty_member_id = ${memberId} and o.status = 'completed'`),
   ]);
-  if (!member) return;
+  if (!member) return null;
 
-  const statements = settlementStatements(memberId, settings);
+  const statements = [];
   if (expiryDue(member, now, settings.expirationMonths)) {
-    // Only if nothing has happened since we looked; the key pins that moment.
     statements.push(
       ledgerStatement({
         kind: "expire",
         idemKey: ledgerKey.expire(memberId, member.lastActivityAt),
+        // Re-checked here, so an order completed since we looked wins.
         from: sql`select id as member_id, -points_balance as points
                   from loyalty_members
                   where id = ${memberId} and points_balance > 0
-                    and date_trunc('milliseconds', last_activity_at) = ${member.lastActivityAt.toISOString()}::timestamptz`,
+                    and last_activity_at + make_interval(months => ${settings.expirationMonths}) <= now()`,
       }),
     );
   }
@@ -433,7 +428,9 @@ export async function refreshMember(memberId: number, now = new Date()): Promise
     );
   }
   const [first, ...rest] = statements;
+  if (!first) return member;
   await db.batch([first, ...rest]);
+  return getMember(memberId);
 }
 
 // ---------------------------------------------------------------------------
@@ -453,21 +450,23 @@ async function claimOrders(memberId: number, where: SQL): Promise<number> {
   const { rows } = await db.execute<{ id: string; net: number }>(sql`
     select id, subtotal_cents - discount_cents as net from orders
     where status = 'completed' and loyalty_member_id is null and ${where}`);
-  for (const order of rows) {
-    const points = earnPoints({
-      netCents: order.net,
-      pointsPerDollar: settings.pointsPerDollar,
-      tierMultiplierBps: 10_000,
-      promoMultiplierBps: 10_000,
-    });
-    await db.batch([
-      db
-        .update(orders)
-        .set({ loyaltyMemberId: memberId, loyaltyPointsEarned: points })
-        .where(and(eq(orders.id, order.id), isNull(orders.loyaltyMemberId))),
-      ...completionStatements({ id: order.id, loyaltyMemberId: memberId }, settings),
-    ]);
-  }
+  const statements = rows.flatMap((order) => [
+    db
+      .update(orders)
+      .set({
+        loyaltyMemberId: memberId,
+        loyaltyPointsEarned: earnPoints({
+          netCents: order.net,
+          pointsPerDollar: settings.pointsPerDollar,
+          tierMultiplierBps: 10_000,
+          promoMultiplierBps: 10_000,
+        }),
+      })
+      .where(and(eq(orders.id, order.id), isNull(orders.loyaltyMemberId))),
+    ...completionStatements(order.id),
+  ]);
+  const [first, ...rest] = statements;
+  if (first) await db.batch([first, ...rest]);
   return rows.length;
 }
 

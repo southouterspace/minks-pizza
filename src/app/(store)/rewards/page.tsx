@@ -21,7 +21,6 @@ import {
   birthdayBonusThisYear,
   currentPromotion,
   getLoyaltySettings,
-  getMember,
   listRewards,
   memberLedger,
   memberOrders,
@@ -236,8 +235,7 @@ async function MemberView({
   loyalty: LoyaltySettings;
   rewards: LoyaltyReward[];
 }) {
-  await refreshMember(signedIn.id);
-  const member = (await getMember(signedIn.id)) ?? signedIn;
+  const member = (await refreshMember(signedIn.id)) ?? signedIn;
   const [status, ledger, recentOrders, birthdayArrived] = await Promise.all([
     memberStatus(member, loyalty),
     memberLedger(member.id),

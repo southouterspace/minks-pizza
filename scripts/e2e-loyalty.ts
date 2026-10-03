@@ -28,7 +28,8 @@ import {
   orders,
 } from "../src/db";
 import { localDate } from "../src/lib/loyalty";
-import { INSUFFICIENT_POINTS, cancellationStatements, refreshMember } from "../src/lib/loyalty-server";
+import { INSUFFICIENT_POINTS, refreshMember } from "../src/lib/loyalty-server";
+import { transitionOrder } from "../src/lib/order-writes";
 import { createOrder, OrderError } from "../src/lib/orders";
 
 const BASE = process.env.E2E_BASE_URL ?? "http://localhost:3000";
@@ -91,6 +92,16 @@ async function resetLoyalty() {
     .insert(operators)
     .values({ email: EMAIL, name: "Loyalty E2E", passwordHash: await bcrypt.hash(PASSWORD, 4) })
     .onConflictDoNothing({ target: operators.email });
+}
+
+async function cancel(orderId: string) {
+  const result = await transitionOrder({
+    orderId,
+    to: "canceled",
+    actor: { name: "Loyalty E2E", operatorId: null },
+    cancelReason: "Customer request",
+  });
+  if (!result.ok) throw new Error(`cancel ${orderId}: ${result.reason}`);
 }
 
 async function menu() {
@@ -397,10 +408,7 @@ async function main() {
   check("loser sees the friendly message", lost === 1);
   check("399 − 300 leaves 99, never negative", (await member(RITA.digits)).pointsBalance === 99);
   const raceWinner = race.find((r) => r.status === "fulfilled") as PromiseFulfilledResult<{ id: string }>;
-  await db.batch([
-    db.update(orders).set({ status: "canceled" }).where(eq(orders.id, raceWinner.value.id)),
-    ...cancellationStatements(raceWinner.value.id),
-  ]);
+  await cancel(raceWinner.value.id);
   check("canceling the winner refunds it", (await member(RITA.digits)).pointsBalance === 399);
 
   // --- Referral -------------------------------------------------------------
@@ -557,10 +565,7 @@ async function main() {
     { orderType: "pickup", customerName: CARA.name, customerPhone: CARA.phone, tipCents: 0, lines: orderLines },
     { memberId: caraMember.id },
   );
-  await db.batch([
-    db.update(orders).set({ status: "canceled" }).where(eq(orders.id, caraCanceled.id)),
-    ...cancellationStatements(caraCanceled.id),
-  ]);
+  await cancel(caraCanceled.id);
   await cara.reload({ waitUntil: "networkidle" });
   check(
     "an open order shows as Pending",
@@ -632,10 +637,7 @@ async function main() {
   );
   const protectedOrder = await createOrder(racer, { memberId: ritaMember.id });
   check("redeeming during protection costs the old 300", protectedOrder.loyaltyPointsRedeemed === 300);
-  await db.batch([
-    db.update(orders).set({ status: "canceled" }).where(eq(orders.id, protectedOrder.id)),
-    ...cancellationStatements(protectedOrder.id),
-  ]);
+  await cancel(protectedOrder.id);
   await op.goto(`${BASE}/admin/loyalty/rewards`, { waitUntil: "networkidle" });
   await threeOffForm.getByLabel("Points").fill("250");
   check("a cut is applied right away", (await threeOffForm.getByTestId("price-note").textContent()) === "Lower prices apply right away.");

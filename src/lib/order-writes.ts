@@ -1,11 +1,8 @@
-import "server-only";
+// Not server-only: the order e2e and the loyalty tests transition orders the way the app does.
 import { and, eq, inArray, sql, type SQL } from "drizzle-orm";
 import { db, orderEvents, orders } from "@/db";
-import {
-  cancellationStatements,
-  completionStatements,
-  getLoyaltySettings,
-} from "@/lib/loyalty-server";
+import type { BatchItem } from "drizzle-orm/batch";
+import { cancellationStatements, completionStatements } from "@/lib/loyalty-server";
 import {
   canTransition,
   COOKING_STATUSES,
@@ -67,11 +64,21 @@ function loggedUpdate(args: {
 }
 
 /**
- * A logged status move from any of `from` into `to`, stamping the columns
- * `statusTimestamps` names. `when` adds a condition (the KDS uses it to move
- * only when the items say so). Usable inside a `db.batch`.
+ * What entering a status sets off besides the move. Each statement re-checks
+ * the status in SQL, so it does nothing when the move's guard didn't match.
  */
-export function transitionStatement(args: {
+const ON_ENTER: Partial<Record<OrderStatus, (orderId: string) => BatchItem<"pg">[]>> = {
+  completed: completionStatements,
+  canceled: cancellationStatements,
+};
+
+/**
+ * A logged status move from any of `from` into `to`, stamping the columns
+ * `statusTimestamps` names, followed by what entering `to` sets off. `when`
+ * adds a condition (the KDS uses it to move only when the items say so).
+ * Spread into a `db.batch`; the first result is the move's logged rows.
+ */
+export function transitionStatements(args: {
   orderId: string;
   from: readonly OrderStatus[];
   to: OrderStatus;
@@ -88,7 +95,7 @@ export function transitionStatement(args: {
     assignments.push(sql`${column} = ${stamps[key]?.toISOString() ?? null}::timestamptz`);
   }
   if (args.cancelReason) assignments.push(sql`cancel_reason = ${args.cancelReason}`);
-  return loggedUpdate({
+  const move = loggedUpdate({
     orderId: args.orderId,
     where: and(inArray(orders.status, [...args.from]), args.when)!,
     set: sql.join(assignments, sql`, `),
@@ -98,6 +105,7 @@ export function transitionStatement(args: {
     actor: args.actor,
     now: args.now,
   });
+  return [move, ...(ON_ENTER[args.to]?.(args.orderId) ?? [])] as const;
 }
 
 export async function transitionOrder(args: {
@@ -108,7 +116,7 @@ export async function transitionOrder(args: {
   cancelReason?: string | null;
 }): Promise<OrderActionResult> {
   const [order] = await db
-    .select({ id: orders.id, status: orders.status, loyaltyMemberId: orders.loyaltyMemberId })
+    .select({ status: orders.status })
     .from(orders)
     .where(eq(orders.id, args.orderId));
   if (!order) return { ok: false, reason: "Order not found." };
@@ -121,11 +129,7 @@ export async function transitionOrder(args: {
   if (args.to === "canceled" && !args.cancelReason) {
     return { ok: false, reason: "Pick a reason for canceling." };
   }
-  const [{ rows }] = await db.batch([
-    transitionStatement({ ...args, from: [order.status], now: new Date() }),
-    ...(args.to === "completed" ? completionStatements(order, await getLoyaltySettings()) : []),
-    ...(args.to === "canceled" ? cancellationStatements(order.id) : []),
-  ]);
+  const [{ rows }] = await db.batch(transitionStatements({ ...args, from: [order.status], now: new Date() }));
   return rows.length > 0 ? { ok: true } : { ok: false, reason: STALE };
 }
 

@@ -1,7 +1,7 @@
 import type { Metadata } from "next";
 import { getSettings } from "@/lib/orders";
 import { formatPhone } from "@/lib/loyalty";
-import { getLoyaltySettings, getMember, refreshMember } from "@/lib/loyalty-server";
+import { getLoyaltySettings, refreshMember } from "@/lib/loyalty-server";
 import { getCurrentMember } from "@/lib/member-auth";
 import { ComingSoon } from "@/components/store/coming-soon";
 import { CheckoutForm } from "@/components/store/checkout-form";
@@ -15,8 +15,7 @@ export default async function CheckoutPage() {
     getLoyaltySettings(),
     getCurrentMember(),
   ]);
-  if (signedIn) await refreshMember(signedIn.id);
-  const member = signedIn ? await getMember(signedIn.id) : null;
+  const member = signedIn && (await refreshMember(signedIn.id));
 
   if (!settings.isPublished) {
     return (
