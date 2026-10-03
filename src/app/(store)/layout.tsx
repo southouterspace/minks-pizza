@@ -4,9 +4,15 @@ import { StoreMark } from "@/components/store-mark";
 import { CartBadge } from "@/components/store/cart-badge";
 import { Separator } from "@/components/ui/separator";
 import { getSettings } from "@/lib/orders";
+import { getCurrentMember } from "@/lib/member-auth";
+import { getLoyaltySettings } from "@/lib/loyalty-server";
 
 export default async function StoreLayout({ children }: LayoutProps<"/">) {
-  const settings = await getSettings();
+  const [settings, loyalty, member] = await Promise.all([
+    getSettings(),
+    getLoyaltySettings(),
+    getCurrentMember(),
+  ]);
 
   return (
     <CartProvider>
@@ -31,6 +37,22 @@ export default async function StoreLayout({ children }: LayoutProps<"/">) {
             >
               Menu
             </Link>
+            {loyalty.enabled ? (
+              <Link
+                href="/rewards"
+                className="flex items-center gap-1.5 rounded-md px-3 py-2 text-sm text-muted-foreground transition-colors hover:text-foreground"
+              >
+                Rewards
+                {member ? (
+                  <span
+                    data-testid="header-points"
+                    className="rounded-full bg-muted px-2 py-0.5 text-xs font-medium tabular-nums text-foreground"
+                  >
+                    {member.pointsBalance.toLocaleString()}
+                  </span>
+                ) : null}
+              </Link>
+            ) : null}
             <CartBadge />
           </nav>
         </div>

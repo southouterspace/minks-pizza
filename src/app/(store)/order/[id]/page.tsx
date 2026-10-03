@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { eq } from "drizzle-orm";
+import { Gift } from "lucide-react";
 import { db, orderItems, orders } from "@/db";
 import { formatCents } from "@/lib/money";
 import { getSettings } from "@/lib/orders";
@@ -98,6 +99,21 @@ export default async function OrderPage({
         </ol>
       ) : null}
 
+      {order.loyaltyMemberId !== null && order.loyaltyPointsEarned > 0 && order.status !== "canceled" ? (
+        <p
+          data-testid="order-points"
+          className="mt-6 flex items-center gap-2 rounded-lg bg-muted px-4 py-3 text-sm"
+        >
+          <Gift className="size-4 shrink-0" aria-hidden />
+          {order.status === "completed"
+            ? `You earned ${order.loyaltyPointsEarned.toLocaleString()} points.`
+            : `You'll earn ${order.loyaltyPointsEarned.toLocaleString()} points when your order is ready.`}
+          <Link href="/rewards" className="ml-auto font-medium underline underline-offset-4">
+            Rewards
+          </Link>
+        </p>
+      ) : null}
+
       {order.orderType === "pickup" && settings.addressLine1 ? (
         <Card className="mt-6">
           <CardContent className="text-sm">
@@ -156,6 +172,17 @@ export default async function OrderPage({
               <dt className="text-muted-foreground">Subtotal</dt>
               <dd className="tabular-nums">{formatCents(order.subtotalCents)}</dd>
             </div>
+            {order.discountCents > 0 ? (
+              <div className="flex justify-between">
+                <dt className="text-muted-foreground">
+                  {order.loyaltyRewardName ?? "Reward"}
+                  {order.loyaltyPointsRedeemed > 0
+                    ? ` (${order.loyaltyPointsRedeemed.toLocaleString()} pts)`
+                    : ""}
+                </dt>
+                <dd className="tabular-nums text-success">−{formatCents(order.discountCents)}</dd>
+              </div>
+            ) : null}
             {order.taxCents > 0 ? (
               <div className="flex justify-between">
                 <dt className="text-muted-foreground">Tax</dt>

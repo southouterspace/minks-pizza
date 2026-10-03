@@ -2,11 +2,11 @@
 
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useMemo, useRef, useState, useTransition } from "react";
-import { ShoppingBag } from "lucide-react";
+import { useEffect, useMemo, useRef, useState, useTransition } from "react";
+import { Gift, ShoppingBag } from "lucide-react";
 import { useCart } from "@/components/cart-context";
 import { formatCents, taxFromBps } from "@/lib/money";
-import { placeOrder } from "@/app/(store)/actions";
+import { placeOrder, previewCheckout, type CheckoutPreview } from "@/app/(store)/actions";
 import { Button, buttonVariants } from "@/components/ui/button";
 import {
   Card,
@@ -24,7 +24,9 @@ import {
 } from "@/components/ui/empty";
 import { Field, FieldLabel } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
+import { Checkbox } from "@/components/ui/checkbox";
 import { Label } from "@/components/ui/label";
+import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { Separator } from "@/components/ui/separator";
 import { Textarea } from "@/components/ui/textarea";
 import { cn } from "@/lib/utils";
@@ -40,6 +42,10 @@ export type CheckoutConfig = {
   deliveryFeeCents: number;
   deliveryMinimumCents: number;
   taxRateBps: number;
+  loyalty: {
+    programName: string;
+    member: { name: string | null; phone: string; pointsBalance: number } | null;
+  } | null;
 };
 
 const TIP_PRESETS = [0, 10, 15, 20];
@@ -56,8 +62,12 @@ export function CheckoutForm({ config }: { config: CheckoutConfig }) {
   const [customTip, setCustomTip] = useState("");
   const [error, setError] = useState<string | null>(null);
 
-  const [name, setName] = useState("");
-  const [phone, setPhone] = useState("");
+  const member = config.loyalty?.member ?? null;
+  const [name, setName] = useState(member?.name ?? "");
+  const [phone, setPhone] = useState(member?.phone ?? "");
+  const [joinLoyalty, setJoinLoyalty] = useState(true);
+  const [rewardId, setRewardId] = useState<number | null>(null);
+  const [preview, setPreview] = useState<CheckoutPreview | null>(null);
   const [email, setEmail] = useState("");
   const [address1, setAddress1] = useState("");
   const [address2, setAddress2] = useState("");
@@ -75,10 +85,39 @@ export function CheckoutForm({ config }: { config: CheckoutConfig }) {
     return Math.round((subtotalCents * tipPercent) / 100);
   }, [tipPercent, customTip, subtotalCents]);
 
-  const taxCents = taxFromBps(subtotalCents, config.taxRateBps);
+  const cartKey = JSON.stringify(
+    lines.map((l) => [l.itemId, l.quantity, l.modifiers.map((m) => m.id)]),
+  );
+  useEffect(() => {
+    if (!ready || lines.length === 0) return;
+    let stale = false;
+    previewCheckout({
+      orderType,
+      rewardId,
+      lines: lines.map((l) => ({
+        itemId: l.itemId,
+        quantity: l.quantity,
+        modifierIds: l.modifiers.map((m) => m.id),
+      })),
+    }).then((p) => {
+      if (!stale) setPreview(p);
+    });
+    return () => {
+      stale = true;
+    };
+    // cartKey stands in for `lines`, whose identity changes every render.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [ready, cartKey, orderType, rewardId]);
+
+  // The server's numbers once they arrive; a local estimate until then.
+  const server = preview?.ok ? preview : null;
+  const discountCents = server?.discountCents ?? 0;
+  const taxCents = server?.taxCents ?? taxFromBps(subtotalCents, config.taxRateBps);
   const deliveryFeeCents =
-    orderType === "delivery" ? config.deliveryFeeCents : 0;
-  const totalCents = subtotalCents + taxCents + deliveryFeeCents + tipCents;
+    server?.deliveryFeeCents ?? (orderType === "delivery" ? config.deliveryFeeCents : 0);
+  const totalCents =
+    (server?.totalCents ?? subtotalCents + taxCents + deliveryFeeCents) + tipCents;
+  const rewardError = server?.rewardError ?? null;
 
   const belowMinimum =
     orderType === "delivery" && subtotalCents < config.deliveryMinimumCents;
@@ -131,6 +170,8 @@ export function CheckoutForm({ config }: { config: CheckoutConfig }) {
         zip,
         orderNotes,
         tipCents,
+        joinLoyalty: config.loyalty && !member ? joinLoyalty : false,
+        rewardId,
         lines: lines.map((l) => ({
           itemId: l.itemId,
           quantity: l.quantity,
@@ -295,6 +336,18 @@ export function CheckoutForm({ config }: { config: CheckoutConfig }) {
             </section>
           ) : null}
 
+          {config.loyalty ? (
+            <LoyaltyPanel
+              programName={config.loyalty.programName}
+              member={member}
+              preview={server}
+              rewardId={rewardId}
+              onRewardChange={setRewardId}
+              joinLoyalty={joinLoyalty}
+              onJoinChange={setJoinLoyalty}
+            />
+          ) : null}
+
           {/* Tip */}
           <section>
             <h2 className="text-sm font-semibold">
@@ -402,6 +455,12 @@ export function CheckoutForm({ config }: { config: CheckoutConfig }) {
                 <dt className="text-muted-foreground">Subtotal</dt>
                 <dd className="tabular-nums">{formatCents(subtotalCents)}</dd>
               </div>
+              {discountCents > 0 ? (
+                <div className="flex justify-between" data-testid="discount-line">
+                  <dt className="text-muted-foreground">Reward</dt>
+                  <dd className="tabular-nums text-success">−{formatCents(discountCents)}</dd>
+                </div>
+              ) : null}
               {taxCents > 0 ? (
                 <div className="flex justify-between">
                   <dt className="text-muted-foreground">Tax</dt>
@@ -424,8 +483,14 @@ export function CheckoutForm({ config }: { config: CheckoutConfig }) {
               ) : null}
               <div className="flex justify-between border-t border-border pt-2 text-base font-semibold">
                 <dt>Total</dt>
-                <dd className="tabular-nums">{formatCents(totalCents)}</dd>
+                <dd className="tabular-nums" data-testid="order-total">{formatCents(totalCents)}</dd>
               </div>
+              {server?.pointsEarned ? (
+                <div className="flex justify-between pt-1 text-xs text-muted-foreground" data-testid="points-to-earn">
+                  <dt>Points you&apos;ll earn{server.promoName ? ` (${server.promoName})` : ""}</dt>
+                  <dd className="tabular-nums">+{server.pointsEarned.toLocaleString()}</dd>
+                </div>
+              ) : null}
             </dl>
 
             {belowMinimum ? (
@@ -436,6 +501,9 @@ export function CheckoutForm({ config }: { config: CheckoutConfig }) {
                 to your cart.
               </p>
             ) : null}
+            {rewardError ? (
+              <p className="mt-4 text-sm text-destructive">{rewardError}</p>
+            ) : null}
             {error ? (
               <p role="alert" className="mt-4 text-sm text-destructive">
                 {error}
@@ -444,7 +512,7 @@ export function CheckoutForm({ config }: { config: CheckoutConfig }) {
 
             <Button
               type="submit"
-              disabled={pending || belowMinimum || !config.acceptingOrders}
+              disabled={pending || belowMinimum || !config.acceptingOrders || rewardError !== null}
               className="mt-5 h-11! w-full"
             >
               {pending
@@ -461,5 +529,104 @@ export function CheckoutForm({ config }: { config: CheckoutConfig }) {
         </Card>
       </form>
     </div>
+  );
+}
+
+type PreviewOk = Extract<CheckoutPreview, { ok: true }>;
+
+function LoyaltyPanel({
+  programName,
+  member,
+  preview,
+  rewardId,
+  onRewardChange,
+  joinLoyalty,
+  onJoinChange,
+}: {
+  programName: string;
+  member: { pointsBalance: number } | null;
+  preview: PreviewOk | null;
+  rewardId: number | null;
+  onRewardChange: (id: number | null) => void;
+  joinLoyalty: boolean;
+  onJoinChange: (join: boolean) => void;
+}) {
+  if (!member) {
+    return (
+      <section data-testid="loyalty-panel" className="rounded-xl border border-border p-4">
+        <h2 className="flex items-center gap-2 text-sm font-semibold">
+          <Gift className="size-4" aria-hidden />
+          {preview?.pointsEarned
+            ? `Earn ${preview.pointsEarned.toLocaleString()} points on this order`
+            : programName}
+        </h2>
+        <label className="mt-3 flex items-start gap-2.5 text-sm">
+          <Checkbox
+            checked={joinLoyalty}
+            onCheckedChange={(checked) => onJoinChange(checked === true)}
+            aria-label={`Join ${programName} with my phone number`}
+            className="mt-0.5"
+          />
+          <span>Join {programName} with my phone number</span>
+        </label>
+        <Link
+          href="/rewards?next=/checkout"
+          className="mt-3 inline-block text-sm font-medium underline underline-offset-4"
+        >
+          Sign in to use your points
+        </Link>
+      </section>
+    );
+  }
+
+  return (
+    <section data-testid="loyalty-panel">
+      <h2 className="flex items-center justify-between gap-3 text-sm font-semibold">
+        <span className="flex items-center gap-2">
+          <Gift className="size-4" aria-hidden />
+          {programName}
+        </span>
+        <span className="font-normal text-muted-foreground">
+          {member.pointsBalance.toLocaleString()} points
+        </span>
+      </h2>
+      <RadioGroup
+        value={rewardId === null ? "none" : String(rewardId)}
+        onValueChange={(v) => onRewardChange(v === "none" ? null : Number(v))}
+        className="mt-3 gap-0! divide-y divide-border rounded-xl border border-border"
+      >
+        <label className="flex cursor-pointer items-center gap-3 px-4 py-3 text-sm">
+          <RadioGroupItem value="none" aria-label="No reward" />
+          No reward this time
+        </label>
+        {(preview?.rewards ?? []).map((r) => {
+          const disabled = r.pointsShort > 0 || !r.fitsCart;
+          return (
+            <label
+              key={r.id}
+              className={cn(
+                "flex items-center gap-3 px-4 py-3 text-sm",
+                disabled ? "cursor-not-allowed text-muted-foreground" : "cursor-pointer",
+              )}
+            >
+              <RadioGroupItem value={String(r.id)} disabled={disabled} aria-label={r.name} />
+              <span className="min-w-0 flex-1">
+                <span className="block font-medium">{r.name}</span>
+                <span className="block text-xs text-muted-foreground">
+                  {r.pointsShort > 0
+                    ? `${r.pointsShort.toLocaleString()} more points`
+                    : !r.fitsCart
+                      ? `Add a qualifying item to use this${r.description ? `: ${r.description}` : ""}`
+                      : r.description}
+                </span>
+              </span>
+              <span className="shrink-0 tabular-nums text-xs text-muted-foreground">
+                {r.pointsCost.toLocaleString()} pts
+              </span>
+            </label>
+          );
+        })}
+      </RadioGroup>
+    </section>
   );
 }

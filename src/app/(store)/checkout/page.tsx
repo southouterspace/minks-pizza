@@ -1,5 +1,8 @@
 import type { Metadata } from "next";
 import { getSettings } from "@/lib/orders";
+import { formatPhone } from "@/lib/loyalty";
+import { getLoyaltySettings, getMember, refreshMember } from "@/lib/loyalty-server";
+import { getCurrentMember } from "@/lib/member-auth";
 import { ComingSoon } from "@/components/store/coming-soon";
 import { CheckoutForm } from "@/components/store/checkout-form";
 
@@ -7,7 +10,13 @@ export const metadata: Metadata = { title: "Checkout" };
 export const dynamic = "force-dynamic";
 
 export default async function CheckoutPage() {
-  const settings = await getSettings();
+  const [settings, loyalty, signedIn] = await Promise.all([
+    getSettings(),
+    getLoyaltySettings(),
+    getCurrentMember(),
+  ]);
+  if (signedIn) await refreshMember(signedIn.id);
+  const member = signedIn ? await getMember(signedIn.id) : null;
 
   if (!settings.isPublished) {
     return (
@@ -33,6 +42,18 @@ export default async function CheckoutPage() {
         deliveryFeeCents: settings.deliveryFeeCents,
         deliveryMinimumCents: settings.deliveryMinimumCents,
         taxRateBps: settings.taxRateBps,
+        loyalty: loyalty.enabled
+          ? {
+              programName: loyalty.programName,
+              member: member
+                ? {
+                    name: member.name,
+                    phone: formatPhone(member.phone),
+                    pointsBalance: member.pointsBalance,
+                  }
+                : null,
+            }
+          : null,
       }}
     />
   );
