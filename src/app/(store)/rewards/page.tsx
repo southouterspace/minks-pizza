@@ -11,6 +11,8 @@ import {
   localDate,
   orderPointsStatus,
   pointsSafeUntil,
+  PRICE_PROTECTION_DAYS,
+  rewardValueCents,
   SIGNUP_MIN_NET_CENTS,
 } from "@/lib/loyalty";
 import {
@@ -57,6 +59,37 @@ function Progress({ fraction, label }: { fraction: number; label: string }) {
     >
       <div className="h-full rounded-full bg-primary" style={{ width: `${Math.max(2, fraction * 100)}%` }} />
     </div>
+  );
+}
+
+function RewardCost({ reward }: { reward: LoyaltyReward }) {
+  const value = formatCents(rewardValueCents(reward.effect)).replace(".00", "");
+  return (
+    <span className="block text-right">
+      {reward.price.cost.toLocaleString()} pts
+      <span className="block text-xs">
+        {reward.effect.kind === "free_item" ? `up to ${value}` : value} value
+      </span>
+    </span>
+  );
+}
+
+function HowItWorks({ loyalty, className }: { loyalty: LoyaltySettings; className?: string }) {
+  return (
+    <section className={className} data-testid="how-it-works">
+      <h2 className="text-sm font-semibold">How it works</h2>
+      <ul className="mt-3 list-disc space-y-1.5 pl-5 text-sm text-muted-foreground">
+        <li>Earn {loyalty.pointsPerDollar} points for every $1 you spend.</li>
+        <li>Online orders here earn on food and drinks; tax, tip and the delivery fee don&apos;t.</li>
+        <li>
+          {loyalty.expirationMonths === null
+            ? "Points never expire."
+            : `Points expire only after ${loyalty.expirationMonths} months without an order.`}
+        </li>
+        <li>If an order is canceled, any points you spent come back automatically.</li>
+        <li>When a reward&apos;s price goes up, you keep the old price for {PRICE_PROTECTION_DAYS} days.</li>
+      </ul>
+    </section>
   );
 }
 
@@ -139,7 +172,7 @@ function PitchView({
                 ) : null}
               </span>
               <span className="shrink-0 text-sm tabular-nums text-muted-foreground">
-                {r.price.cost.toLocaleString()} pts
+                <RewardCost reward={r} />
               </span>
             </li>
           ))}
@@ -179,11 +212,7 @@ function PitchView({
             </li>
           ) : null}
         </ul>
-        {loyalty.expirationMonths !== null ? (
-          <p className="mt-6 text-xs text-muted-foreground">
-            Points expire after {loyalty.expirationMonths} months without an order.
-          </p>
-        ) : null}
+        <HowItWorks loyalty={loyalty} className="mt-10" />
       </div>
 
       <Card className="h-fit">
@@ -242,18 +271,19 @@ async function MemberView({
         </form>
       </div>
 
-      <Card>
-        <CardContent className="space-y-3">
-          <div className="flex items-baseline justify-between gap-3">
-            <p className="text-sm">
-              <span className="font-semibold" data-testid="member-tier">{status.tier.name}</span>
-              <span className="text-muted-foreground"> · earning {formatMultiplier(status.tier.multiplierBps)}</span>
-            </p>
-            {status.next ? (
-              <p className="text-xs text-muted-foreground">
-                {status.pointsToNext?.toLocaleString()} points to {status.next.name}
+      {loyalty.tiers.length > 1 ? (
+        <Card>
+          <CardContent className="space-y-3">
+            <div className="flex items-baseline justify-between gap-3">
+              <p className="text-sm">
+                <span className="font-semibold" data-testid="member-tier">{status.tier.name}</span>
+                <span className="text-muted-foreground"> · earning {formatMultiplier(status.tier.multiplierBps)}</span>
               </p>
-            ) : null}
+              {status.next ? (
+                <p className="text-xs text-muted-foreground">
+                  {status.pointsToNext?.toLocaleString()} points to {status.next.name}
+                </p>
+      ) : null}
           </div>
           {status.next ? (
             <>
@@ -268,6 +298,7 @@ async function MemberView({
           )}
         </CardContent>
       </Card>
+      ) : null}
 
       <section>
         <h2 className="text-sm font-semibold">Rewards</h2>
@@ -290,7 +321,7 @@ async function MemberView({
                     ) : null}
                   </span>
                   <span className="shrink-0 text-sm tabular-nums text-muted-foreground">
-                    {cost.toLocaleString()} pts
+                    <RewardCost reward={r} />
                   </span>
                 </div>
                 <Progress fraction={Math.min(1, member.pointsBalance / cost)} label={`Progress to ${r.name}`} />
@@ -355,6 +386,8 @@ async function MemberView({
           </CardContent>
         </Card>
       </div>
+
+      <HowItWorks loyalty={loyalty} />
 
       {recentOrders.length > 0 ? (
         <section>

@@ -21,6 +21,7 @@ export default async function LoyaltyMembersPage({ searchParams }: PageProps<"/a
   await requireOperator();
   const q = String((await searchParams).q ?? "").slice(0, 60);
   const [settings, members] = await Promise.all([getLoyaltySettings(), searchMembers(q)]);
+  const tiered = settings.tiers.length > 1;
 
   return (
     <div className="space-y-4">
@@ -41,7 +42,7 @@ export default async function LoyaltyMembersPage({ searchParams }: PageProps<"/a
             <TableHeader>
               <TableRow>
                 <TableHead>Member</TableHead>
-                <TableHead>Tier</TableHead>
+                {tiered ? <TableHead>Tier</TableHead> : null}
                 <TableHead className="text-right">Balance</TableHead>
                 <TableHead className="hidden text-right sm:table-cell">Lifetime</TableHead>
                 <TableHead className="hidden md:table-cell">Last order</TableHead>
@@ -56,7 +57,7 @@ export default async function LoyaltyMembersPage({ searchParams }: PageProps<"/a
                     </Link>
                     <span className="block text-xs text-muted-foreground">{formatPhone(m.phone)}</span>
                   </TableCell>
-                  <TableCell>{tierFor(m.qualifyingPoints, settings.tiers).name}</TableCell>
+                  {tiered ? <TableCell>{tierFor(m.qualifyingPoints, settings.tiers).name}</TableCell> : null}
                   <TableCell className="text-right tabular-nums">{m.pointsBalance.toLocaleString()}</TableCell>
                   <TableCell className="hidden text-right tabular-nums sm:table-cell">
                     {m.lifetimePoints.toLocaleString()}

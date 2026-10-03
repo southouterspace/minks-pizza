@@ -228,12 +228,8 @@ async function main() {
   const [settingsRow] = await db.select().from(loyaltySettings);
   check("settings save the birthday points", settingsRow.birthdayPoints === 750, String(settingsRow.birthdayPoints));
   check(
-    "default tiers are Regular 1x and Gold Crust 1.2x at 4000",
-    JSON.stringify(settingsRow.tiers) ===
-      JSON.stringify([
-        { name: "Regular", minPoints: 0, multiplierBps: 10000 },
-        { name: "Gold Crust", minPoints: 4000, multiplierBps: 12000 },
-      ]),
+    "default is a single Member tier at 1x",
+    JSON.stringify(settingsRow.tiers) === JSON.stringify([{ name: "Member", minPoints: 0, multiplierBps: 10000 }]),
     JSON.stringify(settingsRow.tiers),
   );
 
@@ -307,11 +303,21 @@ async function main() {
   // --- Sign in with a dev code; rewards page --------------------------------
   await customerSignIn(rita, RITA.phone, RITA.name);
   check("rewards page shows the balance", (await rita.getByTestId("points-balance").textContent())?.startsWith("399") === true);
-  check("rewards page shows the tier", (await rita.getByTestId("member-tier").textContent()) === "Regular");
+  check("one tier means no tier UI", (await rita.getByTestId("member-tier").count()) === 0);
+  const how = (await rita.getByTestId("how-it-works").textContent()) ?? "";
+  check(
+    "How it works covers rate, base, expiry, cancels and the price promise",
+    how.includes("Earn 10 points for every $1") &&
+      how.includes("tax, tip and the delivery fee don't") &&
+      how.includes("expire only after 12 months without an order") &&
+      how.includes("canceled, any points you spent come back") &&
+      how.includes("keep the old price for 60 days"),
+  );
   const ladder = (await rita.getByTestId("reward-ladder").textContent()) ?? "";
   check(
     "ladder marks what's ready and what's left",
-    ladder.includes("Ready to redeem at checkout") && ladder.includes("301 points to go") && ladder.includes("1,101 points to go"),
+    ladder.includes("Ready to redeem at checkout") && ladder.includes("301 points to go") && ladder.includes("1,101 points to go") &&
+      ladder.includes("$3 value") && ladder.includes("up to $22 value"),
   );
   check("header shows the balance chip", (await rita.getByTestId("header-points").textContent()) === "399");
   check("expired promotion isn't shown", (await rita.getByTestId("active-promo").count()) === 0);
@@ -599,6 +605,26 @@ async function main() {
   await op.waitForURL(/saved=1/);
   const [cut] = await db.select().from(loyaltyRewards).where(eq(loyaltyRewards.id, threeOff.id));
   check("a cut clears protection", cut.pointsCost === 250 && cut.previousPointsCost === null && cut.priceProtectedUntil === null);
+
+  // --- A second tier turns tier UI on -------------------------------------
+  await op.goto(`${BASE}/admin/loyalty/settings`, { waitUntil: "networkidle" });
+  await op.getByLabel("Tier 2 name").fill("Gold Crust");
+  await op.getByLabel("Tier 2 minimum points").fill("4000");
+  await op.getByLabel("Tier 2 multiplier").fill("1.2");
+  await op.getByRole("button", { name: "Save program settings" }).click();
+  await op.waitForURL(/saved=1/);
+  const [tiered] = await db.select().from(loyaltySettings);
+  check(
+    "tiers editor adds a tier",
+    JSON.stringify(tiered.tiers) ===
+      JSON.stringify([
+        { name: "Member", minPoints: 0, multiplierBps: 10000 },
+        { name: "Gold Crust", minPoints: 4000, multiplierBps: 12000 },
+      ]),
+    JSON.stringify(tiered.tiers),
+  );
+  await rita.goto(`${BASE}/rewards`, { waitUntil: "networkidle" });
+  check("with two tiers the member sees theirs", (await rita.getByTestId("member-tier").textContent()) === "Member");
 
   // --- Screenshots ----------------------------------------------------------
   const anonCtx = await browser.newContext();

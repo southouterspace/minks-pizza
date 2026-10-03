@@ -1,7 +1,6 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import {
-  DEFAULT_TIERS,
   activePromotion,
   birthdayGrantDue,
   earnPoints,
@@ -20,6 +19,10 @@ import {
 } from "./loyalty";
 
 const TZ = "America/Chicago";
+const TIERS = [
+  { name: "Regular", minPoints: 0, multiplierBps: 10_000 },
+  { name: "Gold Crust", minPoints: 4000, multiplierBps: 12_000 },
+];
 
 describe("normalizePhone", () => {
   it("keeps ten digits from any punctuation", () => {
@@ -61,12 +64,12 @@ describe("earnPoints", () => {
 
 describe("tiers", () => {
   it("picks the highest tier reached", () => {
-    assert.equal(tierFor(0, DEFAULT_TIERS).name, "Regular");
-    assert.equal(tierFor(3999, DEFAULT_TIERS).name, "Regular");
-    assert.equal(tierFor(4000, DEFAULT_TIERS).name, "Gold Crust");
+    assert.equal(tierFor(0, TIERS).name, "Regular");
+    assert.equal(tierFor(3999, TIERS).name, "Regular");
+    assert.equal(tierFor(4000, TIERS).name, "Gold Crust");
   });
   it("reports progress toward the next tier", () => {
-    assert.deepEqual(tierProgress(1000, DEFAULT_TIERS), {
+    assert.deepEqual(tierProgress(1000, TIERS), {
       tier: { name: "Regular", minPoints: 0, multiplierBps: 10_000 },
       next: { name: "Gold Crust", minPoints: 4000, multiplierBps: 12_000 },
       pointsToNext: 3000,
@@ -74,7 +77,7 @@ describe("tiers", () => {
     });
   });
   it("has nothing left to reach at the top tier", () => {
-    const p = tierProgress(5000, DEFAULT_TIERS);
+    const p = tierProgress(5000, TIERS);
     assert.equal(p.tier.name, "Gold Crust");
     assert.equal(p.next, null);
     assert.equal(p.pointsToNext, null);

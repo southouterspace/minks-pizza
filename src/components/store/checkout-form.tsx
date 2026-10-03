@@ -626,8 +626,12 @@ function LoyaltyPanel({
                   </span>
                 ) : null}
               </span>
-              <span className="shrink-0 tabular-nums text-xs text-muted-foreground">
+              <span className="shrink-0 text-right tabular-nums text-xs text-muted-foreground">
                 {r.pointsCost.toLocaleString()} pts
+                <span className="block">
+                  {r.upTo ? "up to " : ""}
+                  {formatCents(r.valueCents).replace(".00", "")} value
+                </span>
               </span>
             </label>
           );

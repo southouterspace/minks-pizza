@@ -40,10 +40,8 @@ export const REFERRER_BONUS_YEARLY_CAP = 10;
 
 export type LoyaltyTier = { name: string; minPoints: number; multiplierBps: number };
 
-export const DEFAULT_TIERS: LoyaltyTier[] = [
-  { name: "Regular", minPoints: 0, multiplierBps: 10_000 },
-  { name: "Gold Crust", minPoints: 4000, multiplierBps: 12_000 },
-];
+/** One tier means no tiers: the storefront hides tier UI until there are two. */
+export const DEFAULT_TIERS: LoyaltyTier[] = [{ name: "Member", minPoints: 0, multiplierBps: 10_000 }];
 
 export const tiersSchema = z
   .array(
@@ -250,6 +248,11 @@ export function rewardDiscount(effect: RewardEffect, lines: DiscountLine[]): Dis
       };
     }
   }
+}
+
+/** The dollar value a reward stands for: the amount off, or the free item's cap. */
+export function rewardValueCents(effect: RewardEffect): number {
+  return effect.kind === "amount_off" ? effect.amountOffCents : effect.maxValueCents;
 }
 
 // ---------------------------------------------------------------------------

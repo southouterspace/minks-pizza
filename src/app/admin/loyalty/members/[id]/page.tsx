@@ -52,7 +52,10 @@ export default async function LoyaltyMemberPage({ params, searchParams }: PagePr
             {member.pointsBalance.toLocaleString()}
           </p>
           <p className="text-xs text-muted-foreground">
-            points · {status.tier.name} ({formatMultiplier(status.tier.multiplierBps)}) ·{" "}
+            points ·{" "}
+            {settings.tiers.length > 1
+              ? `${status.tier.name} (${formatMultiplier(status.tier.multiplierBps)}) · `
+              : ""}
             {member.lifetimePoints.toLocaleString()} lifetime
           </p>
         </div>

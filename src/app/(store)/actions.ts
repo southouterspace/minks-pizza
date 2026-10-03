@@ -4,7 +4,7 @@ import { z } from "zod";
 import { cartLineSchema, checkoutSchema } from "@/lib/validation";
 import { createOrder, OrderError, quoteOrder } from "@/lib/orders";
 import { getCurrentMember, getCurrentMemberId } from "@/lib/member-auth";
-import { rewardDiscount } from "@/lib/loyalty";
+import { rewardDiscount, rewardValueCents } from "@/lib/loyalty";
 import { listRewards } from "@/lib/loyalty-server";
 
 export type PlaceOrderResult =
@@ -64,6 +64,8 @@ export type CheckoutPreview =
         name: string;
         description: string | null;
         pointsCost: number;
+        valueCents: number;
+        upTo: boolean;
         increase: { cost: number; on: string } | null;
         pointsShort: number;
         fitsCart: boolean;
@@ -89,6 +91,8 @@ export async function previewCheckout(input: unknown): Promise<CheckoutPreview> 
             name: r.name,
             description: r.description,
             pointsCost: r.price.cost,
+            valueCents: rewardValueCents(r.effect),
+            upTo: r.effect.kind === "free_item",
             increase: r.price.increase && { cost: r.price.increase.cost, on: r.price.increase.on.toISOString() },
             pointsShort: Math.max(0, r.price.cost - member.pointsBalance),
             fitsCart: rewardDiscount(r.effect, q.lines).ok,
