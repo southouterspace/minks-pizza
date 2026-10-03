@@ -108,11 +108,11 @@ async function main() {
   // --- Categories & items --------------------------------------------------
   const [specialty] = await db
     .insert(schema.categories)
-    .values({ name: "Specialty Pizzas", description: "House favorites, ready to go", sortOrder: 0 })
+    .values({ name: "Specialty Pizzas", description: "House favorites, ready to go", station: "pizza", sortOrder: 0 })
     .returning();
   const [byo] = await db
     .insert(schema.categories)
-    .values({ name: "Build Your Own", description: "Start with cheese, make it yours", sortOrder: 1 })
+    .values({ name: "Build Your Own", description: "Start with cheese, make it yours", station: "pizza", sortOrder: 1 })
     .returning();
   const [sides] = await db
     .insert(schema.categories)
@@ -120,7 +120,7 @@ async function main() {
     .returning();
   const [drinks] = await db
     .insert(schema.categories)
-    .values({ name: "Drinks", sortOrder: 3 })
+    .values({ name: "Drinks", station: "counter", sortOrder: 3 })
     .returning();
 
   const items = await db

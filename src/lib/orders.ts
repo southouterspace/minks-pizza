@@ -1,5 +1,6 @@
 import { eq, inArray } from "drizzle-orm";
 import {
+  categories,
   db,
   itemModifierGroups,
   menuItems,
@@ -10,6 +11,7 @@ import {
   storeSettings,
   type OrderItemModifier,
 } from "@/db";
+import type { KitchenStation } from "@/lib/kds";
 import { taxFromBps } from "@/lib/money";
 import type { CheckoutInput } from "@/lib/validation";
 
@@ -21,6 +23,7 @@ export type PricedLine = {
   lineTotalCents: number;
   modifiers: OrderItemModifier[];
   notes?: string;
+  station: KitchenStation;
 };
 
 export type PricedCart = {
@@ -55,10 +58,13 @@ export async function priceCart(
 
   const itemIds = [...new Set(lines.map((l) => l.itemId))];
   const items = await db
-    .select()
+    .select({ item: menuItems, station: categories.station })
     .from(menuItems)
+    .innerJoin(categories, eq(categories.id, menuItems.categoryId))
     .where(inArray(menuItems.id, itemIds));
-  const itemById = new Map(items.map((i) => [i.id, i]));
+  const itemById = new Map(
+    items.map(({ item, station }) => [item.id, { ...item, station }]),
+  );
 
   const links = itemIds.length
     ? await db
@@ -139,6 +145,7 @@ export async function priceCart(
       lineTotalCents: unitPrice * line.quantity,
       modifiers: chosen,
       notes: line.notes,
+      station: item.station,
     };
   });
 
@@ -227,6 +234,7 @@ export async function createOrder(input: CheckoutInput) {
       lineTotalCents: l.lineTotalCents,
       modifiers: l.modifiers,
       notes: l.notes || null,
+      station: l.station,
     })),
   );
 

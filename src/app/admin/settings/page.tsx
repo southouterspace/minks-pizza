@@ -45,6 +45,9 @@ const DEFAULTS = {
   deliveryEnabled: false,
   pickupPrepMinutes: 20,
   deliveryPrepMinutes: 45,
+  kdsWarnMinutes: 10,
+  kdsLateMinutes: 15,
+  kdsOvenMinutes: 7,
   deliveryFeeCents: 0,
   deliveryMinimumCents: 0,
   taxRateBps: 0,
@@ -356,6 +359,52 @@ export default async function SettingsPage({
               </FieldGroup>
             </Card>
           </div>
+        </FieldSet>
+
+        <FieldSet>
+          <FieldLegend className="w-full border-b border-border pb-2 text-sm!">
+            Kitchen display
+          </FieldLegend>
+          <Card>
+            <div className="grid gap-4 px-4 sm:grid-cols-3">
+              <Field>
+                <FieldLabel htmlFor="s-kds-warn">Ticket turns amber at (min)</FieldLabel>
+                <Input
+                  id="s-kds-warn"
+                  name="kdsWarnMinutes"
+                  type="number"
+                  min="1"
+                  step="1"
+                  defaultValue={settings.kdsWarnMinutes}
+                  className="tabular-nums"
+                />
+              </Field>
+              <Field>
+                <FieldLabel htmlFor="s-kds-late">Ticket turns red at (min)</FieldLabel>
+                <Input
+                  id="s-kds-late"
+                  name="kdsLateMinutes"
+                  type="number"
+                  min="1"
+                  step="1"
+                  defaultValue={settings.kdsLateMinutes}
+                  className="tabular-nums"
+                />
+              </Field>
+              <Field>
+                <FieldLabel htmlFor="s-kds-oven">Oven bake time (min)</FieldLabel>
+                <Input
+                  id="s-kds-oven"
+                  name="kdsOvenMinutes"
+                  type="number"
+                  min="1"
+                  step="1"
+                  defaultValue={settings.kdsOvenMinutes}
+                  className="tabular-nums"
+                />
+              </Field>
+            </div>
+          </Card>
         </FieldSet>
 
         <FieldSet>
