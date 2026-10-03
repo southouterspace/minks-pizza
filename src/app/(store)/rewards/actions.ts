@@ -3,7 +3,7 @@
 import { revalidatePath } from "next/cache";
 import { and, eq, isNull } from "drizzle-orm";
 import { z } from "zod";
-import { db, loyaltyMembers } from "@/db";
+import { db, loyaltyLoginCodes, loyaltyMembers } from "@/db";
 import {
   getCurrentMemberId,
   requestLoginCode,
@@ -38,6 +38,22 @@ export async function verifyCode(input: unknown): Promise<{ ok: true } | { ok: f
 }
 
 export async function signOut(): Promise<void> {
+  await signOutMember();
+  revalidatePath("/", "layout");
+}
+
+/**
+ * Erases the member: the ledger goes with them (cascade), orders keep their
+ * rows with the member link nulled, and friends they referred stay members.
+ */
+export async function deleteMyAccount(): Promise<void> {
+  const memberId = await getCurrentMemberId();
+  if (memberId === null) return;
+  const [deleted] = await db
+    .delete(loyaltyMembers)
+    .where(eq(loyaltyMembers.id, memberId))
+    .returning({ phone: loyaltyMembers.phone });
+  if (deleted) await db.delete(loyaltyLoginCodes).where(eq(loyaltyLoginCodes.phone, deleted.phone));
   await signOutMember();
   revalidatePath("/", "layout");
 }

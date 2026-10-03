@@ -34,6 +34,7 @@ import { formatCents } from "@/lib/money";
 import { saveBirthday, signOut } from "./actions";
 import { ComingSoon } from "@/components/store/coming-soon";
 import { CopyLink } from "@/components/store/copy-link";
+import { DeleteAccountButton } from "@/components/store/delete-account-button";
 import { RewardsSignIn } from "@/components/store/rewards-sign-in";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -481,6 +482,10 @@ async function MemberView({
           </ul>
         )}
       </section>
+
+      <div className="border-t border-border pt-4">
+        <DeleteAccountButton points={member.pointsBalance} />
+      </div>
     </div>
   );
 }

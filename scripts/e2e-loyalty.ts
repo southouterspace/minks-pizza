@@ -664,6 +664,17 @@ async function main() {
   await rita.goto(`${BASE}/rewards`, { waitUntil: "networkidle" });
   check("with two tiers the member sees theirs", (await rita.getByTestId("member-tier").textContent()) === "Member");
 
+  // --- Self-serve account deletion -----------------------------------------
+  await cara.goto(`${BASE}/rewards`, { waitUntil: "networkidle" });
+  await cara.getByRole("button", { name: "Delete my rewards account" }).click();
+  await cara.getByRole("button", { name: "Delete account" }).click();
+  await cara.getByText("Join or sign in").waitFor();
+  check("deleting the account signs the member out", (await cara.getByTestId("header-points").count()) === 0);
+  check("member row is gone", (await member(CARA.digits)) === undefined);
+  check("their ledger is gone", (await entries(caraMember.id)).length === 0);
+  const caraOrderRow = await orderRow(caraPast.id);
+  check("their orders stay, unlinked", caraOrderRow !== undefined && caraOrderRow.loyaltyMemberId === null);
+
   // --- Screenshots ----------------------------------------------------------
   const anonCtx = await browser.newContext();
   await shots(anonCtx, "/rewards", "rewards-signed-out");
