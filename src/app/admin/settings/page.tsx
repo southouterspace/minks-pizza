@@ -2,7 +2,7 @@ import type { Metadata } from "next";
 import { eq } from "drizzle-orm";
 import { db, storeSettings, type DayHours } from "@/db";
 import { requireOperator } from "@/lib/auth";
-import { DAY_NAMES } from "@/lib/hours";
+import { DAY_NAMES } from "@/lib/zoned";
 import {
   saveSettings,
   toggleAcceptingOrders,
@@ -11,7 +11,7 @@ import {
 import { ToggleSwitchForm } from "@/components/admin/toggle-switch-form";
 import { LogoField } from "@/components/admin/logo-field";
 import { centsToDollars } from "@/lib/money";
-import { DEFAULT_TIMEZONE } from "@/lib/timeclock";
+import { DEFAULT_STAFF_RULES, DEFAULT_TIMEZONE, ruleInputValue, STAFF_RULE_FIELDS, type StaffRules } from "@/lib/timeclock";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -26,12 +26,11 @@ import {
 import { Input } from "@/components/ui/input";
 import { NativeSelect, NativeSelectOption } from "@/components/ui/native-select";
 
-/** Minutes column shown as hours in an input; null shows blank (rule off). */
-const asHours = (minutes: number | null) => (minutes === null ? "" : String(minutes / 60));
-
 export const dynamic = "force-dynamic";
 
 export const metadata: Metadata = { title: "Settings" };
+
+const STAFF_DEFAULTS: StaffRules = DEFAULT_STAFF_RULES;
 
 const DEFAULTS = {
   name: "My Pizzeria",
@@ -57,13 +56,7 @@ const DEFAULTS = {
   deliveryMinimumCents: 0,
   taxRateBps: 0,
   timezone: DEFAULT_TIMEZONE,
-  weekStartsOn: 1,
-  otWeeklyMinutes: 2400,
-  otDailyMinutes: null as number | null,
-  dtDailyMinutes: null as number | null,
-  breakRequiredAfterMinutes: 360 as number | null,
-  clockGraceMinutes: 7,
-  earlyClockInMinutes: null as number | null,
+  ...STAFF_DEFAULTS,
   isPublished: false,
   isAcceptingOrders: true,
 };
@@ -450,84 +443,22 @@ export default async function SettingsPage({
                   ))}
                 </NativeSelect>
               </Field>
-              <Field>
-                <FieldLabel htmlFor="s-ot-weekly">Weekly overtime after (h)</FieldLabel>
-                <Input
-                  id="s-ot-weekly"
-                  name="otWeeklyHours"
-                  type="number"
-                  min="1"
-                  step="0.5"
-                  required
-                  defaultValue={asHours(settings.otWeeklyMinutes)}
-                  className="tabular-nums"
-                />
-                <FieldDescription>40 under federal law.</FieldDescription>
-              </Field>
-              <Field>
-                <FieldLabel htmlFor="s-break">Flag no meal break after (h)</FieldLabel>
-                <Input
-                  id="s-break"
-                  name="breakRequiredAfterHours"
-                  type="number"
-                  min="0"
-                  step="0.5"
-                  defaultValue={asHours(settings.breakRequiredAfterMinutes)}
-                  className="tabular-nums"
-                />
-                <FieldDescription>Flags the timesheet only; nothing is deducted.</FieldDescription>
-              </Field>
-              <Field>
-                <FieldLabel htmlFor="s-ot-daily">Daily overtime after (h)</FieldLabel>
-                <Input
-                  id="s-ot-daily"
-                  name="otDailyHours"
-                  type="number"
-                  min="0"
-                  step="0.5"
-                  defaultValue={asHours(settings.otDailyMinutes)}
-                  className="tabular-nums"
-                />
-                <FieldDescription>California: 8. Blank for none.</FieldDescription>
-              </Field>
-              <Field>
-                <FieldLabel htmlFor="s-dt-daily">Daily double time after (h)</FieldLabel>
-                <Input
-                  id="s-dt-daily"
-                  name="dtDailyHours"
-                  type="number"
-                  min="0"
-                  step="0.5"
-                  defaultValue={asHours(settings.dtDailyMinutes)}
-                  className="tabular-nums"
-                />
-                <FieldDescription>California: 12. Blank for none.</FieldDescription>
-              </Field>
-              <Field>
-                <FieldLabel htmlFor="s-grace">Late / early-out grace (min)</FieldLabel>
-                <Input
-                  id="s-grace"
-                  name="clockGraceMinutes"
-                  type="number"
-                  min="0"
-                  step="1"
-                  defaultValue={settings.clockGraceMinutes}
-                  className="tabular-nums"
-                />
-              </Field>
-              <Field>
-                <FieldLabel htmlFor="s-early">Block clock-in earlier than (min before shift)</FieldLabel>
-                <Input
-                  id="s-early"
-                  name="earlyClockInMinutes"
-                  type="number"
-                  min="0"
-                  step="1"
-                  defaultValue={settings.earlyClockInMinutes ?? ""}
-                  className="tabular-nums"
-                />
-                <FieldDescription>Blank lets staff clock in any time. Managers can always add the time.</FieldDescription>
-              </Field>
+              {STAFF_RULE_FIELDS.map((f) => (
+                <Field key={f.key}>
+                  <FieldLabel htmlFor={f.id}>{f.label}</FieldLabel>
+                  <Input
+                    id={f.id}
+                    name={f.name}
+                    type="number"
+                    min={f.min}
+                    step={f.step}
+                    required={f.required}
+                    defaultValue={ruleInputValue(f, settings[f.key])}
+                    className="tabular-nums"
+                  />
+                  {f.hint ? <FieldDescription>{f.hint}</FieldDescription> : null}
+                </Field>
+              ))}
             </div>
           </Card>
         </FieldSet>

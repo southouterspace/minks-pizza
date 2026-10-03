@@ -26,7 +26,7 @@ import {
   verifyPassword,
 } from "@/lib/auth";
 import { KITCHEN_STATIONS, type KitchenStation } from "@/lib/kds";
-import { DEFAULT_TIMEZONE } from "@/lib/timeclock";
+import { DEFAULT_STAFF_RULES, DEFAULT_TIMEZONE, parseStaffRules } from "@/lib/timeclock";
 import {
   checkbox,
   dollarsToCents,
@@ -707,12 +707,6 @@ function logoUrlOrNull(formData: FormData): string | null {
   return /^https:\/\/\S+$/i.test(raw) ? raw : null;
 }
 
-/** Hours typed in a settings field → whole minutes; blank (or zero) turns the rule off. */
-function hoursToMinutesOrNull(formData: FormData, name: string): number | null {
-  const hours = Number.parseFloat(textField(formData, name));
-  return Number.isFinite(hours) && hours > 0 ? Math.round(hours * 60) : null;
-}
-
 function timezoneField(formData: FormData): string {
   const tz = textField(formData, "timezone");
   return Intl.supportedValuesOf("timeZone").includes(tz) || tz === "UTC" ? tz : DEFAULT_TIMEZONE;
@@ -770,13 +764,8 @@ export async function saveSettings(formData: FormData): Promise<void> {
     deliveryMinimumCents: dollarsToCents(formData, "deliveryMinimum"),
     taxRateBps: Math.round(taxPercent * 100),
     timezone: timezoneField(formData),
-    weekStartsOn: Math.min(6, intField(formData, "weekStartsOn", 1)),
-    otWeeklyMinutes: hoursToMinutesOrNull(formData, "otWeeklyHours") ?? 2400,
-    otDailyMinutes: hoursToMinutesOrNull(formData, "otDailyHours"),
-    dtDailyMinutes: hoursToMinutesOrNull(formData, "dtDailyHours"),
-    breakRequiredAfterMinutes: hoursToMinutesOrNull(formData, "breakRequiredAfterHours"),
-    clockGraceMinutes: intField(formData, "clockGraceMinutes", 7),
-    earlyClockInMinutes: intField(formData, "earlyClockInMinutes", 0) || null,
+    weekStartsOn: Math.min(6, intField(formData, "weekStartsOn", DEFAULT_STAFF_RULES.weekStartsOn)),
+    ...parseStaffRules((name) => textField(formData, name)),
     updatedAt: new Date(),
   };
 
