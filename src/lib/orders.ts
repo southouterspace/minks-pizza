@@ -327,9 +327,9 @@ export async function createOrder(input: CheckoutInput) {
     const totalCents = quote.totalBeforeTipCents + input.tipCents;
     if (input.expectedTotalCents !== undefined && input.expectedTotalCents !== totalCents) {
       const rejected = quote.rejected[0];
-      throw new OrderError(
-        `${rejected ? `${rejected.code}: ${rejected.reason}. ` : ""}Your total is now ${formatCents(totalCents)}. Check it and place your order again.`,
-      );
+      const typed = rejected && (input.promoCodes ?? []).find((c) => normalizeCode(c) === rejected.code);
+      const why = rejected ? `${(typed ?? rejected.code).toUpperCase()}: ${rejected.reason.replace(/\.$/, "")}. ` : "";
+      throw new OrderError(`${why}Your total is now ${formatCents(totalCents)}. Check it and place your order again.`);
     }
     try {
       return await insertOrder(input, settings, quote);
