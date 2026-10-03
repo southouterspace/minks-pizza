@@ -9,7 +9,6 @@ import {
   type CourierProvider,
   type CourierSnapshot,
   type CourierStatus,
-  type DeliveryRequest,
 } from "./types";
 
 export type UberDirectConfig = {

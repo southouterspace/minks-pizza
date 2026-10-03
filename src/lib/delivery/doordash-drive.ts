@@ -8,7 +8,6 @@ import {
   type CourierProvider,
   type CourierSnapshot,
   type CourierStatus,
-  type DeliveryRequest,
 } from "./types";
 
 // Production access to Drive is currently closed, so this runs against the

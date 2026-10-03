@@ -6,6 +6,7 @@ import {
   menuItems,
   modifierGroups,
   modifiers,
+  orderEvents,
   orderItems,
   orders,
   storeSettings,
@@ -203,40 +204,58 @@ export async function createOrder(input: CheckoutInput) {
     );
   }
 
-  const [order] = await db
-    .insert(orders)
-    .values({
-      orderType: input.orderType,
-      customerName: input.customerName,
-      customerPhone: input.customerPhone,
-      customerEmail: input.customerEmail || null,
-      addressLine1: input.addressLine1 || null,
-      addressLine2: input.addressLine2 || null,
-      city: input.city || null,
-      zip: input.zip || null,
-      orderNotes: input.orderNotes || null,
-      subtotalCents: cart.subtotalCents,
-      taxCents: cart.taxCents,
-      deliveryFeeCents: cart.deliveryFeeCents,
-      tipCents: input.tipCents,
-      totalCents: cart.totalCents + input.tipCents,
-      paymentStatus: "pending",
-    })
-    .returning();
+  const placedAt = new Date();
+  const prepMinutes =
+    input.orderType === "delivery" ? settings.deliveryPrepMinutes : settings.pickupPrepMinutes;
 
-  await db.insert(orderItems).values(
-    cart.lines.map((l) => ({
-      orderId: order.id,
-      menuItemId: l.itemId,
-      itemName: l.itemName,
-      quantity: l.quantity,
-      unitPriceCents: l.unitPriceCents,
-      lineTotalCents: l.lineTotalCents,
-      modifiers: l.modifiers,
-      notes: l.notes || null,
-      station: l.station,
-    })),
-  );
+  // The id is minted here so the order, its lines and its "placed" event go
+  // in as one transaction: a failure can't leave an order with no items.
+  const orderId = crypto.randomUUID();
+  const [[order]] = await db.batch([
+    db
+      .insert(orders)
+      .values({
+        id: orderId,
+        placedAt,
+        promisedAt: new Date(placedAt.getTime() + prepMinutes * 60_000),
+        orderType: input.orderType,
+        customerName: input.customerName,
+        customerPhone: input.customerPhone,
+        customerEmail: input.customerEmail || null,
+        addressLine1: input.addressLine1 || null,
+        addressLine2: input.addressLine2 || null,
+        city: input.city || null,
+        zip: input.zip || null,
+        orderNotes: input.orderNotes || null,
+        subtotalCents: cart.subtotalCents,
+        taxCents: cart.taxCents,
+        deliveryFeeCents: cart.deliveryFeeCents,
+        tipCents: input.tipCents,
+        totalCents: cart.totalCents + input.tipCents,
+        paymentStatus: "pending",
+      })
+      .returning(),
+    db.insert(orderEvents).values({
+      orderId,
+      type: "placed",
+      toStatus: "new",
+      actor: "Customer",
+      createdAt: placedAt,
+    }),
+    db.insert(orderItems).values(
+      cart.lines.map((l) => ({
+        orderId,
+        menuItemId: l.itemId,
+        itemName: l.itemName,
+        quantity: l.quantity,
+        unitPriceCents: l.unitPriceCents,
+        lineTotalCents: l.lineTotalCents,
+        modifiers: l.modifiers,
+        notes: l.notes || null,
+        station: l.station,
+      })),
+    ),
+  ]);
 
   return order;
 }

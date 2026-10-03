@@ -31,11 +31,8 @@ import {
 } from "@/components/ui/empty";
 import { Field, FieldGroup, FieldLabel } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
-import {
-  centsToDollars,
-  formatDelta,
-  ruleSummary,
-} from "@/components/admin/ui";
+import { formatDelta, ruleSummary } from "@/components/admin/ui";
+import { centsToDollars } from "@/lib/money";
 
 export const dynamic = "force-dynamic";
 

@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { connection } from "next/server";
 import { CartProvider } from "@/components/cart-context";
 import { StoreMark } from "@/components/store-mark";
 import { CartBadge } from "@/components/store/cart-badge";
@@ -6,6 +7,7 @@ import { Separator } from "@/components/ui/separator";
 import { getSettings } from "@/lib/orders";
 
 export default async function StoreLayout({ children }: LayoutProps<"/">) {
+  await connection();
   const settings = await getSettings();
 
   return (

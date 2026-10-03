@@ -3,7 +3,9 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import {
+  CalendarClock,
   ClipboardList,
+  History,
   Settings,
   SlidersHorizontal,
   Users,
@@ -13,6 +15,7 @@ import { cn } from "@/lib/utils";
 
 const LINKS = [
   { href: "/admin", label: "Orders", exact: true, icon: ClipboardList },
+  { href: "/admin/orders", label: "History", exact: false, icon: History },
   { href: "/admin/menu", label: "Menu", exact: false, icon: UtensilsCrossed },
   {
     href: "/admin/modifiers",
@@ -20,6 +23,7 @@ const LINKS = [
     exact: false,
     icon: SlidersHorizontal,
   },
+  { href: "/admin/staff", label: "Staff", exact: false, icon: CalendarClock },
   { href: "/admin/settings", label: "Settings", exact: false, icon: Settings },
   { href: "/admin/team", label: "Team", exact: false, icon: Users },
 ];
