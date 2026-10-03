@@ -6,16 +6,14 @@ import { listRewards } from "@/lib/loyalty-server";
 import { getSettings } from "@/lib/orders";
 import { deleteReward } from "../actions";
 import { ConfirmButton } from "@/components/admin/confirm-button";
-import { FormNotice } from "@/components/admin/form-notice";
 import { RewardForm } from "@/components/admin/reward-form";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 
 export const dynamic = "force-dynamic";
 
-export default async function LoyaltyRewardsPage({ searchParams }: PageProps<"/admin/loyalty/rewards">) {
+export default async function LoyaltyRewardsPage() {
   await requireOperator();
-  const sp = await searchParams;
   const [store, rewards, cats] = await Promise.all([
     getSettings(),
     listRewards({ activeOnly: false }),
@@ -28,7 +26,6 @@ export default async function LoyaltyRewardsPage({ searchParams }: PageProps<"/a
         Customers pick one reward per order at checkout. Orders keep the reward&apos;s name, so editing or deleting
         one never changes past receipts.
       </p>
-      <FormNotice saved={sp.saved ? "Reward saved." : null} error={typeof sp.error === "string" ? sp.error : null} />
 
       {rewards.map((r) => (
         <Card key={r.id}>

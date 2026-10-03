@@ -4,38 +4,22 @@ import { ArrowLeft } from "lucide-react";
 import { requireOperator } from "@/lib/auth";
 import { LEDGER_KIND_RULES, formatMultiplier, formatPhone, formatPointsDelta } from "@/lib/loyalty";
 import { getLoyaltySettings, getMember, memberLedger, memberStatus } from "@/lib/loyalty-server";
-import {
-  addMissingOrder,
-  adjustPoints,
-  issueBirthdayBonus,
-  restoreExpired,
-  saveMemberBirthday,
-} from "../../actions";
-import { FormNotice } from "@/components/admin/form-notice";
+import { restoreExpired } from "../../actions";
+import { AdjustPointsForm, MemberBirthdayForms, MissingOrderForm } from "@/components/admin/member-forms";
 import { formatDateTime } from "@/components/admin/ui";
 import { getSettings } from "@/lib/orders";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Field, FieldLabel } from "@/components/ui/field";
-import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
 
 export const dynamic = "force-dynamic";
 
-const SAVED: Record<string, string> = {
-  adjusted: "Points adjusted.",
-  claimed: "Order added and its points posted.",
-  restored: "Expired points restored.",
-  "birthday-issued": "Birthday bonus issued.",
-  birthday: "Birthday saved.",
-};
 
-export default async function LoyaltyMemberPage({ params, searchParams }: PageProps<"/admin/loyalty/members/[id]">) {
+export default async function LoyaltyMemberPage({ params }: PageProps<"/admin/loyalty/members/[id]">) {
   await requireOperator();
   const id = Number.parseInt((await params).id, 10);
   const member = Number.isInteger(id) ? await getMember(id) : null;
   if (!member) notFound();
-  const sp = await searchParams;
   const [settings, store, ledger] = await Promise.all([getLoyaltySettings(), getSettings(), memberLedger(member.id, 200)]);
   const status = await memberStatus(member, settings);
 
@@ -67,26 +51,13 @@ export default async function LoyaltyMemberPage({ params, searchParams }: PagePr
         </div>
       </div>
 
-      <FormNotice saved={SAVED[String(sp.saved ?? "")]} error={typeof sp.error === "string" ? sp.error : null} />
-
       <div className="grid gap-4 md:grid-cols-2">
         <Card>
           <CardHeader>
             <CardTitle className="text-sm">Adjust points</CardTitle>
           </CardHeader>
           <CardContent>
-            <form action={adjustPoints} className="space-y-3">
-              <input type="hidden" name="memberId" value={member.id} />
-              <Field>
-                <FieldLabel htmlFor="adj-points">Points (use − to remove)</FieldLabel>
-                <Input id="adj-points" name="points" type="number" step="1" required placeholder="50 or -50" />
-              </Field>
-              <Field>
-                <FieldLabel htmlFor="adj-reason">Reason</FieldLabel>
-                <Input id="adj-reason" name="reason" required maxLength={200} placeholder="Late delivery" />
-              </Field>
-              <Button type="submit" className="h-9!">Adjust points</Button>
-            </form>
+            <AdjustPointsForm memberId={member.id} />
           </CardContent>
         </Card>
         <Card>
@@ -94,27 +65,12 @@ export default async function LoyaltyMemberPage({ params, searchParams }: PagePr
             <CardTitle className="text-sm">Birthday</CardTitle>
           </CardHeader>
           <CardContent>
-            <form action={saveMemberBirthday} className="space-y-3">
-              <input type="hidden" name="memberId" value={member.id} />
-              <div className="grid grid-cols-2 gap-3">
-                <Field>
-                  <FieldLabel htmlFor="bd-month">Month</FieldLabel>
-                  <Input id="bd-month" name="month" type="number" min={1} max={12} required defaultValue={member.birthMonth ?? ""} />
-                </Field>
-                <Field>
-                  <FieldLabel htmlFor="bd-day">Day</FieldLabel>
-                  <Input id="bd-day" name="day" type="number" min={1} max={31} required defaultValue={member.birthDay ?? ""} />
-                </Field>
-              </div>
-              <Button type="submit" variant="outline" className="h-9!">Save birthday</Button>
-            </form>
-            <form action={issueBirthdayBonus} className="mt-4 border-t border-border pt-4">
-              <input type="hidden" name="memberId" value={member.id} />
-              <Button type="submit" variant="outline" className="h-9!">
-                Issue birthday bonus ({settings.birthdayPoints} pts)
-              </Button>
-              <p className="mt-2 text-xs text-muted-foreground">Once a year, whether or not it arrived on its own.</p>
-            </form>
+            <MemberBirthdayForms
+              memberId={member.id}
+              birthMonth={member.birthMonth}
+              birthDay={member.birthDay}
+              birthdayPoints={settings.birthdayPoints}
+            />
           </CardContent>
         </Card>
       </div>
@@ -124,17 +80,7 @@ export default async function LoyaltyMemberPage({ params, searchParams }: PagePr
           <CardTitle className="text-sm">Add a missing order</CardTitle>
         </CardHeader>
         <CardContent>
-          <form action={addMissingOrder} className="flex flex-wrap items-end gap-3">
-            <input type="hidden" name="memberId" value={member.id} />
-            <Field className="w-40!">
-              <FieldLabel htmlFor="claim-order">Order number</FieldLabel>
-              <Input id="claim-order" name="orderNumber" inputMode="numeric" required placeholder="1042" />
-            </Field>
-            <Button type="submit" variant="outline" className="h-9!">Add order</Button>
-            <p className="basis-full text-xs text-muted-foreground">
-              For a completed order placed without their phone or before they joined. It earns at the base rate.
-            </p>
-          </form>
+          <MissingOrderForm memberId={member.id} />
         </CardContent>
       </Card>
 

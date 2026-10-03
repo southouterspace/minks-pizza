@@ -1,28 +1,13 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
-import { redirect } from "next/navigation";
 import { eq, sql } from "drizzle-orm";
 import { z } from "zod";
-import {
-  db,
-  loyaltyLedger,
-  loyaltyMembers,
-  loyaltyPromotions,
-  loyaltyRewards,
-  loyaltySettings,
-} from "@/db";
+import { db, loyaltyMembers, loyaltyPromotions, loyaltyRewards, loyaltySettings } from "@/db";
 import { requireOperator } from "@/lib/auth";
-import { getSettings } from "@/lib/orders";
+import { formFields, idField } from "@/lib/form-data";
+import { birthdaySchema, localYearMonth, repriceReward, tiersSchema } from "@/lib/loyalty";
 import {
-  birthdaySchema,
-  localYearMonth,
-  repriceReward,
-  rewardEffectSchema,
-  tiersSchema,
-} from "@/lib/loyalty";
-import {
-  getLoyaltySettings,
   claimOrderByNumber,
   getReward,
   isInsufficientPoints,
@@ -31,31 +16,42 @@ import {
   restoreExpiry,
   seedDefaultRewards,
 } from "@/lib/loyalty-server";
+import { parseDollars } from "@/lib/money";
+import { getSettings } from "@/lib/orders";
+import { rejected, type LoyaltyFormState } from "./form-state";
 
-const text = (fd: FormData, name: string) => {
-  const v = fd.get(name);
-  return typeof v === "string" ? v.trim() : "";
-};
+// Each form's schema is keyed by the form's own field names, so `rejected`
+// can put every error beside the field it is about.
 
 /** "1.5" (x) → 15000 bps. */
 const multiplierBps = z.coerce
-  .number()
+  .number({ message: "Enter a multiplier like 1.5" })
   .min(1, "Multipliers start at 1x")
-  .max(10)
+  .max(10, "Multipliers go up to 10x")
   .transform((x) => Math.round(x * 10_000));
 
-const dollarsToCents = z.coerce
-  .number()
-  .positive("Enter an amount above $0")
-  .max(1000)
-  .transform((d) => Math.round(d * 100));
+const dollarsToCents = z
+  .string()
+  .transform((d) => parseDollars(d) ?? Number.NaN)
+  .pipe(z.number({ message: "Enter an amount like 3.50" }).positive("Enter an amount above $0").max(100_000));
 
-const points = z.coerce.number().int().min(0).max(100_000);
+const points = z.coerce
+  .number({ message: "Enter a whole number" })
+  .int("Enter a whole number")
+  .min(0, "Use 0 or more points")
+  .max(100_000, "Use at most 100,000 points");
 
-function fail(path: string, error: z.ZodError | string): never {
-  const message = typeof error === "string" ? error : (error.issues[0]?.message ?? "Check the form.");
-  redirect(`${path}?error=${encodeURIComponent(message)}`);
-}
+const checkbox = z
+  .literal("on")
+  .optional()
+  .transform((v) => v === "on");
+
+/** A blank hidden id is a new row. */
+const optionalId = z
+  .string()
+  .optional()
+  .transform((v) => (v ? Number.parseInt(v, 10) : null))
+  .pipe(z.number().int().positive().nullable());
 
 function revalidateLoyalty() {
   revalidatePath("/admin/loyalty", "layout");
@@ -68,128 +64,129 @@ function revalidateLoyalty() {
 
 export async function toggleLoyaltyEnabled(): Promise<void> {
   await requireOperator();
-  const settings = await getLoyaltySettings();
-  await db
-    .update(loyaltySettings)
-    .set({ enabled: !settings.enabled, updatedAt: new Date() })
-    .where(eq(loyaltySettings.id, 1));
-  if (!settings.enabled) await seedDefaultRewards();
+  const [settings] = await db
+    .insert(loyaltySettings)
+    .values({ id: 1, enabled: true })
+    .onConflictDoUpdate({
+      target: loyaltySettings.id,
+      set: { enabled: sql`not ${loyaltySettings.enabled}`, updatedAt: new Date() },
+    })
+    .returning({ enabled: loyaltySettings.enabled });
+  if (settings.enabled) await seedDefaultRewards();
   revalidateLoyalty();
 }
 
-const tierRowSchema = z.object({
-  name: z.string(),
-  minPoints: z
-    .string()
-    .regex(/^\d+$/, "Give every tier a whole number of points to start at")
-    .transform(Number),
-  multiplierBps,
-});
-
-const settingsSchema = z.object({
-  programName: z.string().trim().min(1, "Name the program").max(60),
+const settingsForm = z.object({
+  programName: z.string().min(1, "Name the program").max(60),
   pointsPerDollar: z.coerce.number().int().min(1, "Earn at least 1 point per dollar").max(1000),
   signupBonus: points,
   birthdayPoints: points,
   referrerBonus: points,
   refereeBonus: points,
-  expirationMonths: z.union([z.literal("never").transform(() => null), z.coerce.number().int().min(1).max(60)]),
-  tiers: tiersSchema,
+  expirationMonths: z.union([
+    z.literal("").transform(() => null),
+    z.coerce.number().int().min(1, "Use 1 to 60 months, or leave it blank").max(60, "Use 1 to 60 months, or leave it blank"),
+  ]),
 });
 
-export async function saveLoyaltySettings(formData: FormData): Promise<void> {
-  await requireOperator();
-  const tiers = [];
-  for (let i = 0; formData.has(`tier-name-${i}`); i++) {
-    const name = text(formData, `tier-name-${i}`);
-    if (!name) continue;
-    const row = tierRowSchema.safeParse({
-      name,
-      minPoints: text(formData, `tier-min-${i}`),
-      multiplierBps: text(formData, `tier-multiplier-${i}`),
-    });
-    if (!row.success) fail("/admin/loyalty/settings", row.error);
-    tiers.push(row.data);
-  }
-  const parsed = settingsSchema.safeParse({
-    programName: text(formData, "programName"),
-    pointsPerDollar: text(formData, "pointsPerDollar"),
-    signupBonus: text(formData, "signupBonus"),
-    birthdayPoints: text(formData, "birthdayPoints"),
-    referrerBonus: text(formData, "referrerBonus"),
-    refereeBonus: text(formData, "refereeBonus"),
-    expirationMonths: text(formData, "expirationMonths") || "never",
-    tiers,
-  });
-  if (!parsed.success) fail("/admin/loyalty/settings", parsed.error);
+const tierRow = (i: number) =>
+  z
+    .object({
+      [`tier-name-${i}`]: z.string().max(40),
+      [`tier-min-${i}`]: z.string().regex(/^\d+$/, "Enter the points this tier starts at").transform(Number),
+      [`tier-multiplier-${i}`]: multiplierBps,
+    })
+    .transform((row) => ({
+      name: row[`tier-name-${i}`] as string,
+      minPoints: row[`tier-min-${i}`] as number,
+      multiplierBps: row[`tier-multiplier-${i}`] as number,
+    }));
 
-  await getLoyaltySettings();
+export async function saveLoyaltySettings(_prev: LoyaltyFormState, formData: FormData): Promise<LoyaltyFormState> {
+  await requireOperator();
+  const fields = formFields(formData);
+  const settings = settingsForm.safeParse(fields);
+  if (!settings.success) return rejected(formData, settings.error);
+
+  const rows = [];
+  for (let i = 0; formData.has(`tier-name-${i}`); i++) {
+    if (!fields[`tier-name-${i}`]) continue; // a blank name removes the row
+    const row = tierRow(i).safeParse(fields);
+    if (!row.success) return rejected(formData, row.error);
+    rows.push(row.data);
+  }
+  const tiers = tiersSchema.safeParse(rows);
+  if (!tiers.success) return rejected(formData, tiers.error.issues[0].message);
+
+  const values = { ...settings.data, tiers: tiers.data, updatedAt: new Date() };
   await db
-    .update(loyaltySettings)
-    .set({ ...parsed.data, updatedAt: new Date() })
-    .where(eq(loyaltySettings.id, 1));
+    .insert(loyaltySettings)
+    .values({ id: 1, ...values })
+    .onConflictDoUpdate({ target: loyaltySettings.id, set: values });
   revalidateLoyalty();
-  redirect("/admin/loyalty/settings?saved=1");
+  return { notice: "Program settings saved." };
 }
 
 // ---------------------------------------------------------------------------
 // Rewards
 // ---------------------------------------------------------------------------
 
-const rewardSchema = z.object({
-  name: z.string().trim().min(1, "Name the reward").max(80),
-  description: z.string().trim().max(200).transform((d) => d || null),
-  pointsCost: z.coerce.number().int().min(1, "A reward costs at least 1 point").max(1_000_000),
-  sortOrder: z.coerce.number().int().min(0).max(1000),
-  isActive: z.boolean(),
-  effect: rewardEffectSchema,
+const rewardFields = z.object({
+  id: optionalId,
+  name: z.string().min(1, "Name the reward").max(80),
+  description: z
+    .string()
+    .max(200)
+    .transform((d) => d || null),
+  pointsCost: z.coerce
+    .number({ message: "Enter a whole number of points" })
+    .int("Enter a whole number of points")
+    .min(1, "A reward costs at least 1 point")
+    .max(1_000_000),
+  sortOrder: z.coerce.number().int().min(0).max(1000).catch(0),
+  isActive: checkbox,
 });
 
-function rewardEffectFromForm(fd: FormData) {
-  if (text(fd, "effectKind") === "free_item") {
-    const max = dollarsToCents.safeParse(text(fd, "maxValue"));
-    return {
-      kind: "free_item" as const,
-      categoryIds: fd.getAll("categoryIds").map(Number),
-      maxValueCents: max.success ? max.data : 0,
-    };
-  }
-  const off = dollarsToCents.safeParse(text(fd, "amountOff"));
-  return { kind: "amount_off" as const, amountOffCents: off.success ? off.data : 0 };
-}
+const rewardForm = z
+  .discriminatedUnion("effectKind", [
+    rewardFields.extend({ effectKind: z.literal("amount_off"), amountOff: dollarsToCents }),
+    rewardFields.extend({
+      effectKind: z.literal("free_item"),
+      maxValue: dollarsToCents,
+      categoryIds: z.array(z.coerce.number().int().positive()).min(1, "Pick at least one category"),
+    }),
+  ])
+  .transform((r) => ({
+    id: r.id,
+    name: r.name,
+    description: r.description,
+    pointsCost: r.pointsCost,
+    sortOrder: r.sortOrder,
+    isActive: r.isActive,
+    effect:
+      r.effectKind === "amount_off"
+        ? { kind: "amount_off" as const, amountOffCents: r.amountOff }
+        : { kind: "free_item" as const, categoryIds: r.categoryIds, maxValueCents: r.maxValue },
+  }));
 
-export async function saveReward(formData: FormData): Promise<void> {
+export async function saveReward(_prev: LoyaltyFormState, formData: FormData): Promise<LoyaltyFormState> {
   await requireOperator();
-  const parsed = rewardSchema.safeParse({
-    name: text(formData, "name"),
-    description: text(formData, "description"),
-    pointsCost: text(formData, "pointsCost"),
-    sortOrder: text(formData, "sortOrder") || "0",
-    isActive: formData.get("isActive") === "on",
-    effect: rewardEffectFromForm(formData),
-  });
-  if (!parsed.success) {
-    const issue = parsed.error.issues[0];
-    fail(
-      "/admin/loyalty/rewards",
-      issue?.path[0] === "effect"
-        ? "Set the discount amount, or pick at least one category and a maximum value."
-        : parsed.error,
-    );
-  }
+  const parsed = rewardForm.safeParse({ categoryIds: [], ...formFields(formData, ["categoryIds"]) });
+  if (!parsed.success) return rejected(formData, parsed.error);
+  const { id, ...reward } = parsed.data;
 
-  const id = Number.parseInt(text(formData, "id"), 10);
-  const existing = Number.isInteger(id) && id > 0 ? await getReward(id) : null;
-  if (existing) {
+  if (id === null) {
+    await db.insert(loyaltyRewards).values(reward);
+  } else {
+    const existing = await getReward(id);
+    if (!existing) return rejected(formData, "That reward was deleted. Refresh the page.");
     await db
       .update(loyaltyRewards)
-      .set({ ...parsed.data, ...repriceReward(existing, parsed.data.pointsCost, new Date()) })
+      .set({ ...reward, ...repriceReward(existing, reward.pointsCost, new Date()) })
       .where(eq(loyaltyRewards.id, id));
-  } else {
-    await db.insert(loyaltyRewards).values(parsed.data);
   }
   revalidateLoyalty();
-  redirect("/admin/loyalty/rewards?saved=1");
+  return { notice: id === null ? "Reward added." : "Reward saved." };
 }
 
 /**
@@ -198,8 +195,7 @@ export async function saveReward(formData: FormData): Promise<void> {
  */
 export async function deleteReward(formData: FormData): Promise<void> {
   await requireOperator();
-  const id = z.coerce.number().int().positive().parse(text(formData, "id"));
-  await db.delete(loyaltyRewards).where(eq(loyaltyRewards.id, id));
+  await db.delete(loyaltyRewards).where(eq(loyaltyRewards.id, idField(formData, "id")));
   revalidateLoyalty();
 }
 
@@ -212,44 +208,45 @@ const isoDate = z
   .regex(/^(\d{4}-\d{2}-\d{2})?$/, "Use a full date")
   .transform((d) => d || null);
 
-const promotionSchema = z
+const promotionForm = z
   .object({
-    name: z.string().trim().min(1, "Name the promotion").max(80),
-    multiplierBps,
+    id: optionalId,
+    name: z.string().min(1, "Name the promotion").max(80),
+    multiplier: multiplierBps.refine((bps) => bps > 10_000, "A promotion must multiply points by more than 1x"),
     daysOfWeek: z.array(z.coerce.number().int().min(0).max(6)),
     startsOn: isoDate,
     endsOn: isoDate,
-    isActive: z.boolean(),
+    isActive: checkbox,
   })
-  .refine((p) => p.multiplierBps > 10_000, "A promotion must multiply points by more than 1x")
-  .refine((p) => !p.startsOn || !p.endsOn || p.startsOn <= p.endsOn, "The end date is before the start date");
-
-export async function savePromotion(formData: FormData): Promise<void> {
-  await requireOperator();
-  const parsed = promotionSchema.safeParse({
-    name: text(formData, "name"),
-    multiplierBps: text(formData, "multiplier"),
-    daysOfWeek: formData.getAll("daysOfWeek"),
-    startsOn: text(formData, "startsOn"),
-    endsOn: text(formData, "endsOn"),
-    isActive: formData.get("isActive") === "on",
+  .refine((p) => !p.startsOn || !p.endsOn || p.startsOn <= p.endsOn, {
+    message: "The end date is before the start date",
+    path: ["endsOn"],
   });
-  if (!parsed.success) fail("/admin/loyalty/promotions", parsed.error);
 
-  const id = Number.parseInt(text(formData, "id"), 10);
-  if (Number.isInteger(id) && id > 0) {
-    await db.update(loyaltyPromotions).set(parsed.data).where(eq(loyaltyPromotions.id, id));
+export async function savePromotion(_prev: LoyaltyFormState, formData: FormData): Promise<LoyaltyFormState> {
+  await requireOperator();
+  const parsed = promotionForm.safeParse({ daysOfWeek: [], ...formFields(formData, ["daysOfWeek"]) });
+  if (!parsed.success) return rejected(formData, parsed.error);
+  const { id, multiplier, ...promo } = parsed.data;
+  const values = { ...promo, multiplierBps: multiplier };
+
+  if (id === null) {
+    await db.insert(loyaltyPromotions).values(values);
   } else {
-    await db.insert(loyaltyPromotions).values(parsed.data);
+    const updated = await db
+      .update(loyaltyPromotions)
+      .set(values)
+      .where(eq(loyaltyPromotions.id, id))
+      .returning({ id: loyaltyPromotions.id });
+    if (updated.length === 0) return rejected(formData, "That promotion was deleted. Refresh the page.");
   }
   revalidateLoyalty();
-  redirect("/admin/loyalty/promotions?saved=1");
+  return { notice: id === null ? "Promotion added." : "Promotion saved." };
 }
 
 export async function deletePromotion(formData: FormData): Promise<void> {
   await requireOperator();
-  const id = z.coerce.number().int().positive().parse(text(formData, "id"));
-  await db.delete(loyaltyPromotions).where(eq(loyaltyPromotions.id, id));
+  await db.delete(loyaltyPromotions).where(eq(loyaltyPromotions.id, idField(formData, "id")));
   revalidateLoyalty();
 }
 
@@ -257,77 +254,59 @@ export async function deletePromotion(formData: FormData): Promise<void> {
 // Members
 // ---------------------------------------------------------------------------
 
-const adjustSchema = z.object({
+const adjustForm = z.object({
   memberId: z.coerce.number().int().positive(),
   points: z.coerce
     .number({ message: "Enter a whole number of points" })
     .int("Enter a whole number of points")
     .refine((p) => p !== 0, "Enter a number of points other than 0")
     .refine((p) => Math.abs(p) <= 100_000, "That's more than 100,000 points"),
-  reason: z.string().trim().min(1, "Give a reason for the adjustment").max(200),
+  reason: z.string().min(1, "Give a reason for the adjustment").max(200),
 });
 
-export async function adjustPoints(formData: FormData): Promise<void> {
+export async function adjustPoints(_prev: LoyaltyFormState, formData: FormData): Promise<LoyaltyFormState> {
   const operator = await requireOperator();
-  const memberPath = `/admin/loyalty/members/${text(formData, "memberId")}`;
-  const parsed = adjustSchema.safeParse({
-    memberId: text(formData, "memberId"),
-    points: text(formData, "points"),
-    reason: text(formData, "reason"),
-  });
-  if (!parsed.success) fail(memberPath, parsed.error);
-
+  const parsed = adjustForm.safeParse(formFields(formData));
+  if (!parsed.success) return rejected(formData, parsed.error);
   try {
-    await db.batch([
-      ledgerStatement({
-        kind: "adjust",
-        idemKey: ledgerKey.adjust(),
-        from: { memberId: parsed.data.memberId, points: parsed.data.points },
-        note: parsed.data.reason,
-        operatorId: operator.id,
-      }),
-    ]);
+    await ledgerStatement({
+      kind: "adjust",
+      idemKey: ledgerKey.adjust(),
+      from: { memberId: parsed.data.memberId, points: parsed.data.points },
+      note: parsed.data.reason,
+      operatorId: operator.id,
+    });
   } catch (err) {
-    if (isInsufficientPoints(err)) fail(memberPath, "That would take the balance below zero.");
+    if (isInsufficientPoints(err)) return rejected(formData, "That would take the balance below zero.");
     throw err;
   }
   revalidateLoyalty();
-  redirect(`${memberPath}?saved=adjusted`);
+  return { notice: "Points adjusted." };
 }
 
 /** Gives back points that expired in the last 30 days; once per expiry. */
 export async function restoreExpired(formData: FormData): Promise<void> {
   const operator = await requireOperator();
-  const entryId = z.coerce.number().int().positive().parse(text(formData, "entryId"));
-  const memberId = z.coerce.number().int().positive().parse(text(formData, "memberId"));
-  await restoreExpiry(entryId, operator.id);
+  await restoreExpiry(idField(formData, "entryId"), operator.id);
   revalidateLoyalty();
-  redirect(`/admin/loyalty/members/${memberId}?saved=restored`);
 }
 
 /** Same key as the automatic grant, so it can't pay twice in a year. */
-export async function issueBirthdayBonus(formData: FormData): Promise<void> {
+export async function issueBirthdayBonus(_prev: LoyaltyFormState, formData: FormData): Promise<LoyaltyFormState> {
   const operator = await requireOperator();
-  const memberId = z.coerce.number().int().positive().parse(text(formData, "memberId"));
-  const memberPath = `/admin/loyalty/members/${memberId}`;
-  const settings = await getLoyaltySettings();
-  const idemKey = ledgerKey.birthday(memberId, localYearMonth(new Date(), (await getSettings()).timezone).year);
-  const [already] = await db
-    .select({ id: loyaltyLedger.id })
-    .from(loyaltyLedger)
-    .where(eq(loyaltyLedger.idemKey, idemKey));
-  if (already) fail(memberPath, "This year's birthday bonus was already issued.");
-  await db.batch([
-    ledgerStatement({
-      kind: "birthday",
-      idemKey,
-      from: { memberId, points: settings.birthdayPoints },
-      note: "Issued by the store",
-      operatorId: operator.id,
-    }),
-  ]);
+  const memberId = idField(formData, "memberId");
+  const year = localYearMonth(new Date(), (await getSettings()).timezone).year;
+  const { rowCount } = await ledgerStatement({
+    kind: "birthday",
+    idemKey: ledgerKey.birthday(memberId, year),
+    from: sql`select ${memberId}::int as member_id, ${loyaltySettings.birthdayPoints} as points
+              from ${loyaltySettings} where ${loyaltySettings.id} = 1`,
+    note: "Issued by the store",
+    operatorId: operator.id,
+  });
+  if (rowCount === 0) return rejected(formData, "This year's birthday bonus was already issued.");
   revalidateLoyalty();
-  redirect(`${memberPath}?saved=birthday-issued`);
+  return { notice: "Birthday bonus issued." };
 }
 
 const CLAIM_ERRORS = {
@@ -336,32 +315,40 @@ const CLAIM_ERRORS = {
   already_linked: "That order already belongs to a member.",
 } as const;
 
-export async function addMissingOrder(formData: FormData): Promise<void> {
+const ORDER_NUMBER = "Enter an order number, like 1042.";
+
+const claimForm = z.object({
+  memberId: z.coerce.number().int().positive(),
+  orderNumber: z
+    .string()
+    .transform((n) => n.replace(/^#/, ""))
+    .transform(Number)
+    .pipe(z.number({ message: ORDER_NUMBER }).int(ORDER_NUMBER).positive(ORDER_NUMBER)),
+});
+
+export async function addMissingOrder(_prev: LoyaltyFormState, formData: FormData): Promise<LoyaltyFormState> {
   await requireOperator();
-  const memberId = z.coerce.number().int().positive().parse(text(formData, "memberId"));
-  const memberPath = `/admin/loyalty/members/${memberId}`;
-  const orderNumber = z.coerce.number().int().positive().safeParse(text(formData, "orderNumber").replace(/^#/, ""));
-  if (!orderNumber.success) fail(memberPath, "Enter an order number, like 1042.");
-  const result = await claimOrderByNumber(memberId, orderNumber.data);
-  if (result !== "claimed") fail(memberPath, CLAIM_ERRORS[result]);
+  const parsed = claimForm.safeParse(formFields(formData));
+  if (!parsed.success) return rejected(formData, parsed.error);
+  const result = await claimOrderByNumber(parsed.data.memberId, parsed.data.orderNumber);
+  if (result !== "claimed") return rejected(formData, CLAIM_ERRORS[result]);
   revalidateLoyalty();
-  redirect(`${memberPath}?saved=claimed`);
+  return { notice: "Order added and its points posted." };
 }
 
-export async function saveMemberBirthday(formData: FormData): Promise<void> {
+export async function saveMemberBirthday(_prev: LoyaltyFormState, formData: FormData): Promise<LoyaltyFormState> {
   await requireOperator();
-  const memberId = z.coerce.number().int().positive().parse(text(formData, "memberId"));
-  const birthday = birthdaySchema.safeParse({ month: text(formData, "month"), day: text(formData, "day") });
-  if (!birthday.success) fail(`/admin/loyalty/members/${memberId}`, birthday.error);
-  const { month, day } = birthday.data;
+  const memberId = idField(formData, "memberId");
+  const parsed = birthdaySchema.safeParse(formFields(formData));
+  if (!parsed.success) return rejected(formData, parsed.error);
   await db
     .update(loyaltyMembers)
     .set({
-      birthMonth: month,
-      birthDay: day,
+      birthMonth: parsed.data.month,
+      birthDay: parsed.data.day,
       birthdaySetAt: sql`coalesce(${loyaltyMembers.birthdaySetAt}, now())`,
     })
     .where(eq(loyaltyMembers.id, memberId));
   revalidateLoyalty();
-  redirect(`/admin/loyalty/members/${memberId}?saved=birthday`);
+  return { notice: "Birthday saved." };
 }

@@ -234,7 +234,7 @@ async function main() {
   await op.goto(`${BASE}/admin/loyalty/settings`, { waitUntil: "networkidle" });
   await op.getByLabel("Birthday points").fill("750");
   await op.getByRole("button", { name: "Save program settings" }).click();
-  await op.waitForURL(/saved=1/);
+  await op.getByTestId("form-notice").waitFor();
   const [settingsRow] = await db.select().from(loyaltySettings);
   check("settings save the birthday points", settingsRow.birthdayPoints === 750, String(settingsRow.birthdayPoints));
   check(
@@ -249,7 +249,7 @@ async function main() {
   await promoForm.getByLabel(/Starts/).fill("2026-01-01");
   await promoForm.getByLabel(/Ends/).fill("2026-01-31");
   await promoForm.getByRole("button", { name: "Add promotion" }).click();
-  await op.waitForURL(/saved=1/);
+  await op.getByTestId("form-notice").waitFor();
   const [promo] = await db.select().from(loyaltyPromotions);
   check(
     "operator adds a dated 2x promotion",
@@ -491,7 +491,7 @@ async function main() {
   await op.getByLabel(/^Points/).fill("50");
   await op.getByLabel("Reason").fill("Late delivery");
   await op.getByRole("button", { name: "Adjust points" }).click();
-  await op.waitForURL(/saved=adjusted/);
+  await op.getByTestId("form-notice").waitFor();
   const [adj] = await db
     .select()
     .from(loyaltyLedger)
@@ -521,7 +521,7 @@ async function main() {
   check("expired member has 0 points", (await member(BEN.digits)).pointsBalance === 0);
   await op.goto(`${BASE}/admin/loyalty/members/${benMember.id}`, { waitUntil: "networkidle" });
   await op.getByRole("button", { name: "Restore" }).click();
-  await op.waitForURL(/saved=restored/);
+  await op.getByRole("button", { name: "Restore" }).waitFor({ state: "detached" });
   check("operator restores expired points in one click", (await member(BEN.digits)).pointsBalance === 699);
   check("restore button is replaced once used", (await op.getByRole("button", { name: "Restore" }).count()) === 0);
   await refreshMember(benMember.id);
@@ -582,7 +582,7 @@ async function main() {
   await op.goto(`${BASE}/admin/loyalty/members/${caraMember.id}`, { waitUntil: "networkidle" });
   await op.getByLabel("Order number").fill(String(otherPhone.orderNumber));
   await op.getByRole("button", { name: "Add order" }).click();
-  await op.waitForURL(/saved=claimed/);
+  await op.getByTestId("form-notice").waitFor();
   check(
     "operator adds a missing order by number",
     (await entries(caraMember.id)).filter((e) => e.kind === "earn").length === 2 &&
@@ -599,7 +599,7 @@ async function main() {
   // --- Operator-issued birthday bonus --------------------------------------
   await op.goto(`${BASE}/admin/loyalty/members/${caraMember.id}`, { waitUntil: "networkidle" });
   await op.getByRole("button", { name: /^Issue birthday bonus/ }).click();
-  await op.waitForURL(/saved=birthday-issued/);
+  await op.getByTestId("form-notice").waitFor();
   const caraBirthday = (await entries(caraMember.id)).filter((e) => e.kind === "birthday");
   check(
     "operator issues a birthday bonus",
@@ -622,7 +622,7 @@ async function main() {
     (await threeOffForm.getByTestId("price-note").textContent())?.startsWith("Customers keep paying 300 points for 60 days") === true,
   );
   await threeOffForm.getByRole("button", { name: "Save" }).click();
-  await op.waitForURL(/saved=1/);
+  await op.getByTestId("form-notice").waitFor();
   const [raised] = await db.select().from(loyaltyRewards).where(eq(loyaltyRewards.id, threeOff.id));
   const protectedDays = (raised.priceProtectedUntil!.getTime() - Date.now()) / 86_400_000;
   check(
@@ -642,7 +642,7 @@ async function main() {
   await threeOffForm.getByLabel("Points").fill("250");
   check("a cut is applied right away", (await threeOffForm.getByTestId("price-note").textContent()) === "Lower prices apply right away.");
   await threeOffForm.getByRole("button", { name: "Save" }).click();
-  await op.waitForURL(/saved=1/);
+  await op.getByTestId("form-notice").waitFor();
   const [cut] = await db.select().from(loyaltyRewards).where(eq(loyaltyRewards.id, threeOff.id));
   check("a cut clears protection", cut.pointsCost === 250 && cut.previousPointsCost === null && cut.priceProtectedUntil === null);
 
@@ -652,7 +652,7 @@ async function main() {
   await op.getByLabel("Tier 2 minimum points").fill("4000");
   await op.getByLabel("Tier 2 multiplier").fill("1.2");
   await op.getByRole("button", { name: "Save program settings" }).click();
-  await op.waitForURL(/saved=1/);
+  await op.getByTestId("form-notice").waitFor();
   const [tiered] = await db.select().from(loyaltySettings);
   check(
     "tiers editor adds a tier",

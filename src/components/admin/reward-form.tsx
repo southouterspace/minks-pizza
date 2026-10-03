@@ -1,38 +1,45 @@
 "use client";
 
 import { useState } from "react";
-import { PRICE_PROTECTION_DAYS, type RewardEffect } from "@/lib/loyalty";
+import { PRICE_PROTECTION_DAYS } from "@/lib/loyalty";
+import type { LoyaltyReward } from "@/lib/loyalty-server";
 import { saveReward } from "@/app/admin/loyalty/actions";
 import { centsToDollars } from "@/lib/money";
+import { FieldMessage, FormStatus, useLoyaltyForm } from "@/components/admin/loyalty-form";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Field, FieldLabel } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import { NativeSelect, NativeSelectOption } from "@/components/ui/native-select";
 
-export type RewardFormValue = {
-  id: number;
-  name: string;
-  description: string | null;
-  pointsCost: number;
-  sortOrder: number;
-  isActive: boolean;
-  effect: RewardEffect;
-  /** What customers pay today, which may be a protected older price. */
-  price: { cost: number };
-};
+export type RewardFormValue = Pick<
+  LoyaltyReward,
+  "id" | "name" | "description" | "pointsCost" | "sortOrder" | "isActive" | "effect" | "price"
+>;
 
-export function RewardForm({
-  reward,
-  categories,
-  submitLabel,
-}: {
+export function RewardForm(props: {
   reward: RewardFormValue | null;
   categories: { id: number; name: string }[];
   submitLabel: string;
 }) {
-  const [kind, setKind] = useState<RewardEffect["kind"]>(reward?.effect.kind ?? "amount_off");
-  const [cost, setCost] = useState(reward ? String(reward.pointsCost) : "");
+  const form = useLoyaltyForm(saveReward);
+  return <RewardFields key={form.key} form={form} {...props} />;
+}
+
+function RewardFields({
+  form,
+  reward,
+  categories,
+  submitLabel,
+}: {
+  form: ReturnType<typeof useLoyaltyForm>;
+  reward: RewardFormValue | null;
+  categories: { id: number; name: string }[];
+  submitLabel: string;
+}) {
+  const { text, checked, error } = form;
+  const [kind, setKind] = useState(text("effectKind", reward?.effect.kind ?? "amount_off"));
+  const [cost, setCost] = useState(text("pointsCost", reward?.pointsCost));
   const newCost = Number.parseInt(cost, 10);
   const today = reward?.price.cost;
   const costNote =
@@ -45,12 +52,13 @@ export function RewardForm({
   const prefix = reward ? `r${reward.id}` : "new";
 
   return (
-    <form action={saveReward} className="space-y-4" data-testid={reward ? `reward-form-${reward.id}` : "reward-form-new"}>
+    <form action={form.formAction} className="space-y-4" data-testid={reward ? `reward-form-${reward.id}` : "reward-form-new"}>
       {reward ? <input type="hidden" name="id" value={reward.id} /> : null}
       <div className="grid gap-4 sm:grid-cols-[1fr_120px]">
         <Field>
           <FieldLabel htmlFor={`${prefix}-name`}>Name</FieldLabel>
-          <Input id={`${prefix}-name`} name="name" required maxLength={80} defaultValue={reward?.name} />
+          <Input id={`${prefix}-name`} name="name" required maxLength={80} defaultValue={text("name", reward?.name)} />
+          <FieldMessage message={error("name")} />
         </Field>
         <Field>
           <FieldLabel htmlFor={`${prefix}-cost`}>Points</FieldLabel>
@@ -63,6 +71,7 @@ export function RewardForm({
             value={cost}
             onChange={(e) => setCost(e.target.value)}
           />
+          <FieldMessage message={error("pointsCost")} />
         </Field>
       </div>
       {costNote ? (
@@ -72,7 +81,7 @@ export function RewardForm({
       ) : null}
       <Field>
         <FieldLabel htmlFor={`${prefix}-desc`}>Description</FieldLabel>
-        <Input id={`${prefix}-desc`} name="description" maxLength={200} defaultValue={reward?.description ?? ""} />
+        <Input id={`${prefix}-desc`} name="description" maxLength={200} defaultValue={text("description", reward?.description)} />
       </Field>
       <div className="grid gap-4 sm:grid-cols-2">
         <Field>
@@ -81,7 +90,7 @@ export function RewardForm({
             id={`${prefix}-kind`}
             name="effectKind"
             value={kind}
-            onChange={(e) => setKind(e.target.value as RewardEffect["kind"])}
+            onChange={(e) => setKind(e.target.value)}
             className="w-full"
           >
             <NativeSelectOption value="amount_off">Dollars off the order</NativeSelectOption>
@@ -98,8 +107,9 @@ export function RewardForm({
               min="0.01"
               step="0.01"
               required
-              defaultValue={effect?.kind === "amount_off" ? centsToDollars(effect.amountOffCents) : ""}
+              defaultValue={text("amountOff", effect?.kind === "amount_off" ? centsToDollars(effect.amountOffCents) : "")}
             />
+            <FieldMessage message={error("amountOff")} />
           </Field>
         ) : (
           <Field>
@@ -111,8 +121,9 @@ export function RewardForm({
               min="0.01"
               step="0.01"
               required
-              defaultValue={effect?.kind === "free_item" ? centsToDollars(effect.maxValueCents) : ""}
+              defaultValue={text("maxValue", effect?.kind === "free_item" ? centsToDollars(effect.maxValueCents) : "")}
             />
+            <FieldMessage message={error("maxValue")} />
           </Field>
         )}
       </div>
@@ -125,25 +136,31 @@ export function RewardForm({
                 <Checkbox
                   name="categoryIds"
                   value={String(c.id)}
-                  defaultChecked={effect?.kind === "free_item" && effect.categoryIds.includes(c.id)}
+                  defaultChecked={checked(
+                    "categoryIds",
+                    effect?.kind === "free_item" && effect.categoryIds.includes(c.id),
+                    String(c.id),
+                  )}
                 />
                 {c.name}
               </label>
             ))}
           </div>
+          <FieldMessage message={error("categoryIds")} />
         </fieldset>
       ) : null}
       <div className="flex flex-wrap items-center gap-5">
         <Field orientation="horizontal" className="w-auto!">
           <FieldLabel htmlFor={`${prefix}-sort`} className="whitespace-nowrap">Sort order</FieldLabel>
-          <Input id={`${prefix}-sort`} name="sortOrder" type="number" min={0} className="w-20" defaultValue={reward?.sortOrder ?? 0} />
+          <Input id={`${prefix}-sort`} name="sortOrder" type="number" min={0} className="w-20" defaultValue={text("sortOrder", reward?.sortOrder ?? 0)} />
         </Field>
         <label className="flex items-center gap-2 text-sm">
-          <Checkbox name="isActive" defaultChecked={reward?.isActive ?? true} />
+          <Checkbox name="isActive" defaultChecked={checked("isActive", reward?.isActive ?? true)} />
           Active
         </label>
-        <Button type="submit" className="ml-auto h-9!">{submitLabel}</Button>
+        <Button type="submit" className="ml-auto h-9!" disabled={form.pending}>{submitLabel}</Button>
       </div>
+      <FormStatus state={form.state} />
     </form>
   );
 }
