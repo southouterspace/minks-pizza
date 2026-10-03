@@ -1,8 +1,9 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { eq } from "drizzle-orm";
-import { db, orderItems, orders } from "@/db";
+import { and, desc, eq, notInArray } from "drizzle-orm";
+import { courierDeliveries, db, orderItems, orders } from "@/db";
+import { COURIER_STATUS_LABEL, TERMINAL_COURIER_STATUSES } from "@/lib/delivery/types";
 import { formatCents } from "@/lib/money";
 import { getSettings } from "@/lib/orders";
 import { OrderAutoRefresh } from "@/components/store/order-auto-refresh";
@@ -65,6 +66,17 @@ export default async function OrderPage({
     .from(orderItems)
     .where(eq(orderItems.orderId, order.id));
   const settings = await getSettings();
+  const [courier] = await db
+    .select()
+    .from(courierDeliveries)
+    .where(
+      and(
+        eq(courierDeliveries.orderId, order.id),
+        notInArray(courierDeliveries.status, [...TERMINAL_COURIER_STATUSES]),
+      ),
+    )
+    .orderBy(desc(courierDeliveries.createdAt))
+    .limit(1);
 
   const stepIndex = STATUS_STEPS.indexOf(
     order.status as (typeof STATUS_STEPS)[number],
@@ -96,6 +108,31 @@ export default async function OrderPage({
             />
           ))}
         </ol>
+      ) : null}
+
+      {courier ? (
+        <Card className="mt-6">
+          <CardContent className="flex flex-wrap items-center justify-between gap-3 text-sm">
+            <div>
+              <p className="font-medium">{COURIER_STATUS_LABEL[courier.status]}</p>
+              {courier.courierName ? (
+                <p className="mt-1 text-muted-foreground">
+                  Your driver is {courier.courierName}.
+                </p>
+              ) : null}
+            </div>
+            {courier.trackingUrl ? (
+              <a
+                href={courier.trackingUrl}
+                target="_blank"
+                rel="noreferrer"
+                className={buttonVariants({ variant: "outline" })}
+              >
+                Track your driver
+              </a>
+            ) : null}
+          </CardContent>
+        </Card>
       ) : null}
 
       {order.orderType === "pickup" && settings.addressLine1 ? (

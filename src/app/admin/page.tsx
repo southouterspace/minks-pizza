@@ -1,8 +1,9 @@
 import type { Metadata } from "next";
 import { desc, inArray } from "drizzle-orm";
 import { Inbox } from "lucide-react";
-import { db, orders } from "@/db";
+import { courierDeliveries, db, orders } from "@/db";
 import { requireOperator } from "@/lib/auth";
+import { courierProviders } from "@/lib/delivery/providers";
 import { formatCents } from "@/lib/money";
 import { AutoRefresh } from "@/components/admin/auto-refresh";
 import {
@@ -29,9 +30,13 @@ export default async function OrdersPage() {
 
   const activeOrders: AdminOrder[] = await db.query.orders.findMany({
     where: inArray(orders.status, ["new", "confirmed", "preparing", "ready"]),
-    with: { items: true },
+    with: {
+      items: true,
+      courierDeliveries: { orderBy: [desc(courierDeliveries.createdAt)], limit: 1 },
+    },
     orderBy: [desc(orders.placedAt)],
   });
+  const couriers = courierProviders().map((p) => ({ id: p.id, label: p.label }));
 
   const recentOrders = await db
     .select()
@@ -67,7 +72,7 @@ export default async function OrdersPage() {
         ) : (
           <div className="mt-3 space-y-4">
             {activeOrders.map((order) => (
-              <OrderCard key={order.id} order={order} />
+              <OrderCard key={order.id} order={order} courierProviders={couriers} />
             ))}
           </div>
         )}

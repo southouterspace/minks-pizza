@@ -1,6 +1,12 @@
 import type { InferSelectModel } from "drizzle-orm";
-import type { orderItems, orders } from "@/db";
+import type { courierDeliveries, orderItems, orders } from "@/db";
 import { updateOrderStatus } from "@/app/admin/actions";
+import {
+  COURIER_PROVIDER_LABEL,
+  COURIER_STATUS_LABEL,
+  isTerminal,
+  type CourierProviderId,
+} from "@/lib/delivery/types";
 import { formatCents } from "@/lib/money";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -13,11 +19,18 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { ConfirmButton } from "./confirm-button";
+import { CancelCourierForm, RequestCourierForm } from "./courier-forms";
 import { formatDateTime } from "./ui";
+
+type CourierDelivery = InferSelectModel<typeof courierDeliveries>;
 
 export type AdminOrder = InferSelectModel<typeof orders> & {
   items: InferSelectModel<typeof orderItems>[];
+  /** The latest one only. */
+  courierDeliveries: CourierDelivery[];
 };
+
+export type CourierOption = { id: CourierProviderId; label: string };
 
 type OrderStatus = AdminOrder["status"];
 type BadgeVariant = "default" | "secondary" | "destructive" | "outline";
@@ -56,6 +69,13 @@ const NEXT_ACTION: Partial<
 };
 
 const CANCELABLE: readonly OrderStatus[] = ["new", "confirmed"];
+
+const SOURCE_LABEL: Record<AdminOrder["source"], string> = {
+  web: "Web",
+  doordash: "DoorDash",
+  ubereats: "Uber Eats",
+  grubhub: "Grubhub",
+};
 
 export function StatusBadge({ status }: { status: OrderStatus }) {
   const meta = STATUS_META[status];
@@ -111,7 +131,75 @@ function TotalRow({
   );
 }
 
-export function OrderCard({ order }: { order: AdminOrder }) {
+function CourierRow({
+  orderId,
+  delivery,
+  providers,
+}: {
+  orderId: string;
+  delivery: CourierDelivery | undefined;
+  providers: CourierOption[];
+}) {
+  const live = delivery && !isTerminal(delivery.status);
+  if (!delivery && providers.length === 0) return null;
+
+  return (
+    <div className="mt-3 flex flex-wrap items-center gap-x-3 gap-y-2 rounded-lg border px-3 py-2 text-xs">
+      {delivery ? (
+        <>
+          <span className="font-medium">{COURIER_PROVIDER_LABEL[delivery.provider]}</span>
+          <Badge
+            variant={
+              delivery.status === "canceled" || delivery.status === "returned"
+                ? "destructive"
+                : "secondary"
+            }
+          >
+            {COURIER_STATUS_LABEL[delivery.status]}
+          </Badge>
+          {delivery.feeCents !== null ? (
+            <span className="tabular-nums text-muted-foreground">
+              {formatCents(delivery.feeCents)} fee
+            </span>
+          ) : null}
+          {delivery.courierName ? (
+            <span>
+              {delivery.courierName}
+              {delivery.courierPhone ? (
+                <span className="text-muted-foreground"> · {delivery.courierPhone}</span>
+              ) : null}
+            </span>
+          ) : null}
+          {delivery.trackingUrl ? (
+            <a
+              href={delivery.trackingUrl}
+              target="_blank"
+              rel="noreferrer"
+              className="underline underline-offset-2"
+            >
+              Track
+            </a>
+          ) : null}
+        </>
+      ) : null}
+      <div className="ml-auto">
+        {live ? (
+          <CancelCourierForm deliveryId={delivery.id} />
+        ) : providers.length > 0 ? (
+          <RequestCourierForm orderId={orderId} providers={providers} />
+        ) : null}
+      </div>
+    </div>
+  );
+}
+
+export function OrderCard({
+  order,
+  courierProviders,
+}: {
+  order: AdminOrder;
+  courierProviders: CourierOption[];
+}) {
   const next = NEXT_ACTION[order.status];
   const cancelable = CANCELABLE.includes(order.status);
   const isDelivery = order.orderType === "delivery";
@@ -128,6 +216,12 @@ export function OrderCard({ order }: { order: AdminOrder }) {
             {isDelivery ? "Delivery" : "Pickup"}
           </Badge>
           <PaymentPill status={order.paymentStatus} />
+          {order.source !== "web" ? (
+            <Badge variant="outline">
+              {SOURCE_LABEL[order.source]}
+              {order.sourceDisplayId ? ` · ${order.sourceDisplayId}` : ""}
+            </Badge>
+          ) : null}
         </CardTitle>
         <CardAction className="text-xs text-muted-foreground">
           {formatDateTime(order.placedAt)}
@@ -187,6 +281,14 @@ export function OrderCard({ order }: { order: AdminOrder }) {
             <span className="font-medium text-foreground">Order note:</span>{" "}
             {order.orderNotes}
           </p>
+        ) : null}
+
+        {isDelivery && order.source === "web" ? (
+          <CourierRow
+            orderId={order.id}
+            delivery={order.courierDeliveries[0]}
+            providers={courierProviders}
+          />
         ) : null}
       </CardContent>
 
