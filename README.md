@@ -179,13 +179,56 @@ minimums, and recomputes every price at order time.
   `src/app/(store)/actions.ts` already returns a structured result to which a
   client secret can be added.
 
+## Delivery integrations
+
+The store can send a courier to a delivery order placed on our site. Uber
+Direct is the production path. DoorDash Drive works in its sandbox only,
+because DoorDash has closed production access. Orders placed on the
+marketplaces themselves still arrive on their tablets. The schema and
+`src/lib/marketplace.ts` are ready for them, but each marketplace API needs a
+partner agreement first. See `docs/delivery-platforms-research.md` for the
+API details and the reasoning.
+
+The schema changed, so run `npm run db:push` after pulling. The migration is
+additive: three new enums, `orders.source` and two id columns, and the
+`courier_deliveries` and `integration_events` tables.
+
+A provider appears in the orders inbox only when all of its required variables
+are set. Each active web delivery order then gets a "Request courier" button,
+and a live courier shows its status, fee, driver and tracking link with a
+"Cancel courier" button. The customer's order page shows the courier status
+and a tracking link while a courier is on the way.
+
+| Variable | Purpose |
+|---|---|
+| `UBER_DIRECT_CUSTOMER_ID` | Customer ID from the direct.uber.com Developer tab |
+| `UBER_DIRECT_CLIENT_ID` | OAuth client ID |
+| `UBER_DIRECT_CLIENT_SECRET` | OAuth client secret |
+| `UBER_DIRECT_WEBHOOK_SIGNING_KEY` | The signing key shown when you create the webhook. It is not the client secret. |
+| `UBER_DIRECT_TOKEN_URL` | Optional. Defaults to `https://auth.uber.com/oauth/v2/token`. |
+| `UBER_DIRECT_SANDBOX` | Set to `1` to have Uber's robo courier drive each delivery |
+| `DOORDASH_DRIVE_DEVELOPER_ID` | Developer ID from the DoorDash developer portal |
+| `DOORDASH_DRIVE_KEY_ID` | Access key ID |
+| `DOORDASH_DRIVE_SIGNING_SECRET` | Access key signing secret, base64 as the portal shows it |
+| `DOORDASH_DRIVE_WEBHOOK_AUTH` | The exact `Authorization` header value you configure for webhooks in the portal |
+
+Point each provider's status webhook at:
+
+- `https://<your domain>/api/webhooks/couriers/uber_direct`
+- `https://<your domain>/api/webhooks/couriers/doordash_drive`
+
+The endpoint records each event in `integration_events` before applying it,
+so provider retries are harmless. A failed event keeps its error on that row.
+`npm test` runs the adapter and domain unit tests.
+
 ## Project layout
 
 ```
 src/
   db/            schema.ts (Drizzle), seed.ts, index.ts (client)
   lib/           menu.ts, orders.ts (pricing + creation), auth.ts, validation.ts,
-                 kds.ts (kitchen display rules, pure), kds-server.ts (queries + actions)
+                 kds.ts (kitchen display rules, pure), kds-server.ts (queries + actions),
+                 delivery/ (courier providers and dispatch), marketplace.ts (marketplace order seam)
   app/(store)/   customer storefront (menu, cart, checkout, order status)
   app/admin/     operator dashboard (orders, menu, modifiers, settings, team)
   app/kitchen/   kitchen display (KDS); data via app/api/kds
