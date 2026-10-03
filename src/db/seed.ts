@@ -7,6 +7,7 @@
 import { neon } from "@neondatabase/serverless";
 import { drizzle } from "drizzle-orm/neon-http";
 import * as schema from "./schema";
+import { seedInventory } from "./seed-inventory";
 import { databaseUrl } from "./url";
 
 const sql = neon(databaseUrl());
@@ -49,13 +50,15 @@ async function main() {
   const existing = await db.select().from(schema.categories);
   if (existing.length > 0) {
     console.log("Menu already seeded — skipping.");
+    const added = await seedInventory(db);
+    console.log(`Inventory: ${added.ingredients} ingredients and ${added.recipeLines} recipe lines added.`);
     return;
   }
 
   // --- Modifier groups -----------------------------------------------------
   const [sizeGroup] = await db
     .insert(schema.modifierGroups)
-    .values({ name: "Size", minSelect: 1, maxSelect: 1, sortOrder: 0 })
+    .values({ name: "Size", kind: "size", minSelect: 1, maxSelect: 1, sortOrder: 0 })
     .returning();
   const [crustGroup] = await db
     .insert(schema.modifierGroups)
@@ -63,7 +66,7 @@ async function main() {
     .returning();
   const [toppingsGroup] = await db
     .insert(schema.modifierGroups)
-    .values({ name: "Extra Toppings", minSelect: 0, maxSelect: null, sortOrder: 2 })
+    .values({ name: "Extra Toppings", kind: "toppings", minSelect: 0, maxSelect: null, sortOrder: 2 })
     .returning();
   const [wingSauceGroup] = await db
     .insert(schema.modifierGroups)
@@ -161,7 +164,10 @@ async function main() {
     { itemId: byName["House Salad"].id, groupId: dressingGroup.id, sortOrder: 0 },
   ]);
 
-  console.log("Seeded store settings + starter menu.");
+  const added = await seedInventory(db);
+  console.log(
+    `Seeded store settings + starter menu, ${added.ingredients} ingredients and ${added.recipeLines} recipe lines.`,
+  );
 }
 
 main().then(

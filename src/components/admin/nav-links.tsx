@@ -3,8 +3,10 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import {
+  ChartColumn,
   ClipboardList,
   History,
+  Package,
   Settings,
   SlidersHorizontal,
   Users,
@@ -22,6 +24,8 @@ const LINKS = [
     exact: false,
     icon: SlidersHorizontal,
   },
+  { href: "/admin/inventory", label: "Inventory", exact: false, icon: Package },
+  { href: "/admin/reports", label: "Reports", exact: false, icon: ChartColumn },
   { href: "/admin/settings", label: "Settings", exact: false, icon: Settings },
   { href: "/admin/team", label: "Team", exact: false, icon: Users },
 ];
