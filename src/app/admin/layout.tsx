@@ -124,7 +124,8 @@ export default async function AdminLayout({ children }: LayoutProps<"/admin">) {
           </div>
         </header>
 
-        <main className="mx-auto w-full max-w-4xl flex-1 px-4 py-6 sm:px-6 lg:py-8">
+        {/* Week grids (schedule, timesheets) mark themselves data-wide to get the room. */}
+        <main className="mx-auto w-full max-w-4xl flex-1 px-4 py-6 has-[[data-wide]]:max-w-7xl sm:px-6 lg:py-8">
           {children}
         </main>
       </div>
