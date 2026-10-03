@@ -1,4 +1,7 @@
-import { eq, inArray } from "drizzle-orm";
+import { cache } from "react";
+import { eq, getTableColumns, inArray, sql, type Column, type SQL } from "drizzle-orm";
+import type { BatchItem } from "drizzle-orm/batch";
+import type { PgTable } from "drizzle-orm/pg-core";
 import {
   categories,
   db,
@@ -6,6 +9,7 @@ import {
   menuItems,
   modifierGroups,
   modifiers,
+  orderDiscounts,
   orderEvents,
   orderItems,
   orders,
@@ -13,12 +17,16 @@ import {
   type OrderItemModifier,
 } from "@/db";
 import type { KitchenStation } from "@/lib/kds";
-import { taxFromBps } from "@/lib/money";
+import type { AppliedDiscount } from "@/lib/promotion-engine";
+import type { RedemptionCheck } from "@/lib/promotion-usage";
 import { DEFAULT_CHOICE, toppingPriceCents } from "@/lib/toppings";
 import type { CheckoutInput } from "@/lib/validation";
 
 export type PricedLine = {
   itemId: number;
+  categoryId: number;
+  /** Chosen modifier ids, so promotions can target a size. */
+  modifierIds: number[];
   itemName: string;
   quantity: number;
   unitPriceCents: number;
@@ -31,28 +39,28 @@ export type PricedLine = {
 export type PricedCart = {
   lines: PricedLine[];
   subtotalCents: number;
-  taxCents: number;
   deliveryFeeCents: number;
-  totalCents: number; // before tip
 };
 
 export class OrderError extends Error {}
 
-export async function getSettings() {
+export type StoreSettings = typeof storeSettings.$inferSelect;
+
+/** Read once per request (React cache); outside a render it reads every time. */
+export const getSettings = cache(async (): Promise<StoreSettings> => {
   const [settings] = await db
     .select()
     .from(storeSettings)
     .where(eq(storeSettings.id, 1));
   if (!settings) throw new OrderError("Store is not configured yet.");
   return settings;
-}
+});
 
 export async function priceCart(
   lines: CheckoutInput["lines"],
   orderType: "pickup" | "delivery",
+  settings: StoreSettings,
 ): Promise<PricedCart> {
-  const settings = await getSettings();
-
   const itemIds = [...new Set(lines.map((l) => l.itemId))];
   const items = await db
     .select({ item: menuItems, station: categories.station })
@@ -156,6 +164,8 @@ export async function priceCart(
 
     return {
       itemId: item.id,
+      categoryId: item.categoryId,
+      modifierIds: line.modifiers.map((m) => m.id),
       itemName: item.name,
       quantity: line.quantity,
       unitPriceCents: unitPrice,
@@ -169,97 +179,87 @@ export async function priceCart(
   const subtotalCents = priced.reduce((sum, l) => sum + l.lineTotalCents, 0);
   const deliveryFeeCents =
     orderType === "delivery" ? settings.deliveryFeeCents : 0;
-  const taxCents = taxFromBps(subtotalCents, settings.taxRateBps);
 
-  return {
-    lines: priced,
-    subtotalCents,
-    taxCents,
-    deliveryFeeCents,
-    totalCents: subtotalCents + taxCents + deliveryFeeCents,
-  };
+  return { lines: priced, subtotalCents, deliveryFeeCents };
+}
+
+/** Everything an order row and its children are written from. */
+export type NewOrder = {
+  input: CheckoutInput;
+  prepMinutes: number;
+  lines: PricedLine[];
+  subtotalCents: number;
+  discountCents: number;
+  taxCents: number;
+  deliveryFeeCents: number;
+  /** Including the tip. */
+  totalCents: number;
+  discounts: AppliedDiscount[];
+  /** Null when the program is off. */
+  loyalty: {
+    /** The signed-in member, or null for a guest (who may be enrolled after). */
+    memberId: number | null;
+    /** The reward the member spends points on; recorded as an items discount. */
+    reward: { name: string; pointsCost: number; discountCents: number } | null;
+    pointsEarned: number;
+  } | null;
+};
+
+/**
+ * `insert into t (cols) select cols from jsonb_populate_recordset(null::t, rows) where cond`.
+ * Postgres types each value by the table's own row type, so the rows need no
+ * casts and TypeScript checks them against the schema. Only the columns some
+ * row sets are written; the rest take their defaults or generated values.
+ */
+function insertRowsWhere<T extends PgTable>(table: T, rows: T["$inferInsert"][], cond: SQL): SQL {
+  const columns: Record<string, Column> = getTableColumns(table);
+  const keys = Object.keys(columns).filter((k) => rows.some((r) => r[k as keyof typeof r] !== undefined));
+  const names = sql.join(keys.map((k) => sql.identifier(columns[k].name)), sql`, `);
+  const json = rows.map((r) => Object.fromEntries(keys.map((k) => [columns[k].name, r[k as keyof typeof r] ?? null])));
+  return sql`insert into ${table} (${names})
+    select ${names} from jsonb_populate_recordset(null::${table}, ${JSON.stringify(json)}::jsonb) where ${cond}`;
 }
 
 /**
- * Creates an order (payment_status = 'pending').
+ * Inserts the order, its lines, its "placed" event and its discounts as
+ * one statement that writes nothing unless the redemption guard holds, after
+ * the lock that lets the guard see any order that won a race.
+ * Returns null when the guard failed (a deal's limit went to another order
+ * after the quote). Drizzle's builders can't make an insert conditional on
+ * another table, hence the SQL template.
  *
- * STRIPE SEAM: when payments land, create a PaymentIntent for
- * `totalCents` here (or in a wrapping action), store its id on the order,
- * and flip payment_status to 'paid' from the Stripe webhook. Everything
- * upstream (validation, pricing) and downstream (confirmation page,
- * admin inbox) already works off the persisted order.
+ * `after` adds statements to the same transaction, run once the order is
+ * read back; each must write nothing when the order row is missing.
  */
-export async function createOrder(input: CheckoutInput) {
-  const settings = await getSettings();
-
-  if (!settings.isPublished) {
-    throw new OrderError("This store is not accepting online orders yet.");
-  }
-  if (!settings.isAcceptingOrders) {
-    throw new OrderError(
-      "Online ordering is temporarily paused. Please call the store.",
-    );
-  }
-  if (input.orderType === "pickup" && !settings.pickupEnabled) {
-    throw new OrderError("Pickup is not available right now.");
-  }
-  if (input.orderType === "delivery" && !settings.deliveryEnabled) {
-    throw new OrderError("Delivery is not available right now.");
-  }
-
-  const cart = await priceCart(input.lines, input.orderType);
-
-  if (
-    input.orderType === "delivery" &&
-    cart.subtotalCents < settings.deliveryMinimumCents
-  ) {
-    throw new OrderError(
-      `Delivery orders have a minimum subtotal of $${(
-        settings.deliveryMinimumCents / 100
-      ).toFixed(2)}.`,
-    );
-  }
-
-  const placedAt = new Date();
-  const prepMinutes =
-    input.orderType === "delivery" ? settings.deliveryPrepMinutes : settings.pickupPrepMinutes;
-
-  // The id is minted here so the order, its lines and its "placed" event go
-  // in as one transaction: a failure can't leave an order with no items.
+export async function insertOrder(
+  o: NewOrder,
+  check: RedemptionCheck,
+  after: (orderId: string) => BatchItem<"pg">[] = () => [],
+): Promise<typeof orders.$inferSelect | null> {
+  const { input } = o;
   const orderId = crypto.randomUUID();
-  const [[order]] = await db.batch([
-    db
-      .insert(orders)
-      .values({
-        id: orderId,
-        placedAt,
-        promisedAt: new Date(placedAt.getTime() + prepMinutes * 60_000),
-        orderType: input.orderType,
-        customerName: input.customerName,
-        customerPhone: input.customerPhone,
-        customerEmail: input.customerEmail || null,
-        addressLine1: input.addressLine1 || null,
-        addressLine2: input.addressLine2 || null,
-        city: input.city || null,
-        zip: input.zip || null,
-        orderNotes: input.orderNotes || null,
-        subtotalCents: cart.subtotalCents,
-        taxCents: cart.taxCents,
-        deliveryFeeCents: cart.deliveryFeeCents,
-        tipCents: input.tipCents,
-        totalCents: cart.totalCents + input.tipCents,
-        paymentStatus: "pending",
-      })
-      .returning(),
-    db.insert(orderEvents).values({
+  const placedAt = new Date();
+  const placed = sql`exists (select 1 from placed)`;
+  const reward = o.loyalty?.reward ?? null;
+  const discountRows: (typeof orderDiscounts.$inferInsert)[] = [
+    ...o.discounts.map((a) => ({
       orderId,
-      type: "placed",
-      toStatus: "new",
-      actor: "Customer",
-      createdAt: placedAt,
-    }),
-    db.insert(orderItems).values(
-      cart.lines.map((l) => ({
+      promotionId: a.promotionId,
+      codeId: a.codeId,
+      label: a.label,
+      amountCents: a.amountCents,
+      target: a.target,
+      source: "promotion" as const,
+    })),
+    ...(reward && reward.discountCents > 0
+      ? [{ orderId, label: reward.name, amountCents: reward.discountCents, target: "items" as const, source: "loyalty" as const }]
+      : []),
+  ];
+  const children = [
+    insertRowsWhere(orderEvents, [{ orderId, type: "placed", toStatus: "new", actor: "Customer", createdAt: placedAt }], placed),
+    insertRowsWhere(
+      orderItems,
+      o.lines.map((l) => ({
         orderId,
         menuItemId: l.itemId,
         itemName: l.itemName,
@@ -270,8 +270,46 @@ export async function createOrder(input: CheckoutInput) {
         notes: l.notes || null,
         station: l.station,
       })),
+      placed,
     ),
-  ]);
-
-  return order;
+    ...(discountRows.length ? [insertRowsWhere(orderDiscounts, discountRows, placed)] : []),
+  ];
+  const order = insertRowsWhere(
+    orders,
+    [
+      {
+        id: orderId,
+        placedAt,
+        promisedAt: new Date(placedAt.getTime() + o.prepMinutes * 60_000),
+        orderType: input.orderType,
+        customerName: input.customerName,
+        customerPhone: input.customerPhone,
+        customerEmail: input.customerEmail || null,
+        addressLine1: input.addressLine1 || null,
+        addressLine2: input.addressLine2 || null,
+        city: input.city || null,
+        zip: input.zip || null,
+        orderNotes: input.orderNotes || null,
+        subtotalCents: o.subtotalCents,
+        discountCents: o.discountCents,
+        taxCents: o.taxCents,
+        deliveryFeeCents: o.deliveryFeeCents,
+        tipCents: input.tipCents,
+        totalCents: o.totalCents,
+        loyaltyMemberId: o.loyalty?.memberId ?? null,
+        loyaltyRewardName: reward?.name ?? null,
+        loyaltyPointsRedeemed: reward?.pointsCost ?? 0,
+        loyaltyPointsEarned: o.loyalty?.pointsEarned ?? 0,
+      },
+    ],
+    check.guard,
+  );
+  const place = db.execute(sql`
+    with placed as (${order} returning id),
+    ${sql.join(children.map((c, i) => sql`${sql.identifier(`child${i}`)} as (${c})`), sql`, `)}
+    select id from placed`);
+  // Read back in the same transaction; no row means the guard failed.
+  const read = db.select().from(orders).where(eq(orders.id, orderId));
+  const [, , [row]] = await db.batch([db.execute(check.lock), place, read, ...after(orderId)]);
+  return row ?? null;
 }

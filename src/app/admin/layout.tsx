@@ -125,6 +125,7 @@ export default async function AdminLayout({ children }: LayoutProps<"/admin">) {
           </div>
         </header>
 
+        {/* Wide pages (order boards, schedule, timesheets) mark themselves data-wide to get the room. */}
         <main className="mx-auto w-full max-w-4xl flex-1 px-4 py-6 sm:px-6 lg:py-8 has-[[data-wide]]:max-w-6xl print:max-w-none print:p-0">
           <InventoryBanner />
           {children}

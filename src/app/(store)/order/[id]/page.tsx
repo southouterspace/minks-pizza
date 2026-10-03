@@ -1,13 +1,17 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { eq } from "drizzle-orm";
-import { db, orderItems, orders } from "@/db";
-import { formatClock } from "@/lib/hours";
+import { and, asc, desc, eq, notInArray } from "drizzle-orm";
+import { Gift } from "lucide-react";
+import { courierDeliveries, db, orderDiscounts, orderItems, orders } from "@/db";
+import { COURIER_STATUS_LABEL, TERMINAL_COURIER_STATUSES } from "@/lib/delivery/types";
+import { formatClock } from "@/lib/zoned";
+import { orderPointsStatus } from "@/lib/loyalty";
 import { formatCents } from "@/lib/money";
 import { isActive, isCooking } from "@/lib/order-workflow";
 import { getSettings } from "@/lib/orders";
 import { OrderAutoRefresh } from "@/components/store/order-auto-refresh";
+import { orderTotals, TotalsList } from "@/components/totals-list";
 import { buttonVariants } from "@/components/ui/button";
 import {
   Card,
@@ -63,11 +67,26 @@ export default async function OrderPage({
   const [order] = await db.select().from(orders).where(eq(orders.id, id));
   if (!order) notFound();
 
-  const items = await db
-    .select()
-    .from(orderItems)
-    .where(eq(orderItems.orderId, order.id));
-  const settings = await getSettings();
+  const [items, discounts, settings, [courier]] = await Promise.all([
+    db.select().from(orderItems).where(eq(orderItems.orderId, order.id)),
+    db
+      .select()
+      .from(orderDiscounts)
+      .where(eq(orderDiscounts.orderId, order.id))
+      .orderBy(asc(orderDiscounts.id)),
+    getSettings(),
+    db
+      .select()
+      .from(courierDeliveries)
+      .where(
+        and(
+          eq(courierDeliveries.orderId, order.id),
+          notInArray(courierDeliveries.status, [...TERMINAL_COURIER_STATUSES]),
+        ),
+      )
+      .orderBy(desc(courierDeliveries.createdAt))
+      .limit(1),
+  ]);
 
   const stepIndex = STATUS_STEPS.indexOf(
     order.status as (typeof STATUS_STEPS)[number],
@@ -109,6 +128,46 @@ export default async function OrderPage({
             />
           ))}
         </ol>
+      ) : null}
+
+      {courier ? (
+        <Card className="mt-6">
+          <CardContent className="flex flex-wrap items-center justify-between gap-3 text-sm">
+            <div>
+              <p className="font-medium">{COURIER_STATUS_LABEL[courier.status]}</p>
+              {courier.courierName ? (
+                <p className="mt-1 text-muted-foreground">
+                  Your driver is {courier.courierName}.
+                </p>
+              ) : null}
+            </div>
+            {courier.trackingUrl ? (
+              <a
+                href={courier.trackingUrl}
+                target="_blank"
+                rel="noreferrer"
+                className={buttonVariants({ variant: "outline" })}
+              >
+                Track your driver
+              </a>
+            ) : null}
+          </CardContent>
+        </Card>
+      ) : null}
+
+      {order.loyaltyMemberId !== null && order.loyaltyPointsEarned > 0 && orderPointsStatus(order.status) !== "Reversed" ? (
+        <p
+          data-testid="order-points"
+          className="mt-6 flex items-center gap-2 rounded-lg bg-muted px-4 py-3 text-sm"
+        >
+          <Gift className="size-4 shrink-0" aria-hidden />
+          {orderPointsStatus(order.status) === "Posted"
+            ? `You earned ${order.loyaltyPointsEarned.toLocaleString()} points.`
+            : `You'll earn ${order.loyaltyPointsEarned.toLocaleString()} points once your order is complete.`}
+          <Link href="/rewards" className="ml-auto font-medium underline underline-offset-4">
+            Rewards
+          </Link>
+        </p>
       ) : null}
 
       {order.orderType === "pickup" && settings.addressLine1 ? (
@@ -163,45 +222,16 @@ export default async function OrderPage({
             ))}
           </ul>
         </CardContent>
-        <CardFooter>
-          <dl className="w-full space-y-1.5 text-sm">
-            <div className="flex justify-between">
-              <dt className="text-muted-foreground">Subtotal</dt>
-              <dd className="tabular-nums">{formatCents(order.subtotalCents)}</dd>
-            </div>
-            {order.taxCents > 0 ? (
-              <div className="flex justify-between">
-                <dt className="text-muted-foreground">Tax</dt>
-                <dd className="tabular-nums">{formatCents(order.taxCents)}</dd>
-              </div>
-            ) : null}
-            {order.deliveryFeeCents > 0 ? (
-              <div className="flex justify-between">
-                <dt className="text-muted-foreground">Delivery fee</dt>
-                <dd className="tabular-nums">
-                  {formatCents(order.deliveryFeeCents)}
-                </dd>
-              </div>
-            ) : null}
-            {order.tipCents > 0 ? (
-              <div className="flex justify-between">
-                <dt className="text-muted-foreground">Tip</dt>
-                <dd className="tabular-nums">{formatCents(order.tipCents)}</dd>
-              </div>
-            ) : null}
-            <div className="flex justify-between border-t border-border pt-2 text-base font-semibold">
-              <dt>Total</dt>
-              <dd className="tabular-nums">{formatCents(order.totalCents)}</dd>
-            </div>
-            <div className="flex justify-between pt-1">
-              <dt className="text-muted-foreground">Payment</dt>
-              <dd className="text-muted-foreground">
-                {order.paymentStatus === "paid"
-                  ? "Paid online"
-                  : `Due at ${order.orderType === "pickup" ? "pickup" : "delivery"}`}
-              </dd>
-            </div>
-          </dl>
+        <CardFooter className="flex-col items-stretch gap-1.5">
+          <TotalsList totals={orderTotals({ ...order, discounts })} audience="customer" />
+          <p className="flex justify-between text-sm text-muted-foreground">
+            <span>Payment</span>
+            <span>
+              {order.paymentStatus === "paid"
+                ? "Paid online"
+                : `Due at ${order.orderType === "pickup" ? "pickup" : "delivery"}`}
+            </span>
+          </p>
         </CardFooter>
       </Card>
 

@@ -5,17 +5,21 @@ import {
   count,
   desc,
   eq,
+  getTableColumns,
   gte,
   ilike,
   inArray,
+  lt,
   lte,
+  ne,
   or,
   sql,
   type SQL,
 } from "drizzle-orm";
 import { z } from "zod";
-import { db, orderEvents, orderItems, orders, storeSettings } from "@/db";
+import { courierDeliveries, db, orderDiscounts, orderEvents, orderItems, orders, storeSettings } from "@/db";
 import { ACTIVE_STATUSES, isLate, ORDER_STATUSES } from "@/lib/order-workflow";
+import type { LocalDate } from "@/lib/zoned";
 
 export type OrderWithItems = typeof orders.$inferSelect & {
   items: (typeof orderItems.$inferSelect)[];
@@ -140,7 +144,10 @@ export async function searchOrders(f: OrderFilters) {
 export async function exportOrders(f: OrderFilters) {
   const timezone = await getStoreTimezone();
   const rows = await db
-    .select()
+    .select({
+      ...getTableColumns(orders),
+      discountLabels: sql<string | null>`(select string_agg(d.label, '; ' order by d.id) from ${orderDiscounts} d where d.order_id = orders.id)`,
+    })
     .from(orders)
     .where(filterWhere(f, timezone))
     .orderBy(desc(orders.placedAt))
@@ -154,6 +161,8 @@ export async function getOrderDetail(id: string) {
     with: {
       items: { orderBy: (items, { asc }) => [asc(items.id)] },
       events: { orderBy: [asc(orderEvents.createdAt), asc(orderEvents.id)] },
+      discounts: { orderBy: [asc(orderDiscounts.id)] },
+      courierDeliveries: { orderBy: [desc(courierDeliveries.createdAt)], limit: 1 },
     },
   });
 }
@@ -171,18 +180,22 @@ export type DashboardStats = {
 };
 
 /**
- * The store-local day so far. Net sales are item subtotals of orders that
- * weren't canceled: tax, tips and delivery fees are not sales.
+ * The store-local day so far. Net sales are item subtotals less item
+ * discounts, over orders that weren't canceled: tax, tips and delivery fees
+ * are not sales, so a free-delivery discount doesn't reduce them either.
  */
 async function getDashboardStats(now: Date, timezone: string): Promise<DashboardStats> {
   const today = sql`(${orders.placedAt} at time zone ${timezone})::date = (${now.toISOString()}::timestamptz at time zone ${timezone})::date`;
   const kept = sql`${today} and ${orders.status} <> 'canceled'`;
+  // Spelled "orders.id": in a select list Drizzle renders ${orders.id} bare,
+  // and a bare "id" inside the subquery would bind to d.id.
+  const netSales = sql`${orders.subtotalCents} - coalesce((select sum(d.amount_cents) from ${orderDiscounts} d where d.order_id = orders.id and d.target = 'items'), 0)`;
   const [[day], active] = await Promise.all([
     db
       .select({
         orders: sql<number>`count(*) filter (where ${today})`.mapWith(Number),
         kept: sql<number>`count(*) filter (where ${kept})`.mapWith(Number),
-        netSalesCents: sql<number>`coalesce(sum(${orders.subtotalCents}) filter (where ${kept}), 0)`.mapWith(Number),
+        netSalesCents: sql<number>`coalesce(sum(${netSales}) filter (where ${kept}), 0)`.mapWith(Number),
         canceled: sql<number>`count(*) filter (where ${today} and ${orders.status} = 'canceled')`.mapWith(Number),
         readySeconds: sql<string | null>`avg(extract(epoch from ${orders.readyAt} - ${orders.placedAt})) filter (where ${today} and ${orders.readyAt} is not null)`,
       })
@@ -216,4 +229,15 @@ export async function getBoard(now: Date) {
     getDashboardStats(now, timezone),
   ]);
   return { active, stats, timezone };
+}
+
+/** Non-canceled order subtotals, less reward discounts, per store-local date, for [from, to). */
+export async function salesByDate(from: Date, to: Date, tz: string): Promise<Map<LocalDate, number>> {
+  const day = sql<string>`to_char(${orders.placedAt} at time zone ${tz}, 'YYYY-MM-DD')`;
+  const rows = await db
+    .select({ day, cents: sql<number>`sum(${orders.subtotalCents} - ${orders.discountCents})::int` })
+    .from(orders)
+    .where(and(ne(orders.status, "canceled"), gte(orders.placedAt, from), lt(orders.placedAt, to)))
+    .groupBy(sql`1`);
+  return new Map(rows.map((r) => [r.day, r.cents]));
 }

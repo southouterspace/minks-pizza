@@ -1,6 +1,7 @@
-import { createOrder, OrderError } from "../src/lib/orders";
+import { createOrder } from "../src/lib/checkout";
+import { OrderError } from "../src/lib/orders";
 import { db, menuItems, modifiers, modifierGroups, storeSettings } from "../src/db";
-import { taxFromBps } from "../src/lib/money";
+import { bpsOf } from "../src/lib/money";
 import { eq } from "drizzle-orm";
 
 async function main() {
@@ -26,7 +27,8 @@ async function main() {
       notes: "extra crispy",
     }],
   });
-  const expectedTotal = 4048 + taxFromBps(4048, taxRateBps) + 300;
+  // (1099 + 600 + 0 + 175 + 150) * 2 = 4048 subtotal, then the store's tax rate and the tip
+  const expectedTotal = 4048 + bpsOf(4048, taxRateBps) + 300;
   console.log("order #", order.orderNumber, "subtotal", order.subtotalCents, "total", order.totalCents, "status", order.status, "payment", order.paymentStatus);
   if (order.subtotalCents !== 4048 || order.totalCents !== expectedTotal) throw new Error("PRICE MISMATCH");
 

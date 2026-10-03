@@ -27,8 +27,8 @@ import {
 } from "../src/db";
 import { inventorySyncStatement, onHand, planOrderUsage, recordMoves, syncStockOuts } from "../src/lib/inventory";
 import { applyKdsAction } from "../src/lib/kds-server";
-import { createOrder } from "../src/lib/orders";
-import { transitionOrder, transitionStatement, type Actor } from "../src/lib/order-writes";
+import { createOrder } from "../src/lib/checkout";
+import { transitionOrder, transitionStatements, type Actor } from "../src/lib/order-writes";
 
 let passed = 0;
 async function test(name: string, fn: () => Promise<void>) {
@@ -216,10 +216,9 @@ async function main() {
         ok: false,
         reason: "Order is already completed.",
       });
-      const [{ rows }] = await db.batch([
-        transitionStatement({ orderId: order.id, from: ["ready"], to: "completed", actor, now: new Date() }),
-        inventorySyncStatement(await planOrderUsage(order.id)),
-      ]);
+      const [{ rows }] = await db.batch(
+        await transitionStatements({ orderId: order.id, from: ["ready"], to: "completed", actor, now: new Date() }),
+      );
       assert.equal(rows.length, 0);
       assert.deepEqual(await salesFor(order.id), [[mozz, -340200], [pep, -42525]]);
     });

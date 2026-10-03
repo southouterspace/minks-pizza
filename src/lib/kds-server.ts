@@ -1,9 +1,9 @@
 import "server-only";
 import { and, asc, desc, eq, gte, inArray, isNull, ne, sql } from "drizzle-orm";
 import { db, orderItems, orders, storeSettings } from "@/db";
-import { inventorySyncStatement, planOrderUsage, syncStockOuts } from "@/lib/inventory";
+import { syncStockOuts } from "@/lib/inventory";
 import { RECALLABLE } from "@/lib/order-workflow";
-import { transitionStatement, type Actor } from "@/lib/order-writes";
+import { transitionStatements, type Actor } from "@/lib/order-writes";
 import {
   bumpPlan,
   type ItemStage,
@@ -127,7 +127,7 @@ function stageColumns(stage: ItemStage, now: Date) {
  * order is impossible from the line view, so there is no ready → preparing
  * edge here; that is what recall is for. Each move that happens is logged.
  */
-function syncStatus(orderId: string, actor: Actor, now: Date) {
+async function syncStatus(orderId: string, actor: Actor, now: Date) {
   const pending = db
     .select({ one: sql`1` })
     .from(orderItems)
@@ -148,22 +148,22 @@ function syncStatus(orderId: string, actor: Actor, now: Date) {
       ),
     );
   return [
-    transitionStatement({
+    ...(await transitionStatements({
       orderId,
       from: ["new", "confirmed"],
       to: "preparing",
       actor,
       now,
       when: sql`exists (${touched})`,
-    }),
-    transitionStatement({
+    })),
+    ...(await transitionStatements({
       orderId,
       from: LINE_STATUSES,
       to: "ready",
       actor,
       now,
       when: sql`not exists (${pending})`,
-    }),
+    })),
   ] as const;
 }
 
@@ -189,7 +189,7 @@ export async function applyKdsAction(
     const stage = action.stage === "oven" && item.station !== "pizza" ? "done" : action.stage;
     await db.batch([
       db.update(orderItems).set(stageColumns(stage, now)).where(eq(orderItems.id, action.itemId)),
-      ...syncStatus(item.orderId, actor, now),
+      ...(await syncStatus(item.orderId, actor, now)),
     ]);
     return;
   }
@@ -209,7 +209,7 @@ export async function applyKdsAction(
         db.update(orderItems).set(stageColumns(m.stage, now)).where(inArray(orderItems.id, m.ids)),
       );
     // syncStatus always contributes statements, so the batch is never empty.
-    const [first, ...rest] = [...moves, ...syncStatus(order.id, actor, now)];
+    const [first, ...rest] = [...moves, ...(await syncStatus(order.id, actor, now))];
     await db.batch([first, ...rest]);
     return;
   }
@@ -222,32 +222,24 @@ export async function applyKdsAction(
     if (!order || !RECALLABLE.includes(order.status)) return;
     // Back on the line from scratch: a recalled ticket usually means a remake.
     await db.batch([
-      transitionStatement({
+      ...(await transitionStatements({
         orderId: action.orderId,
         from: RECALLABLE,
         to: "preparing",
         actor,
         now,
-      }),
+      })),
       db
         .update(orderItems)
         .set({ ovenAt: null, doneAt: null })
         .where(eq(orderItems.orderId, action.orderId)),
-      inventorySyncStatement(await planOrderUsage(action.orderId)),
     ]);
     await syncStockOuts({ orderId: action.orderId });
     return;
   }
 
-  await db.batch([
-    transitionStatement({
-      orderId: action.orderId,
-      from: ["ready"],
-      to: "completed",
-      actor,
-      now,
-    }),
-    inventorySyncStatement(await planOrderUsage(action.orderId)),
-  ]);
+  await db.batch(
+    await transitionStatements({ orderId: action.orderId, from: ["ready"], to: "completed", actor, now }),
+  );
   await syncStockOuts({ orderId: action.orderId });
 }

@@ -40,7 +40,7 @@ import {
   toppingMixReport,
   varianceReport,
 } from "../src/lib/inventory-reports";
-import { createOrder } from "../src/lib/orders";
+import { createOrder } from "../src/lib/checkout";
 import { transitionOrder, type Actor } from "../src/lib/order-writes";
 
 let passed = 0;

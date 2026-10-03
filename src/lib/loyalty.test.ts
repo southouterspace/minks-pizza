@@ -1,0 +1,406 @@
+import { describe, it } from "node:test";
+import assert from "node:assert/strict";
+import {
+  activePromotion,
+  applyReward,
+  birthdayGrantDue,
+  birthdaySchema,
+  centsPerPoint,
+  earnPoints,
+  expiryDue,
+  formatMultiplier,
+  nextReward,
+  toPublicReward,
+  formatPhone,
+  nextBirthdayGrant,
+  normalizePhone,
+  pointsSafeUntil,
+  rewardDiscount,
+  tierFor,
+  tierProgress,
+  tiersSchema,
+  rewardPrice,
+  repriceReward,
+  type PromotionRule,
+} from "./loyalty";
+
+const TZ = "America/Chicago";
+const TIERS = [
+  { name: "Regular", minPoints: 0, multiplierBps: 10_000 },
+  { name: "Gold Crust", minPoints: 4000, multiplierBps: 12_000 },
+];
+
+describe("normalizePhone", () => {
+  it("keeps ten digits from any punctuation", () => {
+    assert.equal(normalizePhone("(555) 010-2222"), "5550102222");
+  });
+  it("drops a leading US country code", () => {
+    assert.equal(normalizePhone("+1 555.010.2222"), "5550102222");
+  });
+  it("rejects anything else", () => {
+    assert.equal(normalizePhone("010-2222"), null);
+    assert.equal(normalizePhone("25550102222"), null);
+  });
+  it("formats for display", () => {
+    assert.equal(formatPhone("5550102222"), "(555) 010-2222");
+  });
+});
+
+describe("earnPoints", () => {
+  it("earns 10 points per dollar at base rate", () => {
+    assert.equal(
+      earnPoints({ netCents: 2448, pointsPerDollar: 10, tierMultiplierBps: 10_000, promoMultiplierBps: 10_000 }),
+      244,
+    );
+  });
+  it("stacks tier and promo multipliers and floors once", () => {
+    // 2448 * 10 / 100 = 244.8, * 1.25 = 306, * 2 = 612
+    assert.equal(
+      earnPoints({ netCents: 2448, pointsPerDollar: 10, tierMultiplierBps: 12_500, promoMultiplierBps: 20_000 }),
+      612,
+    );
+  });
+  it("earns nothing on a fully discounted order", () => {
+    assert.equal(
+      earnPoints({ netCents: 0, pointsPerDollar: 10, tierMultiplierBps: 10_000, promoMultiplierBps: 10_000 }),
+      0,
+    );
+  });
+});
+
+describe("tiers", () => {
+  it("picks the highest tier reached", () => {
+    assert.equal(tierFor(0, TIERS).name, "Regular");
+    assert.equal(tierFor(3999, TIERS).name, "Regular");
+    assert.equal(tierFor(4000, TIERS).name, "Gold Crust");
+  });
+  it("reports progress toward the next tier", () => {
+    assert.deepEqual(tierProgress(1000, TIERS), {
+      tier: { name: "Regular", minPoints: 0, multiplierBps: 10_000 },
+      next: { name: "Gold Crust", minPoints: 4000, multiplierBps: 12_000 },
+      pointsToNext: 3000,
+      fraction: 0.25,
+    });
+  });
+  it("has nothing left to reach at the top tier", () => {
+    const p = tierProgress(5000, TIERS);
+    assert.equal(p.tier.name, "Gold Crust");
+    assert.equal(p.next, null);
+    assert.equal(p.pointsToNext, null);
+  });
+  it("requires the first tier to start at zero", () => {
+    const r = tiersSchema.safeParse([{ name: "Gold", minPoints: 100, multiplierBps: 10_000 }]);
+    assert.equal(r.success, false);
+    assert.equal(r.error?.issues[0].message, "The first tier must start at 0 points");
+  });
+  it("stores tiers lowest first, whatever order they were entered in", () => {
+    const r = tiersSchema.parse([
+      { name: "Gold", minPoints: 4000, multiplierBps: 12_000 },
+      { name: "Member", minPoints: 0, multiplierBps: 10_000 },
+    ]);
+    assert.deepEqual(r.map((t) => t.name), ["Member", "Gold"]);
+  });
+  it("rejects two tiers starting at the same points", () => {
+    const r = tiersSchema.safeParse([
+      { name: "Member", minPoints: 0, multiplierBps: 10_000 },
+      { name: "Gold", minPoints: 0, multiplierBps: 12_000 },
+    ]);
+    assert.equal(r.error?.issues[0].message, "Two tiers can't start at the same points");
+  });
+  it("formats multipliers", () => {
+    assert.equal(formatMultiplier(20_000), "2x");
+    assert.equal(formatMultiplier(12_500), "1.25x");
+  });
+});
+
+describe("activePromotion", () => {
+  const promo = (p: Partial<PromotionRule>): PromotionRule => ({
+    name: "Promo",
+    multiplierBps: 20_000,
+    daysOfWeek: [],
+    startsOn: null,
+    endsOn: null,
+    isActive: true,
+    ...p,
+  });
+  // Tuesday 2026-10-06 01:00 UTC is still Monday evening in Chicago.
+  const mondayNightLocal = new Date("2026-10-06T01:00:00Z");
+
+  it("matches the weekday in store time, not UTC", () => {
+    const tuesdays = promo({ name: "Double Tuesdays", daysOfWeek: [2] });
+    const mondays = promo({ name: "Monday", daysOfWeek: [1] });
+    assert.equal(activePromotion([tuesdays, mondays], mondayNightLocal, TZ)?.name, "Monday");
+  });
+  it("respects an inclusive date range in store time", () => {
+    const p = promo({ startsOn: "2026-10-01", endsOn: "2026-10-05" });
+    assert.equal(activePromotion([p], mondayNightLocal, TZ)?.name, "Promo");
+    assert.equal(activePromotion([p], new Date("2026-10-06T12:00:00Z"), TZ), null);
+  });
+  it("picks the highest multiplier and skips inactive ones", () => {
+    const winner = activePromotion(
+      [
+        promo({ name: "1.5x", multiplierBps: 15_000 }),
+        promo({ name: "3x off", multiplierBps: 30_000, isActive: false }),
+        promo({ name: "2x", multiplierBps: 20_000 }),
+      ],
+      mondayNightLocal,
+      TZ,
+    );
+    assert.equal(winner?.name, "2x");
+  });
+});
+
+describe("rewardDiscount", () => {
+  const lines = [
+    { categoryId: 1, unitPriceCents: 1899, quantity: 2 },
+    { categoryId: 1, unitPriceCents: 2399, quantity: 1 },
+    { categoryId: 3, unitPriceCents: 599, quantity: 1 },
+  ];
+  it("takes an amount off", () => {
+    assert.deepEqual(rewardDiscount({ kind: "amount_off", amountOffCents: 300 }, lines), {
+      ok: true,
+      discountCents: 300,
+    });
+  });
+  it("never discounts past the subtotal", () => {
+    assert.deepEqual(
+      rewardDiscount({ kind: "amount_off", amountOffCents: 2000 }, [
+        { categoryId: 3, unitPriceCents: 599, quantity: 1 },
+      ]),
+      { ok: true, discountCents: 599 },
+    );
+  });
+  it("frees the priciest matching item up to the cap", () => {
+    assert.deepEqual(
+      rewardDiscount({ kind: "free_item", categoryIds: [1, 2], maxValueCents: 2200 }, lines),
+      { ok: true, discountCents: 2200 },
+    );
+    assert.deepEqual(
+      rewardDiscount({ kind: "free_item", categoryIds: [3], maxValueCents: 900 }, lines),
+      { ok: true, discountCents: 599 },
+    );
+  });
+  it("reports a free item with nothing to apply it to", () => {
+    assert.deepEqual(
+      rewardDiscount({ kind: "free_item", categoryIds: [9], maxValueCents: 900 }, lines),
+      { ok: false, reason: "no_matching_item" },
+    );
+  });
+});
+
+describe("applyReward", () => {
+  const threeOff = {
+    name: "$3 off",
+    isActive: true,
+    effect: { kind: "amount_off" as const, amountOffCents: 300 },
+    price: { cost: 300 },
+  };
+  const freeSide = {
+    name: "Free side",
+    isActive: true,
+    effect: { kind: "free_item" as const, categoryIds: [7], maxValueCents: 999 },
+    price: { cost: 700 },
+  };
+  const pizza = [{ categoryId: 1, unitPriceCents: 1999, quantity: 1 }];
+  const rich = { pointsBalance: 1000 };
+
+  it("applies an affordable reward to a cart it fits", () => {
+    assert.deepEqual(applyReward(threeOff, rich, pizza), { status: "applied", reward: threeOff, discountCents: 300 });
+  });
+  it("rejects a reward that's gone or switched off", () => {
+    const expected = { status: "rejected", error: "That reward is no longer available." };
+    assert.deepEqual(applyReward(null, rich, pizza), expected);
+    assert.deepEqual(applyReward({ ...threeOff, isActive: false }, rich, pizza), expected);
+  });
+  it("asks a signed-out customer to sign in", () => {
+    assert.deepEqual(applyReward(threeOff, null, pizza), { status: "rejected", error: "Sign in to use your points." });
+  });
+  it("rejects a reward the balance can't cover", () => {
+    assert.deepEqual(applyReward(threeOff, { pointsBalance: 299 }, pizza), {
+      status: "rejected",
+      error: "You don't have enough points for that reward anymore.",
+    });
+  });
+  it("asks for a qualifying item when the cart has none", () => {
+    assert.deepEqual(applyReward(freeSide, rich, pizza), {
+      status: "rejected",
+      error: 'Add a qualifying item to use "Free side".',
+    });
+  });
+});
+
+describe("birthdayGrantDue", () => {
+  const now = new Date("2026-10-15T17:00:00Z");
+  const member = {
+    birthMonth: 10,
+    birthdaySetAt: new Date("2026-08-01T00:00:00Z"),
+    lastCompletedOrderAt: new Date("2026-03-01T00:00:00Z"),
+  };
+  it("is due in the birthday month for a recent customer", () => {
+    assert.equal(birthdayGrantDue(member, now, TZ), true);
+  });
+  it("is not due for a birthday set this month", () => {
+    assert.equal(
+      birthdayGrantDue({ ...member, birthdaySetAt: new Date("2026-10-01T00:00:00Z") }, now, TZ),
+      false,
+    );
+  });
+  it("is not due outside the birthday month", () => {
+    assert.equal(birthdayGrantDue({ ...member, birthMonth: 11 }, now, TZ), false);
+  });
+  it("is not due without a completed order in the past year", () => {
+    assert.equal(birthdayGrantDue({ ...member, lastCompletedOrderAt: null }, now, TZ), false);
+    assert.equal(
+      birthdayGrantDue({ ...member, lastCompletedOrderAt: new Date("2025-10-01T00:00:00Z") }, now, TZ),
+      false,
+    );
+  });
+});
+
+describe("birthdaySchema", () => {
+  it("accepts a leap-day birthday", () => {
+    assert.deepEqual(birthdaySchema.parse({ month: "2", day: "29" }), { month: 2, day: 29 });
+  });
+
+  it("rejects a day the month doesn't have with a message", () => {
+    const result = birthdaySchema.safeParse({ month: "2", day: "31" });
+    assert.equal(result.success ? null : result.error.issues[0].message, "That date doesn't exist.");
+  });
+});
+
+describe("nextBirthdayGrant", () => {
+  const now = new Date("2026-10-15T17:00:00Z");
+  it("is this month when the birthday was set long enough ago", () => {
+    assert.deepEqual(
+      nextBirthdayGrant({ birthMonth: 10, birthdaySetAt: new Date("2026-08-01T00:00:00Z") }, now, TZ),
+      { month: 10, year: 2026 },
+    );
+  });
+  it("waits a year when the birthday month is now but it was just set", () => {
+    assert.deepEqual(
+      nextBirthdayGrant({ birthMonth: 10, birthdaySetAt: new Date("2026-10-10T00:00:00Z") }, now, TZ),
+      { month: 10, year: 2027 },
+    );
+  });
+  it("rolls past December", () => {
+    assert.deepEqual(
+      nextBirthdayGrant({ birthMonth: 2, birthdaySetAt: new Date("2026-10-15T00:00:00Z") }, now, TZ),
+      { month: 2, year: 2027 },
+    );
+    assert.deepEqual(
+      nextBirthdayGrant({ birthMonth: 12, birthdaySetAt: new Date("2026-10-15T00:00:00Z") }, now, TZ),
+      { month: 12, year: 2026 },
+    );
+  });
+});
+
+describe("expiryDue", () => {
+  const now = new Date("2026-10-15T00:00:00Z");
+  it("expires a balance after the inactivity window", () => {
+    assert.equal(expiryDue({ pointsBalance: 120, lastActivityAt: new Date("2025-10-14T00:00:00Z") }, now, 12), true);
+  });
+  it("keeps a balance with recent activity", () => {
+    assert.equal(expiryDue({ pointsBalance: 120, lastActivityAt: new Date("2025-10-16T00:00:00Z") }, now, 12), false);
+  });
+  it("tells the member the date their points are safe until", () => {
+    assert.deepEqual(
+      pointsSafeUntil({ pointsBalance: 120, lastActivityAt: new Date("2026-03-15T18:00:00Z") }, 12),
+      new Date("2027-03-15T18:00:00Z"),
+    );
+    assert.equal(pointsSafeUntil({ pointsBalance: 120, lastActivityAt: new Date("2026-03-15T18:00:00Z") }, null), null);
+  });
+  it("never expires when the program says never, or with nothing to expire", () => {
+    assert.equal(expiryDue({ pointsBalance: 120, lastActivityAt: new Date("2020-01-01T00:00:00Z") }, now, null), false);
+    assert.equal(expiryDue({ pointsBalance: 0, lastActivityAt: new Date("2020-01-01T00:00:00Z") }, now, 12), false);
+  });
+});
+
+describe("price protection", () => {
+  const now = new Date("2026-10-01T12:00:00Z");
+  const unprotected = { pointsCost: 300, previousPointsCost: null, priceProtectedUntil: null };
+
+  it("keeps the old price for 60 days after a raise", () => {
+    const raised = repriceReward(unprotected, 400, now);
+    assert.deepEqual(raised, {
+      pointsCost: 400,
+      previousPointsCost: 300,
+      priceProtectedUntil: new Date("2026-11-30T12:00:00Z"),
+    });
+    assert.deepEqual(rewardPrice(raised, now), {
+      cost: 300,
+      increase: { cost: 400, on: new Date("2026-11-30T12:00:00Z") },
+    });
+  });
+  it("charges the new price once protection ends", () => {
+    const raised = repriceReward(unprotected, 400, now);
+    assert.deepEqual(rewardPrice(raised, new Date("2026-11-30T12:00:01Z")), { cost: 400, increase: null });
+  });
+  it("applies a cut immediately", () => {
+    const raised = repriceReward(unprotected, 400, now);
+    assert.deepEqual(repriceReward(raised, 250, now), {
+      pointsCost: 250,
+      previousPointsCost: null,
+      priceProtectedUntil: null,
+    });
+  });
+  it("protects from today's price when raising again during protection", () => {
+    const raised = repriceReward(unprotected, 400, now);
+    const again = repriceReward(raised, 500, new Date("2026-10-11T12:00:00Z"));
+    assert.equal(again.previousPointsCost, 300);
+    assert.equal(rewardPrice(again, new Date("2026-10-11T12:00:00Z")).cost, 300);
+  });
+});
+
+describe("toPublicReward", () => {
+  it("shows today's price, the value, and an increase dated on the store's calendar", () => {
+    const reward = {
+      id: 4,
+      name: "Free large pizza",
+      description: "Any pizza up to $22.",
+      effect: { kind: "free_item" as const, categoryIds: [1], maxValueCents: 2200 },
+      // 03:00 UTC on Dec 2 is still Dec 1 in Chicago.
+      price: { cost: 1500, increase: { cost: 1800, on: new Date("2026-12-02T03:00:00Z") } },
+    };
+    assert.deepEqual(toPublicReward(reward, TZ), {
+      id: 4,
+      name: "Free large pizza",
+      description: "Any pizza up to $22.",
+      cost: 1500,
+      valueLabel: "up to $22 value",
+      increaseLabel: "Price going up to 1,800 on Dec 1",
+    });
+  });
+  it("keeps cents in an amount that has them", () => {
+    const reward = {
+      id: 1,
+      name: "$2.50 off",
+      description: null,
+      effect: { kind: "amount_off" as const, amountOffCents: 250 },
+      price: { cost: 250, increase: null },
+    };
+    assert.equal(toPublicReward(reward, TZ).valueLabel, "$2.50 value");
+  });
+});
+
+describe("nextReward", () => {
+  const ladder = [{ cost: 1500 }, { cost: 300 }, { cost: 700 }];
+  it("is the cheapest reward the balance hasn't reached", () => {
+    assert.deepEqual(nextReward(ladder, 300), { cost: 700 });
+  });
+  it("is null once every reward is in reach", () => {
+    assert.equal(nextReward(ladder, 1500), null);
+  });
+});
+
+describe("centsPerPoint", () => {
+  it("values a point by the cheapest reward", () => {
+    const rewards = [
+      { effect: { kind: "free_item" as const, categoryIds: [1], maxValueCents: 2200 }, price: { cost: 1500 } },
+      { effect: { kind: "amount_off" as const, amountOffCents: 300 }, price: { cost: 300 } },
+    ];
+    assert.equal(centsPerPoint(rewards), 1);
+  });
+  it("is null with no rewards", () => {
+    assert.equal(centsPerPoint([]), null);
+  });
+});

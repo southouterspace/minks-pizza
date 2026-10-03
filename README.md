@@ -64,10 +64,16 @@ npm run dev
    [Kitchen display](#kitchen-display-kds) below.
 7. **Team** (`/admin/team`) — add or remove operator accounts, and change your
    own password. See [Operator accounts](#operator-accounts) below.
+8. **Promotions** (`/admin/promotions`) — automatic deals and promo codes. See
+   [Promotions](#promotions) below.
+9. **Staff** (`/admin/staff`) — employees, the weekly schedule, timesheets and
+   time off, plus the shared time clock at `/timeclock`. See
+   [Staff: scheduling and time clock](#staff-scheduling-and-time-clock) below.
 
 #### Order management
 
-**Orders board** (`/admin`). A strip of today's numbers (orders, net sales,
+**Orders board** (`/admin`). A strip of today's numbers (orders, net sales
+(item subtotal less item discounts),
 average ticket, average placed-to-ready time, orders late right now), then
 three lanes: **New**, **In kitchen** (confirmed and preparing) and **Ready**.
 Each card shows the order number, customer, type, items, total, how long ago
@@ -93,7 +99,8 @@ same rows (up to 5,000).
 **Order detail** (`/admin/orders/<id>`). Customer with tap-to-call, items with
 modifiers and notes, totals, and the promised time. From here you can
 advance or cancel, push the promised time (−5 to +15 min), record payment as
-cash, card or other, and add internal notes. The **timeline** lists
+cash, card or other, apply a discount (see [Promotions](#promotions)), and add
+internal notes. The **timeline** lists
 everything that happened to the order with who did it and when: the
 customer placing it, each operator action, and each status change the
 kitchen display made (shown as "Kitchen display · <operator>"). **Print
@@ -104,8 +111,9 @@ minutes from Settings. The customer's tracker shows "Ready around 6:45 PM"
 while the order is cooking and the cancel reason if it was canceled.
 
 **Time zone.** Settings → Time zone decides when the store's day starts for
-the board numbers and history dates, and the clock that promised times are
-shown in. Default: Central.
+the board numbers and history dates, the clock that promised times are
+shown in, and the day rewards promotions and birthdays fall on. Default:
+Central.
 
 ##### Deploying the order-management schema
 
@@ -277,6 +285,214 @@ update categories set station = 'counter' where name ilike '%drink%' or name ili
 
 Orders placed before the migration default to the Kitchen station.
 
+### Promotions
+
+Built from operator and customer complaints about Toast, Square, Domino's and
+the delivery apps (see `docs/promotions-research.md`).
+
+**Creating a deal** (`/admin/promotions` → **New deal**). Start from a
+template (percent off the order, dollars off, BOGO, item deal price, free
+delivery, happy hour) and adjust. The right-hand card shows the sentence
+customers will read, for example "20% off orders $30+. Pickup orders only.
+Valid Tue 3–6 PM. Once per customer. Use code PIZZA10."
+
+| Setting | What it does |
+|---|---|
+| How customers get it | **Automatically** (applies itself when the cart qualifies) or **With a code** |
+| Reward | % or $ off the order (optional cap), % or $ off items, a deal price on items ("any large $12"), buy X get Y (the discounted units are always the cheapest qualifying ones), free delivery (delivery orders only) |
+| Which items | Any mix of categories, items and modifiers such as a size. Nothing picked means any item |
+| When it applies | Minimum item subtotal, pickup and/or delivery, first and last day, weekly time windows on the store's clock |
+| Limits | Uses per customer (by phone number), total uses, new customers only (no earlier order on that phone) |
+| Combines with other combinable deals | Off: the deal is exclusive. On: it stacks with every other combinable deal |
+| Show on the menu page | Off makes a private code for a mailer or partner |
+
+**Codes.** On a code deal's page, add a shared code such as `PIZZA10`, or
+generate up to 1,000 single-use codes (`MINK-7KQ2-X9`) and download them as
+CSV. Single-use codes are worthless on coupon sites. **Copy link** gives a
+`/?promo=PIZZA10` link that puts the code in the customer's cart. Codes match
+ignoring case, spaces and dashes. Deleting a code stops it working at once;
+orders that used it keep their discount.
+
+**Running a deal.** The switch pauses and resumes it. **Archive** retires a
+used deal; a deal no order used can be deleted. Editing a deal never changes
+orders already placed: each order keeps a snapshot of its discount lines. The
+list shows status (Active, Scheduled, Expired, Paused, Used up, Archived),
+uses against the limit, the total discounted and net sales from orders that
+used it. Uses count only orders that weren't canceled, so canceling an order
+gives its use back. Staff discounts made from a deal's preset count in its
+total discounted and net sales but never use up its limits.
+
+**Apply discount** on an order's page takes dollars or a percent off the
+items with a reason that prints on the receipt, or one tap on a live
+whole-order deal (for a customer who forgot their code). It works while
+payment is pending and the order is open, recomputes tax and total, and
+appears in the timeline. A staff discount can be removed the same way.
+
+**What customers see.** The menu page lists advertised deals with a copy
+button for the code. Cart and checkout have a **Have a promo code?** field,
+list each deal on its own line with the saving ("Applied automatically" for
+automatic ones), say exactly why a code doesn't apply ("Add $4.50 more to use
+PIZZA10", "Valid Tue 3–6 PM", "Already used with this phone number"), and show
+nudges such as "Add $3.20 more for free delivery". Codes stay with the cart
+through edits and refreshes; a code that stops qualifying stays attached and
+applies again when the cart qualifies. The confirmation shows each discount
+and "You saved $5.00".
+
+**Best deal and money rules.** The customer always gets the best legal
+combination: each exclusive deal on its own, or all combinable deals
+together, whichever saves more. A code that loses says "A better deal is
+already applied: …". Item discounts round half-up per unit and never take a
+unit below zero; order discounts apply to what is left. Tax is on items after
+discounts. Tips are a share of the pre-discount subtotal and never
+discounted. Totals are always the server's: cart and checkout ask the same
+function that places the order, and the order is refused, with the new total,
+if they ever differ. Limits hold when checkouts race: the last use goes to
+exactly one order and the other customer reads "PIZZA10 was just fully
+redeemed — your total is now $X."
+
+#### Deploying the promotions schema
+
+Additive: three enums, the `promotions`, `promotion_codes` and
+`order_discounts` tables, the generated `orders.customer_key` and a
+`discount` value on `order_event_type`. `orders.discount_cents` comes with
+the rewards schema. Checkout reads the new tables, so migrate before
+deploying the code, either with a push:
+
+```bash
+MINKS_DATABASE_URL=<production url> npm run db:push
+```
+
+or by running `migrations/2026-10-03-promotions.sql`, which also backfills
+the ledger: each earlier order with a reward discount gets a `loyalty` row in
+`order_discounts`, so `discount_cents` stays the sum of an order's rows. After
+a plain `db:push`, run the backfill statement at the end of that file once.
+
+`orders.customer_key` (the phone's last ten digits, which promotion limits
+count against) is a generated column, so Postgres fills it for existing
+orders during the same migration.
+
+#### Promotions and rewards together
+
+A member's reward stacks with deals. Deals apply first, and the reward comes
+off what is left of the items, never more. Tax is on the items after both,
+and points are earned on that amount. The reward is an `order_discounts` row
+with source `loyalty`. It never counts as a use of a deal, and staff can't
+remove it from the order page.
+
+### Rewards (`/rewards`, `/admin/loyalty`)
+
+A points program the operator turns on in **Loyalty**. It is off until then.
+Research behind the defaults is in `docs/loyalty-research.md`, and the
+customer complaints it answers are in `docs/loyalty-complaints.md`.
+
+- **Earning.** 10 points per $1 of food and drink after any reward discount.
+  Tax, tip and the delivery fee don't earn. Points post when the order is
+  completed and are shown as Pending until then. Guests join by phone with a
+  checkbox at checkout, with no sign-in needed to earn.
+- **Spending.** Signed-in members pick a reward at checkout ($3 off at 300,
+  a free side at 700, a free large pizza at 1,500 by default). Totals come
+  from the server. A cancel returns the points.
+- **Sign-in.** A 6-digit code texted to the phone, with no passwords.
+  **Production needs `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN` and
+  `TWILIO_FROM_NUMBER`**. Without them, customers still earn but can't sign
+  in to spend, and the admin shows a warning. In development the code is
+  shown on screen.
+- **Bonuses.** Welcome bonus on the first completed order of $15+, a
+  birthday bonus, referral bonuses for both sides, and promotions such as
+  double points on Tuesdays. Welcome and referral bonuses post with the
+  completion that earns them. A referrer already paid for 10 friends in the
+  last year gets nothing for the next one, then or later.
+- **Trust rules.** A raised reward price keeps the old price for 60 days.
+  Points expire only after 12 months with no completed order, and the
+  rewards page shows the date. Balances never go below zero. Signing in
+  claims the member's phone-matched orders from the last 30 days. Members can
+  delete their account.
+- **Operators.** Members search, ledger, point adjustments with a reason,
+  restore of expired points, a missing-order claim, rewards and promotions
+  editors, tiers and program settings.
+
+Every balance change is one SQL statement that appends to `loyalty_ledger`
+and moves the cached balance together (`ledgerStatement` in
+`src/lib/loyalty-server.ts`). Each entry has a unique idempotency key, so
+replays do nothing, and a `CHECK (points_balance >= 0)` makes overspending
+fail the whole order transaction. `npm run loyalty:audit` confirms every
+balance and lifetime total matches the ledger, and `npm run e2e:loyalty`
+runs the end-to-end scenarios against a dev server on a test database.
+
+#### Deploying the rewards schema
+
+Checkout reads the new columns, so **migrate production before deploying**:
+
+```bash
+MINKS_DATABASE_URL=<production url> npm run db:push   # additive: new tables, enum and order columns with defaults
+```
+
+Production has no loyalty rows yet, so the push needs no data migration. A
+database that ran an earlier build of this branch has `referral` ledger rows
+and restores stored as `adjust`. Convert those by idempotency-key prefix
+(`referral:referrer:` to `referrer_bonus`, `referral:referee:` to
+`referee_bonus`, `restore:` to `restore`) before pushing, then recompute
+`lifetime_points` from the lifetime-earning kinds. `npm run loyalty:audit`
+checks both the balance and the lifetime total afterwards.
+
+### Staff: scheduling and time clock
+
+Employees are not operators. They never sign in to the admin. Each one gets
+a 4 to 6 digit PIN for the shared time clock, and the PIN is stored hashed
+(HMAC-SHA256 keyed by `SESSION_SECRET`), so it is shown only once.
+
+**Manager side (`/admin/staff`).**
+
+| Tab | What it does |
+|---|---|
+| Overview | Who is on the clock now (with a manager clock-out that needs a reason), late and no-show shifts, today's labor cost against today's sales as labor %, this week's worked against scheduled hours, overtime risk, and counts that need attention. Refreshes every 30 seconds. |
+| Schedule | A week grid with one row per active employee plus open shifts. Shift chips show draft or published state and conflicts: overlap, approved or requested time off, outside availability, overtime. **Copy last week** adds drafts and skips shifts already there. **Publish** makes the week's drafts visible to staff. Footer rows show hours, labor cost, forecast sales (the same weekday's average over the previous four weeks) and projected labor %. |
+| Timesheets | Per employee: daily paid hours, regular, overtime and double-time hours, tips, estimated gross, flags and approval. Expand a row to edit or delete a punch, or add a missed one. Every change needs a reason and is kept in an audit log under the punch. Editing an approved punch clears the approval. **Export CSV** downloads the payroll file. |
+| Employees | Contact details, roles with a rate for each, a primary role, weekly availability and the PIN. Archive someone who leaves: their history stays, they drop off the schedule and the clock, and their upcoming shifts become open shifts. |
+| Time off | Pending requests with the shifts they conflict with, approve or deny, and time off entered on someone's behalf (approved at once). |
+
+Store rules live in **Settings → Staff & payroll**: the store timezone, the
+payroll week start, weekly overtime (40 h), optional daily overtime and double
+time (California: 8 h and 12 h), the no-meal-break flag, the late and
+early-out grace, and an optional block on clocking in early.
+
+**Payroll rules.** Each punch counts toward the store-local day it started on,
+so an overnight close belongs to the day it opened. Paid minutes are the
+punch minus unpaid breaks, in whole minutes with no rounding to the quarter
+hour. Daily overtime comes first, then weekly overtime converts only regular
+minutes past the weekly threshold. Someone who works two rates in a week gets
+overtime at the FLSA weighted-average regular rate. Open punches count up to
+now on screen but are left out of the CSV.
+
+**Time clock (`/timeclock`).** Open it on a tablet signed in as an operator,
+as with the kitchen display. Staff then:
+
+1. Enter their PIN on the pad (a keyboard works too).
+2. Clock in. The role defaults to the scheduled shift's role, then to their
+   primary role. Someone with more than one role can pick another.
+3. Start a meal break (unpaid) or a rest break (paid), and end it. Clocking
+   out is offered only after the break ends.
+4. Clock out, optionally declaring cash tips, and see the shift summary.
+5. Check today's shift, the next 7 days of published shifts and this week's
+   hours, and request time off.
+
+The screen returns to the PIN pad 20 seconds after the last touch, and 4
+seconds after each confirmation. The tablet never holds an employee session:
+the PIN is sent with every request. A double tap or a second tablet can't
+open two punches, because the database allows one open punch per employee.
+
+#### Deploying the staff schema
+
+The staff tables and settings columns are additive, so migrate before
+deploying this code:
+
+```bash
+MINKS_DATABASE_URL=<production url> npm run db:push   # new enums and tables, settings columns with defaults
+```
+
+Then open **Settings → Staff & payroll** and set the store timezone. It
+defaults to America/Chicago, and every shift, day and payroll week uses it.
+
 ### Customer (`/`)
 
 Menu browsing with category navigation → item customization dialog (sizes,
@@ -292,7 +508,7 @@ minimums, and recomputes every price at order time.
 ## Stripe readiness
 
 - Money is integer cents everywhere; `orders` carries a full breakdown
-  (subtotal, tax, delivery fee, tip, total) and `payment_status`
+  (subtotal, discount, tax, delivery fee, tip, total) and `payment_status`
   (`pending`/`paid`/`refunded`).
 - `src/lib/orders.ts` → `createOrder()` is the single seam: create a
   PaymentIntent for `totalCents` there, store its id, and flip
@@ -300,24 +516,77 @@ minimums, and recomputes every price at order time.
   `src/app/(store)/actions.ts` already returns a structured result to which a
   client secret can be added.
 
+## Delivery integrations
+
+The store can send a courier to a delivery order placed on our site. Uber
+Direct is the production path. DoorDash Drive works in its sandbox only,
+because DoorDash has closed production access. Orders placed on the
+marketplaces themselves still arrive on their tablets. The schema and
+`src/lib/marketplace.ts` are ready for them, but each marketplace API needs a
+partner agreement first. See `docs/delivery-platforms-research.md` for the
+API details and the reasoning.
+
+The schema changed, so run `npm run db:push` after pulling. The migration is
+additive: three new enums, `orders.source` and two id columns, and the
+`courier_deliveries` and `integration_events` tables.
+
+A provider appears in the orders inbox only when all of its required variables
+are set. Each active web delivery order then gets a "Request courier" button,
+and a live courier shows its status, fee, driver and tracking link with a
+"Cancel courier" button. The customer's order page shows the courier status
+and a tracking link while a courier is on the way.
+
+| Variable | Purpose |
+|---|---|
+| `UBER_DIRECT_CUSTOMER_ID` | Customer ID from the direct.uber.com Developer tab |
+| `UBER_DIRECT_CLIENT_ID` | OAuth client ID |
+| `UBER_DIRECT_CLIENT_SECRET` | OAuth client secret |
+| `UBER_DIRECT_WEBHOOK_SIGNING_KEY` | The signing key shown when you create the webhook. It is not the client secret. |
+| `UBER_DIRECT_TOKEN_URL` | Optional. Defaults to `https://auth.uber.com/oauth/v2/token`. |
+| `UBER_DIRECT_SANDBOX` | Set to `1` to have Uber's robo courier drive each delivery |
+| `DOORDASH_DRIVE_DEVELOPER_ID` | Developer ID from the DoorDash developer portal |
+| `DOORDASH_DRIVE_KEY_ID` | Access key ID |
+| `DOORDASH_DRIVE_SIGNING_SECRET` | Access key signing secret, base64 as the portal shows it |
+| `DOORDASH_DRIVE_WEBHOOK_AUTH` | The exact `Authorization` header value you configure for webhooks in the portal |
+
+Point each provider's status webhook at:
+
+- `https://<your domain>/api/webhooks/couriers/uber_direct`
+- `https://<your domain>/api/webhooks/couriers/doordash_drive`
+
+The endpoint records each event in `integration_events` before applying it,
+so provider retries are harmless. A failed event keeps its error on that row.
+`npm test` runs the adapter and domain unit tests.
+
 ## Project layout
 
 ```
 src/
   db/            schema.ts (Drizzle), seed.ts, index.ts (client)
-  lib/           menu.ts, orders.ts (pricing + creation), auth.ts, validation.ts,
+  lib/           menu.ts, orders.ts (pricing + the guarded order insert), auth.ts,
+                 validation.ts, checkout.ts (one quote: promotions + loyalty; createOrder),
                  order-workflow.ts (order lifecycle rules, pure),
                  order-writes.ts (logged status/ETA/payment/note writes),
                  order-queries.ts (board, history search, export, detail, day stats),
+                 promotion-engine.ts (reward union and best-deal evaluator, pure),
+                 promotion-queries.ts (candidates and usage from the ledger),
+                 promotion-admin.ts (operator list, stats, codes),
+                 loyalty.ts (program rules, pure), loyalty-server.ts (ledger + queries),
                  kds.ts (kitchen display rules, pure), kds-server.ts (queries + actions),
                  units.ts, unit-entry.ts, toppings.ts, recipes.ts (inventory rules, pure),
                  inventory.ts (stock ledger, counts, deliveries, auto-86),
-                 inventory-reports.ts (food cost, variance, topping mix, margins)
-  app/(store)/   customer storefront (menu, cart, checkout, order status)
+                 inventory-reports.ts (food cost, variance, topping mix, margins),
+                 zoned.ts (store-timezone calendar math), timeclock.ts (staff rules and
+                 payroll math, pure), delivery/ (courier providers and dispatch),
+                 marketplace.ts (marketplace order seam)
+  lib/staff/     staff server modules, one per feature: config, queries, employees,
+                 kiosk, schedule, time-off, timesheets, overview; timesheet-csv.ts (pure)
+  app/(store)/   customer storefront (menu, cart, checkout, order status, rewards)
   app/admin/     operator dashboard (orders board, history + detail, menu,
-                 modifiers, inventory, reports, settings, team); CSV exports in
-                 app/api/admin
+                 modifiers, inventory, reports, promotions, loyalty, settings, team,
+                 staff); CSV exports in app/api/admin
   app/kitchen/   kitchen display (KDS); data via app/api/kds
+  app/timeclock/ staff time clock kiosk; data via app/api/timeclock
   components/    cart context, storefront + admin UI
 ```
 
@@ -332,11 +601,21 @@ Informed by industry research (see `docs/RESEARCH.md`), roughly in order:
 5. **Allergen/dietary tags & item photos** (schema already has `imageUrl`)
 6. **Customer accounts with saved addresses & one-tap reorder** — optional,
    post-purchase (guest checkout stays the default)
-7. **Coupons/promo codes**; refunds (the `refunded` payment status exists but
-   nothing sets it yet; the stock ledger already treats a refunded order as
-   using nothing, so a refund action only needs to batch the same inventory
-   sync that status changes do)
+7. **Refunds** (the `refunded` payment status exists but nothing sets it
+   yet; the stock ledger already treats a refunded order as using nothing, so
+   a refund action only needs to batch the same inventory sync that status
+   changes do). Promotions shipped (see [Promotions](#promotions)); follow-ups:
+   customer identity beyond the phone number once accounts or Stripe card
+   fingerprints exist, a redemption velocity alert for leaked codes, and an
+   audit log of deal edits
 8. **KDS follow-ups** (from `docs/kds-research.md`): a kitchen-only role so
-   the display tablet doesn't carry full admin access; promised-time sorting once scheduled orders exist
+   the display tablet doesn't carry full admin access; promised-time sorting
+   once scheduled orders exist
+9. **Staff follow-ups**: tip pooling
+   ([#5](https://github.com/southouterspace/minks-pizza/issues/5)), shift swaps
+   between staff ([#6](https://github.com/southouterspace/minks-pizza/issues/6)),
+   PIN lockout and manager reset
+   ([#7](https://github.com/southouterspace/minks-pizza/issues/7)), payroll
+   provider export (Gusto, ADP), SMS shift notifications
 
 See `NOTES.md` for the build log and decision record.

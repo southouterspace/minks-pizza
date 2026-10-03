@@ -4,8 +4,10 @@ import { notFound } from "next/navigation";
 import { ArrowLeft, Phone } from "lucide-react";
 import { addOrderNoteAction, recordPaymentAction } from "@/app/admin/actions";
 import { requireOperator } from "@/lib/auth";
+import { courierProviders } from "@/lib/delivery/providers";
 import { formatCents } from "@/lib/money";
 import {
+  canComp,
   canTransition,
   isCooking,
   isLate,
@@ -13,10 +15,14 @@ import {
   PAYMENT_METHOD_LABEL,
   PAYMENT_METHODS,
 } from "@/lib/order-workflow";
-import { getOrderDetail, getStoreTimezone } from "@/lib/order-queries";
+import { getOrderDetail, getStoreTimezone, type OrderDetail } from "@/lib/order-queries";
+import { compPresets } from "@/lib/promotion-admin";
+import type { DiscountSource } from "@/lib/promotion-schema";
 import {
   ActionForm,
   AdvanceButton,
+  ApplyDiscountDialog,
+  RemoveDiscountButton,
   CancelOrderDialog,
   EtaButtons,
   PrintButton,
@@ -28,7 +34,9 @@ import {
   PromisedTime,
   StatusBadge,
 } from "@/components/admin/order-status";
-import { addressLine, PrintTicket, Totals } from "@/components/admin/order-ticket";
+import { addressLine, PrintTicket } from "@/components/admin/order-ticket";
+import { orderTotals, TotalsList } from "@/components/totals-list";
+import { CourierCard } from "@/components/admin/courier-card";
 import { OrderTimeline } from "@/components/admin/order-timeline";
 import { formatDateTime } from "@/components/admin/ui";
 import { Badge } from "@/components/ui/badge";
@@ -41,18 +49,32 @@ export const dynamic = "force-dynamic";
 
 export const metadata: Metadata = { title: "Order" };
 
+const DISCOUNT_SOURCE_LABEL: Record<DiscountSource, string> = {
+  promotion: "Promotion",
+  comp: "Staff discount",
+  loyalty: "Loyalty reward",
+};
+
+const SOURCE_LABEL: Record<OrderDetail["source"], string> = {
+  web: "Web",
+  doordash: "DoorDash",
+  ubereats: "Uber Eats",
+  grubhub: "Grubhub",
+};
+
 export default async function OrderDetailPage({ params }: PageProps<"/admin/orders/[id]">) {
   await requireOperator();
   const { id } = await params;
   if (!/^[0-9a-f-]{36}$/i.test(id)) notFound();
 
-  const [order, timeZone] = await Promise.all([getOrderDetail(id), getStoreTimezone()]);
+  const [order, timeZone, presets] = await Promise.all([getOrderDetail(id), getStoreTimezone(), compPresets()]);
   if (!order) notFound();
 
   const now = new Date();
   const late = isLate(order.promisedAt, order.status, now);
   const address = addressLine(order);
   const open = NEXT_ACTION[order.status] || canTransition(order.status, "canceled");
+  const discountable = canComp(order);
 
   return (
     <div className="print:m-0">
@@ -77,6 +99,12 @@ export default async function OrderDetailPage({ params }: PageProps<"/admin/orde
               </Badge>
               <PaymentBadge status={order.paymentStatus} method={order.paymentMethod} />
               {late ? <LateBadge /> : null}
+              {order.source !== "web" ? (
+                <Badge variant="outline">
+                  {SOURCE_LABEL[order.source]}
+                  {order.sourceDisplayId ? ` · ${order.sourceDisplayId}` : ""}
+                </Badge>
+              ) : null}
             </h1>
             <p className="mt-1 text-sm text-muted-foreground">
               Placed {formatDateTime(order.placedAt, timeZone)}
@@ -142,7 +170,7 @@ export default async function OrderDetailPage({ params }: PageProps<"/admin/orde
                   </p>
                 ) : null}
                 <Separator className="my-3" />
-                <Totals order={order} className="ml-auto max-w-56 space-y-1 text-sm" />
+                <TotalsList totals={orderTotals(order)} audience="staff" className="ml-auto max-w-56 space-y-1 text-sm" />
               </CardContent>
             </Card>
 
@@ -199,6 +227,30 @@ export default async function OrderDetailPage({ params }: PageProps<"/admin/orde
                   </div>
                 ) : null}
 
+                {order.discounts.length > 0 || discountable ? (
+                  <div className="space-y-2" data-testid="discounts">
+                    <p className="text-sm font-medium">Discounts</p>
+                    {order.discounts.length ? (
+                      <ul className="space-y-1 text-sm">
+                        {order.discounts.map((d) => (
+                          <li key={d.id} className="flex items-center justify-between gap-2">
+                            <span className="min-w-0">
+                              <span className="block truncate">{d.label}</span>
+                              <span className="text-xs text-muted-foreground">
+                                {DISCOUNT_SOURCE_LABEL[d.source]} · −{formatCents(d.amountCents)}
+                              </span>
+                            </span>
+                            {discountable && d.source === "comp" ? (
+                              <RemoveDiscountButton orderId={order.id} discountId={d.id} label={d.label} />
+                            ) : null}
+                          </li>
+                        ))}
+                      </ul>
+                    ) : null}
+                    {discountable ? <ApplyDiscountDialog orderId={order.id} presets={presets} /> : null}
+                  </div>
+                ) : null}
+
                 {order.paymentStatus === "pending" ? (
                   <div className="space-y-2">
                     <p className="text-sm font-medium">Record payment</p>
@@ -237,6 +289,15 @@ export default async function OrderDetailPage({ params }: PageProps<"/admin/orde
                 </ActionForm>
               </CardContent>
             </Card>
+
+            {order.orderType === "delivery" && order.source === "web" ? (
+              <CourierCard
+                orderId={order.id}
+                delivery={order.courierDeliveries[0]}
+                providers={courierProviders().map((p) => ({ id: p.id, label: p.label }))}
+                canRequest={isCooking(order.status) || order.status === "ready"}
+              />
+            ) : null}
           </div>
         </div>
       </div>

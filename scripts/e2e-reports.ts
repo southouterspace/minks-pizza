@@ -24,7 +24,7 @@ import {
   storeSettings,
 } from "../src/db";
 import { onHand, recordMoves } from "../src/lib/inventory";
-import { createOrder } from "../src/lib/orders";
+import { createOrder } from "../src/lib/checkout";
 import { transitionOrder } from "../src/lib/order-writes";
 
 const BASE = process.env.E2E_BASE_URL ?? "http://localhost:3000";

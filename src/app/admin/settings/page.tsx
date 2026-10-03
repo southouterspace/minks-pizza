@@ -2,15 +2,17 @@ import type { Metadata } from "next";
 import { eq } from "drizzle-orm";
 import { db, storeSettings, type DayHours } from "@/db";
 import { requireOperator } from "@/lib/auth";
-import { DAY_NAMES, STORE_TIMEZONES } from "@/lib/hours";
+import { STORE_TIMEZONES } from "@/lib/hours";
+import { DAY_NAMES } from "@/lib/zoned";
 import {
   saveSettings,
   toggleAcceptingOrders,
   togglePublished,
 } from "@/app/admin/actions";
-import { ToggleSwitchForm } from "@/components/admin/toggle-switch-form";
+import { ActionSwitch } from "@/components/admin/action-switch";
 import { LogoField } from "@/components/admin/logo-field";
-import { centsToDollars } from "@/components/admin/ui";
+import { centsToDollars } from "@/lib/money";
+import { DEFAULT_STAFF_RULES, DEFAULT_TIMEZONE, ruleInputValue, STAFF_RULE_FIELDS, type StaffRules } from "@/lib/timeclock";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -28,6 +30,8 @@ import { NativeSelect, NativeSelectOption } from "@/components/ui/native-select"
 export const dynamic = "force-dynamic";
 
 export const metadata: Metadata = { title: "Settings" };
+
+const STAFF_DEFAULTS: StaffRules = DEFAULT_STAFF_RULES;
 
 const DEFAULTS = {
   name: "My Pizzeria",
@@ -52,12 +56,13 @@ const DEFAULTS = {
   deliveryFeeCents: 0,
   deliveryMinimumCents: 0,
   taxRateBps: 0,
-  timezone: "America/Chicago",
+  timezone: DEFAULT_TIMEZONE,
   halfToppingPriceBps: 5000,
   halfPortionBps: 5000,
   lightPortionBps: 5000,
   extraPortionBps: 15000,
   minMarginBps: 7000,
+  ...STAFF_DEFAULTS,
   isPublished: false,
   isAcceptingOrders: true,
 };
@@ -132,7 +137,7 @@ export default async function SettingsPage({
               )}
             </p>
           </div>
-          <ToggleSwitchForm
+          <ActionSwitch
             action={togglePublished}
             checked={settings.isPublished}
             label={settings.isPublished ? "Unpublish store" : "Publish store"}
@@ -151,7 +156,7 @@ export default async function SettingsPage({
               )}
             </p>
           </div>
-          <ToggleSwitchForm
+          <ActionSwitch
             action={toggleAcceptingOrders}
             checked={settings.isAcceptingOrders}
             label={
@@ -320,7 +325,7 @@ export default async function SettingsPage({
             </NativeSelect>
             <FieldDescription>
               Decides when the store&apos;s day starts for order stats, history
-              dates and promised times.
+              dates and promised times, and for every shift and payroll week.
             </FieldDescription>
           </Field>
         </FieldSet>
@@ -488,6 +493,45 @@ export default async function SettingsPage({
                     className="tabular-nums"
                   />
                   <FieldDescription>{f.hint}</FieldDescription>
+                </Field>
+              ))}
+            </div>
+          </Card>
+        </FieldSet>
+
+        <FieldSet>
+          <FieldLegend className="w-full border-b border-border pb-2 text-sm!">
+            Staff &amp; payroll
+          </FieldLegend>
+          <FieldDescription>
+            Rules for the time clock, schedule and timesheets. Leave a field blank to turn that rule off.
+          </FieldDescription>
+          <Card>
+            <div className="grid gap-4 px-4 sm:grid-cols-2">
+              <Field>
+                <FieldLabel htmlFor="s-week">Payroll week starts on</FieldLabel>
+                <NativeSelect id="s-week" name="weekStartsOn" defaultValue={String(settings.weekStartsOn)} className="w-full">
+                  {DAY_NAMES.map((name, day) => (
+                    <NativeSelectOption key={day} value={day}>
+                      {name}
+                    </NativeSelectOption>
+                  ))}
+                </NativeSelect>
+              </Field>
+              {STAFF_RULE_FIELDS.map((f) => (
+                <Field key={f.key}>
+                  <FieldLabel htmlFor={f.id}>{f.label}</FieldLabel>
+                  <Input
+                    id={f.id}
+                    name={f.name}
+                    type="number"
+                    min={f.min}
+                    step={f.step}
+                    required={f.required}
+                    defaultValue={ruleInputValue(f, settings[f.key])}
+                    className="tabular-nums"
+                  />
+                  {f.hint ? <FieldDescription>{f.hint}</FieldDescription> : null}
                 </Field>
               ))}
             </div>
