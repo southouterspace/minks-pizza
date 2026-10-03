@@ -35,11 +35,29 @@ const lineFields = {
 };
 
 /**
- * A storefront cart line. Carts saved in customers' browsers before halves
- * existed send `modifierIds`; those parse to whole, regular selections.
+ * A storefront cart line. Older clients still post earlier shapes: carts from
+ * before halves existed send `modifierIds` (whole, regular selections), and
+ * the topping-inventory storefront sent `modifiers` as id/placement/portion.
  */
 export const cartLineSchema = z.union([
   z.object({ ...lineFields, selections: z.array(selectionSchema).max(50) }),
+  z
+    .object({
+      ...lineFields,
+      modifiers: z
+        .array(
+          z.object({
+            id,
+            placement: z.enum(PLACEMENTS).default("whole"),
+            portion: z.enum(["light", "regular", "extra"]).default("regular"),
+          }),
+        )
+        .max(50),
+    })
+    .transform(({ modifiers, ...line }) => ({
+      ...line,
+      selections: modifiers.map(({ id: modifierId, placement, portion }): Selection => ({ modifierId, placement, amount: portion })),
+    })),
   z
     .object({ ...lineFields, modifierIds: z.array(id).max(50) })
     .transform(({ modifierIds, ...line }) => ({
