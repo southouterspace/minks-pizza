@@ -10,7 +10,7 @@
  */
 import { randomUUID } from "node:crypto";
 import { count, eq } from "drizzle-orm";
-import { db, employees, operators, orderItems, orders, pinAttempts, tenders } from "../src/db";
+import { db, employees, operators, orderItems, orders, pinAttempts, storeSettings, tenders } from "../src/db";
 import {
   closeShift,
   fireDue,
@@ -28,6 +28,7 @@ import {
 import { paymentState, type OrderMutation, type OrderView } from "../src/lib/orders";
 import { allocate, priceLine, splitEvenly, type MenuItem, type Selection } from "../src/lib/pricing";
 import { checkPin } from "../src/lib/pin";
+import { storeDateOf, storeDayRange } from "../src/lib/store-time";
 import type { StaffContext } from "../src/lib/staff";
 import { cartLineSchema } from "../src/lib/validation";
 
@@ -209,6 +210,19 @@ async function main() {
   const refunded = view(await mutateOrder({ orderId: tab.id, mutation: refund, approval: { managerPin: "1234" } }, cashier));
   check("refund makes it refunded", [paymentState(refunded.totals), refunded.totals.refundedCents], ["refunded", 500]);
 
+  // --- Tax is snapshotted at submit ------------------------------------------
+  const before = view(await submitOrder(walkIn([line("Caesar Salad", [sel2("Caesar Salad", "Caesar")])]), { kind: "pos", staff: cashier }));
+  check("salad taxed at 8.25% when placed", [before.totals.taxCents, before.totals.totalCents], [70, 919]);
+  await db.update(storeSettings).set({ taxRateBps: 1000 }).where(eq(storeSettings.id, 1));
+  try {
+    const settledLater = view(await mutateOrder({ orderId: before.id, mutation: tender(919, "cash") }, cashier));
+    check("a rate change doesn't re-tax an order tendered later", [settledLater.totals.taxCents, settledLater.totals.totalCents, paymentState(settledLater.totals)], [70, 919, "paid"]);
+    const after = view(await submitOrder(walkIn([line("Caesar Salad", [sel2("Caesar Salad", "Caesar")])]), { kind: "pos", staff: cashier }));
+    check("an order placed after the change is taxed at 10%", [after.totals.taxCents, after.totals.totalCents], [85, 934]);
+  } finally {
+    await db.update(storeSettings).set({ taxRateBps: 825 }).where(eq(storeSettings.id, 1));
+  }
+
   // --- Split by item keeps the kitchen ticket -------------------------------
   const wings = line("Chicken Wings (8)", [sel2("Chicken Wings (8)", "BBQ")]);
   const table = view(
@@ -240,15 +254,47 @@ async function main() {
   check("paid-in is the cashier's call", await recordDrawerEvent({ id: randomUUID(), kind: "paid_in", cents: 200, reason: "change" }, cashier), { ok: true });
   check("paid-out with manager PIN", await recordDrawerEvent({ id: randomUUID(), kind: "paid_out", cents: 500, reason: "napkins", approval: { managerPin: "1234" } }, cashier), { ok: true });
 
-  const closeInput = { shiftId, countedCashCents: 14_822, cardBatchCents: 619, declaredCashTipsCents: 0, notes: null };
+  const closeInput = { shiftId, countedCashCents: 15_741, cardBatchCents: 619, declaredCashTipsCents: 0, notes: null };
   check("closing a shift needs a manager", await closeShift(closeInput, cashier), { ok: false, reason: "needs_manager" });
   const closed = await closeShift({ ...closeInput, approval: { managerPin: "1234" } }, cashier);
   if (!closed.ok) throw new Error(JSON.stringify(closed));
-  // bank 10000 + cash 4031 + 500 + 1691 − cash refund 500 + paid in 200 − paid out 500
-  check("expected cash vs counted", [closed.report.expectedCashCents, closed.report.cashOverShortCents], [15_422, -600]);
+  // bank 10000 + cash 4031 + 500 + 919 + 1691 − cash refund 500 + paid in 200 − paid out 500
+  check("expected cash vs counted", [closed.report.expectedCashCents, closed.report.cashOverShortCents], [16_341, -600]);
   check("card total includes tips and matches the batch", [closed.report.cardTotalCents, closed.report.cardTipsCents, closed.report.cardOverShortCents], [619, 200, 0]);
   check("voids tally under the employee who voided", closed.report.byEmployee.find((e) => e.employeeId === cashier.actor.employeeId)?.voidCents, 848);
+  const r = closed.report;
+  check(
+    "sales by channel: orders, net sales, tax",
+    r.byChannel.map((c) => [c.channel, c.orders, c.netCents, c.taxCents]),
+    [["walk_in", 5, 7833, 661], ["phone", 1, 1099, 91], ["dine_in", 2, 2997, 247], ["online", 0, 0, 0]],
+  );
+  check("shift sales total", [r.sales.orders, r.sales.grossCents, r.sales.discountCents, r.sales.totalCents], [8, 12_229, 300, 12_928]);
+  check(
+    "tenders by method: count, payments, tips, refunds, net",
+    r.byMethod.map((m) => [m.method, m.payments, m.paymentCents, m.tipCents, m.refundCents, m.netCents]),
+    [["cash", 4, 7141, 0, 500, 6641], ["card_external", 1, 419, 200, 0, 619]],
+  );
+  const who = (id: number | null) => (id === null ? null : r.staff[id]);
+  check(
+    "every exception and drawer event, with who, approver and reason",
+    r.audit.map((a) => [a.kind, a.item, a.cents, who(a.employeeId), who(a.approvedBy), a.reason]),
+    [
+      ["void", "1 × Garlic Knots (6)", 599, "Casey Cashier", "Morgan Manager", "customer changed mind"],
+      ["discount", null, 300, "Casey Cashier", null, "late"],
+      ["void", "1 × Sparkling Water", 249, "Casey Cashier", null, "rang twice"],
+      ["refund", null, 500, "Casey Cashier", "Morgan Manager", "wrong dressing"],
+      ["paid_in", null, 200, "Casey Cashier", null, "change"],
+      ["paid_out", null, 500, "Casey Cashier", "Morgan Manager", "napkins"],
+    ],
+  );
   check("orders still owing are listed", closed.report.unpaidOrders.map((o) => o.id).includes(scheduled.id), true);
+
+  // --- Store-local days ------------------------------------------------------
+  const day = (d: string) => Object.values(storeDayRange(d, "America/Chicago")).map((x) => x.toISOString());
+  check("a Chicago day starts at its own midnight", day("2026-10-03"), ["2026-10-03T05:00:00.000Z", "2026-10-04T05:00:00.000Z"]);
+  check("spring-forward day is 23 hours", day("2026-03-08"), ["2026-03-08T06:00:00.000Z", "2026-03-09T05:00:00.000Z"]);
+  check("fall-back day is 25 hours", day("2026-11-01"), ["2026-11-01T05:00:00.000Z", "2026-11-02T06:00:00.000Z"]);
+  check("11:30 PM in Chicago is still that store date", storeDateOf(new Date("2026-10-04T04:30:00Z"), "America/Chicago"), "2026-10-03");
 
   // --- PIN attempt limiting -------------------------------------------------
   for (let i = 0; i < 5; i++) await checkPin("0000", operator.id);

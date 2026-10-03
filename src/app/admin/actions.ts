@@ -2,11 +2,12 @@
 
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
-import { asc, desc, eq, inArray } from "drizzle-orm";
+import { and, asc, desc, eq, inArray } from "drizzle-orm";
 import { z } from "zod";
 import {
   categories,
   db,
+  employees,
   itemModifierGroups,
   menuItems,
   modifierGroups,
@@ -25,6 +26,9 @@ import {
   verifyPassword,
 } from "@/lib/auth";
 import { KITCHEN_STATIONS, type KitchenStation } from "@/lib/kds";
+import { pinDigest } from "@/lib/pin";
+import { HALF_TOPPING_RULES } from "@/lib/pricing";
+import { isTimeZone } from "@/lib/store-time";
 
 export type AuthFormState = { error?: string };
 
@@ -259,6 +263,105 @@ export async function changeOwnPassword(
     .where(eq(operators.id, current.id));
 
   redirect("/admin/team?notice=password");
+}
+
+// ---------------------------------------------------------------------------
+// Team: POS staff
+//
+// Staff sign in at the POS with a 4-digit PIN. A PIN is stored only as its
+// digest and never shown again, so it must be unique among active staff:
+// the digest is how the POS finds who typed it.
+// ---------------------------------------------------------------------------
+
+/** On a refused add, the name and role come back so the form keeps them. */
+export type StaffFormState = { error?: string; name?: string; role?: string };
+
+const pinSchema = z.string().regex(/^\d{4}$/, "A PIN is exactly 4 digits.");
+
+const employeeSchema = z.object({
+  name: z.string().trim().min(1, "Name is required").max(80),
+  role: z.enum(["cashier", "manager", "owner"], "Pick a role."),
+  pin: pinSchema,
+});
+
+/** The active employee already using this PIN, other than `exceptId`. */
+async function pinHolder(pin: string, exceptId: number | null): Promise<boolean> {
+  const [row] = await db
+    .select({ id: employees.id })
+    .from(employees)
+    .where(and(eq(employees.pinDigest, pinDigest(pin)), eq(employees.isActive, true)));
+  return row !== undefined && row.id !== exceptId;
+}
+
+const PIN_TAKEN = "That PIN belongs to someone else. Pick another.";
+
+/** Postgres unique_violation: the partial index caught a PIN taken in a race. */
+function isUniqueViolation(err: unknown): boolean {
+  const cause = (err as { cause?: { code?: string } })?.cause;
+  return (err as { code?: string })?.code === "23505" || cause?.code === "23505";
+}
+
+export async function addEmployee(_prev: StaffFormState, formData: FormData): Promise<StaffFormState> {
+  await requireOperator();
+  const parsed = employeeSchema.safeParse({
+    name: formData.get("name"),
+    role: formData.get("role"),
+    pin: textField(formData, "pin"),
+  });
+  const kept = { name: textField(formData, "name"), role: textField(formData, "role") };
+  if (!parsed.success) return { error: parsed.error.issues[0]?.message ?? "Check the form.", ...kept };
+  if (await pinHolder(parsed.data.pin, null)) return { error: PIN_TAKEN, ...kept };
+  try {
+    await db.insert(employees).values({
+      name: parsed.data.name,
+      role: parsed.data.role,
+      pinDigest: pinDigest(parsed.data.pin),
+    });
+  } catch (err) {
+    if (isUniqueViolation(err)) return { error: PIN_TAKEN, ...kept };
+    throw err;
+  }
+  revalidatePath("/admin/team");
+  redirect("/admin/team?notice=staff-added");
+}
+
+export async function changeEmployeePin(_prev: StaffFormState, formData: FormData): Promise<StaffFormState> {
+  await requireOperator();
+  const employeeId = idField(formData, "employeeId");
+  const parsed = pinSchema.safeParse(textField(formData, "pin"));
+  if (!parsed.success) return { error: parsed.error.issues[0]?.message };
+  if (await pinHolder(parsed.data, employeeId)) return { error: PIN_TAKEN };
+  try {
+    await db
+      .update(employees)
+      .set({ pinDigest: pinDigest(parsed.data) })
+      .where(and(eq(employees.id, employeeId), eq(employees.isActive, true)));
+  } catch (err) {
+    if (isUniqueViolation(err)) return { error: PIN_TAKEN };
+    throw err;
+  }
+  revalidatePath("/admin/team");
+  redirect("/admin/team?notice=pin-changed");
+}
+
+/**
+ * Deactivated staff stay in the table: their ids are on every order, tender
+ * and void they touched. Refuses to remove the last manager or owner,
+ * because then nobody could approve a void or close a shift.
+ */
+export async function deactivateEmployee(formData: FormData): Promise<void> {
+  await requireOperator();
+  const employeeId = idField(formData, "employeeId");
+  const approvers = await db
+    .select({ id: employees.id })
+    .from(employees)
+    .where(and(eq(employees.isActive, true), inArray(employees.role, ["manager", "owner"])));
+  if (approvers.length === 1 && approvers[0].id === employeeId) {
+    redirect("/admin/team?notice=last-approver");
+  }
+  await db.update(employees).set({ isActive: false }).where(eq(employees.id, employeeId));
+  revalidatePath("/admin/team");
+  redirect("/admin/team?notice=staff-deactivated");
 }
 
 // ---------------------------------------------------------------------------
@@ -693,8 +796,45 @@ function logoUrlOrNull(formData: FormData): string | null {
   return /^https:\/\/\S+$/i.test(raw) ? raw : null;
 }
 
+const num = (fd: FormData, name: string) => Number(textField(fd, name) || NaN);
+
+const posSettingsSchema = z.object({
+  halfToppingRule: z.enum(HALF_TOPPING_RULES, "Pick a half-topping rule."),
+  extraToppingBps: z
+    .number("Enter the extra-topping multiplier.")
+    .int()
+    .min(10_000, "Extra toppings can't cost less than a regular portion (1×).")
+    .max(50_000, "Extra-topping multiplier tops out at 5×."),
+  discountApprovalCents: z
+    .number("Enter a discount approval threshold.")
+    .int()
+    .min(0, "The discount threshold can't be negative.")
+    .max(100_000, "The discount threshold tops out at $1,000."),
+  ovenCapacityPies: z.number("Enter oven capacity.").int().min(1, "Oven capacity is at least 1 pie.").max(50, "Oven capacity tops out at 50 pies."),
+  makeMinutes: z.number("Enter make time.").int().min(0, "Make time can't be negative.").max(60, "Make time tops out at 60 minutes."),
+  posLockSeconds: z
+    .number("Enter the auto-lock time.")
+    .int()
+    .min(15, "Auto-lock is at least 15 seconds.")
+    .max(3600, "Auto-lock tops out at 3600 seconds (an hour)."),
+  timezone: z.string().refine(isTimeZone, "Pick a timezone."),
+});
+
 export async function saveSettings(formData: FormData): Promise<void> {
   await requireOperator();
+
+  const pos = posSettingsSchema.safeParse({
+    halfToppingRule: textField(formData, "halfToppingRule"),
+    extraToppingBps: Math.round(num(formData, "extraToppingMultiplier") * 10_000),
+    discountApprovalCents: Math.round(num(formData, "discountApproval") * 100),
+    ovenCapacityPies: num(formData, "ovenCapacityPies"),
+    makeMinutes: num(formData, "makeMinutes"),
+    posLockSeconds: num(formData, "posLockSeconds"),
+    timezone: textField(formData, "timezone"),
+  });
+  if (!pos.success) {
+    redirect(`/admin/settings?error=${encodeURIComponent(pos.error.issues[0]?.message ?? "Check the POS settings.")}`);
+  }
 
   const taxPercentRaw = textField(formData, "taxPercent");
   const taxPercent = taxPercentRaw === "" ? 0 : Number.parseFloat(taxPercentRaw);
@@ -744,6 +884,7 @@ export async function saveSettings(formData: FormData): Promise<void> {
     deliveryFeeCents: dollarsToCents(formData, "deliveryFee"),
     deliveryMinimumCents: dollarsToCents(formData, "deliveryMinimum"),
     taxRateBps: Math.round(taxPercent * 100),
+    ...pos.data,
     updatedAt: new Date(),
   };
 

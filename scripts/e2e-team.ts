@@ -88,10 +88,12 @@ async function main() {
   );
 
   // 3. Add an operator.
-  await page.fill('input[name="name"]', STAFF_NAME);
-  await page.fill('input[name="email"]', STAFF_EMAIL);
-  await page.fill('input[name="password"]', STAFF_PASSWORD);
-  await page.click('button:has-text("Add operator")');
+  // Scoped: Team also has an Add employee form with its own name field.
+  const addOperator = page.locator('form:has(button:has-text("Add operator"))');
+  await addOperator.locator('input[name="name"]').fill(STAFF_NAME);
+  await addOperator.locator('input[name="email"]').fill(STAFF_EMAIL);
+  await addOperator.locator('input[name="password"]').fill(STAFF_PASSWORD);
+  await addOperator.locator('button:has-text("Add operator")').click();
   await page.waitForSelector("text=Account created.", { timeout: 20_000 });
   check(await row(page, STAFF_EMAIL).isVisible(), "new operator is listed");
   check(
@@ -104,10 +106,10 @@ async function main() {
 
   // 4. The same email a second time is refused rather than 500ing on the
   //    unique index.
-  await page.fill('input[name="name"]', "Impostor");
-  await page.fill('input[name="email"]', STAFF_EMAIL.toUpperCase());
-  await page.fill('input[name="password"]', "another-pass-1");
-  await page.click('button:has-text("Add operator")');
+  await addOperator.locator('input[name="name"]').fill("Impostor");
+  await addOperator.locator('input[name="email"]').fill(STAFF_EMAIL.toUpperCase());
+  await addOperator.locator('input[name="password"]').fill("another-pass-1");
+  await addOperator.locator('button:has-text("Add operator")').click();
   await page.waitForSelector("text=That email already has an account.", {
     timeout: 20_000,
   });

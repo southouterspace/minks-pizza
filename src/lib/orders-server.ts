@@ -6,7 +6,7 @@
  * or half-retried write lands on the same end state.
  */
 import { createHash } from "node:crypto";
-import { and, asc, desc, eq, gte, inArray, isNull, lte, or, sql, type SQL } from "drizzle-orm";
+import { and, asc, desc, eq, gte, inArray, isNull, lt, lte, or, sql, type SQL } from "drizzle-orm";
 import type { BatchItem } from "drizzle-orm/batch";
 import {
   adjustments,
@@ -38,8 +38,10 @@ import {
   type DrawerEventKind,
   type FirePlan,
   type Fulfillment,
+  type KitchenStatus,
   type OrderMutation,
   type OrderView,
+  type ReportFacts,
   type RequiredRole,
   type ShiftReport,
   type SubmitLine,
@@ -53,6 +55,7 @@ import {
   type PricingPolicy,
 } from "@/lib/pricing";
 import { checkPin } from "@/lib/pin";
+import { DEFAULT_TIMEZONE } from "@/lib/store-time";
 import type { StaffContext } from "@/lib/staff";
 
 type Statement = BatchItem<"pg">;
@@ -78,6 +81,15 @@ export async function getSettings() {
 }
 
 type Settings = Awaited<ReturnType<typeof getSettings>>;
+
+/** Name and timezone for admin pages, which render before the store is configured. */
+export async function getStoreBasics(): Promise<{ name: string; timezone: string }> {
+  const [row] = await db
+    .select({ name: storeSettings.name, timezone: storeSettings.timezone })
+    .from(storeSettings)
+    .where(eq(storeSettings.id, 1));
+  return row ?? { name: "My Pizzeria", timezone: DEFAULT_TIMEZONE };
+}
 
 function policyOf(s: Settings): PricingPolicy {
   return { halfToppingRule: s.halfToppingRule, extraToppingBps: s.extraToppingBps };
@@ -252,9 +264,9 @@ function recomputeTotals(orderId: string): Statement {
       updated_at = now()
     from (
       select x.subtotal, least(x.subtotal, x.adjusted) as discount,
-        round((x.subtotal - least(x.subtotal, x.adjusted)) * s.tax_rate_bps / 10000.0)::int as tax,
+        round((x.subtotal - least(x.subtotal, x.adjusted)) * r.tax_rate_bps / 10000.0)::int as tax,
         x.paid, x.refunded
-      from store_settings s, (
+      from orders r, (
         select
           coalesce((select sum(i.line_total_cents) from order_items i
                     where i.order_id = ${orderId} and i.voided_at is null), 0)::int as subtotal,
@@ -268,7 +280,7 @@ function recomputeTotals(orderId: string): Statement {
           coalesce((select sum(t.amount_cents) from tenders t
                     where t.order_id = ${orderId} and t.direction = 'refund'), 0)::int as refunded
       ) x
-      where s.id = 1
+      where r.id = ${orderId}
     ) f
     where o.id = ${orderId}`);
 }
@@ -444,6 +456,17 @@ function toView(o: OrderRow, staff: Record<number, string>): OrderView {
 export async function getOrderView(id: string): Promise<OrderView | null> {
   const row = await findOrder(id);
   return row ? (await toViews([row]))[0] : null;
+}
+
+/** Orders in these kitchen states, newest first, for the admin inbox. */
+export async function listOrderViews(statuses: KitchenStatus[]): Promise<OrderView[]> {
+  return toViews(
+    await db.query.orders.findMany({
+      where: inArray(orders.status, statuses),
+      with: withFacts,
+      orderBy: [desc(orders.placedAt)],
+    }),
+  );
 }
 
 export async function getOpenShift() {
@@ -749,6 +772,7 @@ export async function submitOrder(req: SubmitOrderRequest, by: Submitter): Promi
         fireAt,
         promisedAt,
         tipCents: req.tipCents,
+        taxRateBps: settings.taxRateBps,
       })
       .onConflictDoNothing({ target: orders.id }),
     ...insertLines(req.orderId, priced, firedAt),
@@ -939,10 +963,10 @@ async function plan(
           db.execute(sql`
             insert into orders (id, status, order_type, channel, table_label, customer_id, customer_name,
               customer_phone, customer_email, address_line1, address_line2, city, zip, order_notes,
-              created_by, fire_at, promised_at, ticket_order_id, placed_at)
+              created_by, fire_at, promised_at, ticket_order_id, placed_at, tax_rate_bps)
             select ${m.newOrderId}, status, order_type, channel, table_label, customer_id, customer_name,
               customer_phone, customer_email, address_line1, address_line2, city, zip, order_notes,
-              ${actor.employeeId}, fire_at, promised_at, coalesce(ticket_order_id, id), placed_at
+              ${actor.employeeId}, fire_at, promised_at, coalesce(ticket_order_id, id), placed_at, tax_rate_bps
             from orders where id = ${id}
             on conflict (id) do nothing`),
           db
@@ -1039,49 +1063,148 @@ export async function openShift(
   return open?.id === input.shiftId ? { ok: true, shiftId: open.id } : rejected("Another shift is already open.");
 }
 
+/**
+ * The window a report covers. A shift's money is its own tenders and drawer
+ * events (only one shift is open at a time, so its window holds nothing
+ * else); a day's is everything stamped inside the day.
+ */
+export type ReportScope =
+  | { kind: "shift"; shiftId: string; from: Date; to: Date | null }
+  | { kind: "day"; from: Date; to: Date };
+
+/** [from, to), or open-ended while a shift is still open. */
+function within(col: Parameters<typeof gte>[0], scope: ReportScope) {
+  return and(gte(col, scope.from), scope.to ? lt(col, scope.to) : undefined);
+}
+
+/** The tenders a report counts. */
+export function tendersIn(scope: ReportScope) {
+  return scope.kind === "shift" ? eq(tenders.shiftId, scope.shiftId) : within(tenders.createdAt, scope);
+}
+
+/** Ids of every order a report covers: placed in the window, or paid or refunded in it. */
+export function reportOrderIds(scope: ReportScope) {
+  const tendered = db.select({ id: tenders.orderId }).from(tenders).where(tendersIn(scope));
+  return db
+    .select({ id: orders.id })
+    .from(orders)
+    .where(or(within(orders.placedAt, scope), inArray(orders.id, tendered)));
+}
+
+export async function loadReportFacts(scope: ReportScope): Promise<ReportFacts> {
+  const ref = { id: orders.id, number: orders.orderNumber };
+  const lineName = sql<string>`${orderItems.quantity} || ' × ' || ${orderItems.itemName}`;
+  const [tenderRows, drawerRows, adjustmentRows, voidRows, orderRows] = await Promise.all([
+    db
+      .select({ t: tenders, order: ref })
+      .from(tenders)
+      .innerJoin(orders, eq(orders.id, tenders.orderId))
+      .where(tendersIn(scope)),
+    db
+      .select()
+      .from(drawerEvents)
+      .where(scope.kind === "shift" ? eq(drawerEvents.shiftId, scope.shiftId) : within(drawerEvents.createdAt, scope)),
+    db
+      .select({ a: adjustments, order: ref, item: lineName })
+      .from(adjustments)
+      .innerJoin(orders, eq(orders.id, adjustments.orderId))
+      .leftJoin(orderItems, eq(orderItems.lineUid, adjustments.lineUid))
+      .where(within(adjustments.createdAt, scope)),
+    db
+      .select({ i: orderItems, order: ref, item: lineName })
+      .from(orderItems)
+      .innerJoin(orders, eq(orders.id, orderItems.orderId))
+      .where(within(orderItems.voidedAt, scope)),
+    db.select().from(orders).where(inArray(orders.id, reportOrderIds(scope))),
+  ]);
+
+  const ids = new Set<number>();
+  const note = (...xs: (number | null)[]) => xs.forEach((x) => x !== null && ids.add(x));
+  tenderRows.forEach(({ t }) => note(t.employeeId, t.approvedBy));
+  drawerRows.forEach((e) => note(e.employeeId, e.approvedBy));
+  adjustmentRows.forEach(({ a }) => note(a.employeeId, a.approvedBy));
+  voidRows.forEach(({ i }) => note(i.voidedBy, i.voidApprovedBy));
+  const staff = ids.size
+    ? Object.fromEntries(
+        (await db.select({ id: employees.id, name: employees.name }).from(employees).where(inArray(employees.id, [...ids]))).map(
+          (e) => [e.id, e.name],
+        ),
+      )
+    : {};
+
+  return {
+    window: { from: scope.from.toISOString(), to: scope.to?.toISOString() ?? null },
+    staff,
+    tenders: tenderRows.map(({ t, order }) => ({
+      direction: t.direction,
+      method: t.method,
+      amountCents: t.amountCents,
+      tipCents: t.tipCents,
+      employeeId: t.employeeId,
+      approvedBy: t.approvedBy,
+      reason: t.reason,
+      at: t.createdAt.toISOString(),
+      order,
+    })),
+    adjustments: adjustmentRows.map(({ a, order, item }) => ({
+      kind: a.kind,
+      cents: a.cents,
+      employeeId: a.employeeId,
+      approvedBy: a.approvedBy,
+      reason: a.reason,
+      at: a.createdAt.toISOString(),
+      order,
+      item,
+    })),
+    voids: voidRows.map(({ i, order, item }) => ({
+      employeeId: i.voidedBy,
+      approvedBy: i.voidApprovedBy,
+      cents: i.lineTotalCents,
+      reason: i.voidReason,
+      at: i.voidedAt!.toISOString(),
+      order,
+      item,
+    })),
+    drawerEvents: drawerRows.map((e) => ({
+      kind: e.kind,
+      cents: e.cents,
+      employeeId: e.employeeId,
+      approvedBy: e.approvedBy,
+      reason: e.reason,
+      at: e.createdAt.toISOString(),
+    })),
+    orders: orderRows.map((o) => ({
+      id: o.id,
+      number: o.orderNumber,
+      status: o.status,
+      channel: o.channel,
+      orderType: o.orderType,
+      placedAt: o.placedAt.toISOString(),
+      customerName: o.customerName,
+      totals: {
+        subtotalCents: o.subtotalCents,
+        discountCents: o.discountCents,
+        taxCents: o.taxCents,
+        deliveryFeeCents: o.deliveryFeeCents,
+        tipCents: o.tipCents,
+        totalCents: o.totalCents,
+        paidCents: o.paidCents,
+        refundedCents: o.refundedCents,
+      },
+    })),
+  };
+}
+
 export async function getShiftReport(shiftId: string): Promise<ShiftReport | null> {
   const [shift] = await db.select().from(shifts).where(eq(shifts.id, shiftId));
   if (!shift) return null;
-  const from = shift.openedAt;
-  const to = shift.closedAt ?? new Date();
-  const inWindow = (col: Parameters<typeof gte>[0]) => and(gte(col, from), lte(col, to));
-
-  const [tenderRows, drawerRows, adjustmentRows, voidRows, orderRows] = await Promise.all([
-    db.select().from(tenders).where(eq(tenders.shiftId, shiftId)),
-    db.select().from(drawerEvents).where(eq(drawerEvents.shiftId, shiftId)),
-    db.select().from(adjustments).where(inWindow(adjustments.createdAt)),
-    db.select().from(orderItems).where(inWindow(orderItems.voidedAt)),
-    db
-      .select()
-      .from(orders)
-      .where(
-        or(
-          inWindow(orders.placedAt),
-          inArray(orders.id, db.select({ id: tenders.orderId }).from(tenders).where(eq(tenders.shiftId, shiftId))),
-        ),
-      ),
-  ]);
-  return shiftReport(
-    {
-      startingBankCents: shift.startingBankCents,
-      countedCashCents: shift.countedCashCents,
-      cardBatchCents: shift.cardBatchCents,
-      declaredCashTipsCents: shift.declaredCashTipsCents,
-    },
-    {
-      tenders: tenderRows,
-      drawerEvents: drawerRows,
-      adjustments: adjustmentRows,
-      voids: voidRows.map((v) => ({ employeeId: v.voidedBy, approvedBy: v.voidApprovedBy, cents: v.lineTotalCents })),
-      orders: orderRows.map((o) => ({
-        id: o.id,
-        number: o.orderNumber,
-        status: o.status,
-        customerName: o.customerName,
-        totals: { totalCents: o.totalCents, paidCents: o.paidCents, refundedCents: o.refundedCents },
-      })),
-    },
-  );
+  const facts = await loadReportFacts({
+    kind: "shift",
+    shiftId,
+    from: shift.openedAt,
+    to: shift.closedAt,
+  });
+  return shiftReport(shift, facts);
 }
 
 export async function closeShift(

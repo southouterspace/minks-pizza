@@ -1,17 +1,14 @@
 import type { Metadata } from "next";
-import { asc, desc, eq, inArray } from "drizzle-orm";
+import { desc, inArray } from "drizzle-orm";
 import { Inbox } from "lucide-react";
 import { db, orders } from "@/db";
 import { requireOperator } from "@/lib/auth";
 import { formatCents } from "@/lib/money";
 import { channelLabel } from "@/lib/orders";
+import { getStoreBasics, listOrderViews } from "@/lib/orders-server";
+import { formatStoreDateTime } from "@/lib/store-time";
 import { AutoRefresh } from "@/components/admin/auto-refresh";
-import {
-  OrderCard,
-  StatusBadge,
-  type AdminOrder,
-} from "@/components/admin/order-card";
-import { formatDateTime } from "@/components/admin/ui";
+import { OrderCard, StatusBadge } from "@/components/admin/order-card";
 import { Card } from "@/components/ui/card";
 import {
   Empty,
@@ -28,18 +25,12 @@ export const metadata: Metadata = { title: "Orders" };
 export default async function OrdersPage() {
   await requireOperator();
 
-  const [activeOrders, scheduledOrders]: AdminOrder[][] = await Promise.all([
-    db.query.orders.findMany({
-      where: inArray(orders.status, ["new", "preparing", "ready"]),
-      with: { items: true },
-      orderBy: [desc(orders.placedAt)],
-    }),
-    db.query.orders.findMany({
-      where: eq(orders.status, "held"),
-      with: { items: true },
-      orderBy: [asc(orders.fireAt)],
-    }),
+  const [{ timezone: tz }, activeOrders, held] = await Promise.all([
+    getStoreBasics(),
+    listOrderViews(["new", "preparing", "ready"]),
+    listOrderViews(["held"]),
   ]);
+  const scheduledOrders = held.toSorted((a, b) => (a.fireAt ?? "~").localeCompare(b.fireAt ?? "~"));
 
   const recentOrders = await db
     .select()
@@ -75,7 +66,7 @@ export default async function OrdersPage() {
         ) : (
           <div className="mt-3 space-y-4">
             {activeOrders.map((order) => (
-              <OrderCard key={order.id} order={order} />
+              <OrderCard key={order.id} order={order} tz={tz} />
             ))}
           </div>
         )}
@@ -91,7 +82,7 @@ export default async function OrdersPage() {
           </p>
           <div className="mt-3 space-y-4">
             {scheduledOrders.map((order) => (
-              <OrderCard key={order.id} order={order} />
+              <OrderCard key={order.id} order={order} tz={tz} />
             ))}
           </div>
         </section>
@@ -127,7 +118,7 @@ export default async function OrdersPage() {
                       {formatCents(order.totalCents)}
                     </span>
                     <span className="text-xs text-muted-foreground">
-                      {formatDateTime(order.placedAt)}
+                      {formatStoreDateTime(order.placedAt, tz)}
                     </span>
                   </li>
                 ))}

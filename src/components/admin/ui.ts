@@ -15,16 +15,6 @@ export function ruleSummary(
   return `Optional, up to ${maxSelect}`;
 }
 
-/** "Aug 13, 2:45 PM" */
-export function formatDateTime(d: Date): string {
-  return d.toLocaleString("en-US", {
-    month: "short",
-    day: "numeric",
-    hour: "numeric",
-    minute: "2-digit",
-  });
-}
-
 /** Signed price delta: "+$1.50", "−$0.50", or "No charge". */
 export function formatDelta(cents: number): string {
   if (cents === 0) return "No charge";

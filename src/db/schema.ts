@@ -13,6 +13,7 @@ import {
 import { relations, sql } from "drizzle-orm";
 import { KITCHEN_STATIONS } from "../lib/kds";
 import { GROUP_ROLES, HALF_TOPPING_RULES, type LineModifier } from "../lib/pricing";
+import { DEFAULT_TIMEZONE } from "../lib/store-time";
 
 // ---------------------------------------------------------------------------
 // Enums
@@ -124,6 +125,8 @@ export const storeSettings = pgTable("store_settings", {
   makeMinutes: integer("make_minutes").notNull().default(3),
   /** The POS drops back to the PIN pad after this long. */
   posLockSeconds: integer("pos_lock_seconds").notNull().default(120),
+  /** IANA zone: where report days start and end, and how times print. */
+  timezone: text("timezone").notNull().default(DEFAULT_TIMEZONE),
   isPublished: boolean("is_published").notNull().default(false),
   isAcceptingOrders: boolean("is_accepting_orders").notNull().default(true),
   updatedAt: timestamp("updated_at", { withTimezone: true })
@@ -328,6 +331,12 @@ export const orders = pgTable(
     taxCents: integer("tax_cents").notNull().default(0),
     deliveryFeeCents: integer("delivery_fee_cents").notNull().default(0),
     tipCents: integer("tip_cents").notNull().default(0),
+    /**
+     * The store rate when the order was placed. The fold taxes with this, so
+     * changing the store rate never re-taxes an order paid or edited later.
+     * No default: an insert that forgets it should fail, not tax at 0%.
+     */
+    taxRateBps: integer("tax_rate_bps").notNull(),
     totalCents: integer("total_cents").notNull().default(0),
     paidCents: integer("paid_cents").notNull().default(0),
     refundedCents: integer("refunded_cents").notNull().default(0),

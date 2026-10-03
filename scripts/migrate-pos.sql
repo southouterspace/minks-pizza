@@ -106,6 +106,26 @@ BEGIN
     ) r)
   WHERE EXISTS (SELECT 1 FROM jsonb_array_elements(i.modifiers) x WHERE NOT x ? 'kind');
 
+  -- Tax rate snapshot. Each existing order gets the store's current rate when
+  -- that rate reproduces its stored tax_cents (every order, unless the rate
+  -- changed since it was placed); otherwise the rate its own tax implies,
+  -- tax / taxable to the nearest basis point. Dividing alone would be wrong
+  -- for most orders: tax was rounded to the cent, so 307 on 3724 reads back as
+  -- 824 bps, not the 825 it was taxed at.
+  IF NOT EXISTS (SELECT 1 FROM information_schema.columns
+                 WHERE table_name = 'orders' AND column_name = 'tax_rate_bps') THEN
+    ALTER TABLE orders ADD COLUMN tax_rate_bps integer;
+    UPDATE orders o SET tax_rate_bps = CASE
+      WHEN round((o.subtotal_cents - o.discount_cents) * s.tax_rate_bps / 10000.0) = o.tax_cents
+        THEN s.tax_rate_bps
+      ELSE coalesce(round(o.tax_cents * 10000.0 / nullif(o.subtotal_cents - o.discount_cents, 0))::int, s.tax_rate_bps)
+      END
+    FROM store_settings s WHERE s.id = 1;
+    -- No settings row means no order was ever taxed.
+    UPDATE orders SET tax_rate_bps = 0 WHERE tax_rate_bps IS NULL;
+    ALTER TABLE orders ALTER COLUMN tax_rate_bps SET NOT NULL;
+  END IF;
+
   -- Customers, backfilled from every phone number already on an order. The
   -- table is created here (matching schema.ts) so the backfill can run
   -- before push; push then sees it as already in place.
