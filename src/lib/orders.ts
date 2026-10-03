@@ -151,9 +151,20 @@ export function channelLabel(channel: Channel, kind: Fulfillment["kind"]): strin
   return SALES_CHANNEL_LABEL[salesChannel(channel, kind)];
 }
 
+export const FULFILLMENT_LABEL: Record<Fulfillment["kind"], string> = {
+  pickup: "Pickup",
+  delivery: "Delivery",
+  dine_in: "Dine-in",
+};
+
+/** "Pickup", "Delivery", "Dine-in · Table 4". */
+export function fulfillmentLabel(f: Fulfillment): string {
+  return f.kind === "dine_in" ? `${FULFILLMENT_LABEL.dine_in} · Table ${f.table}` : FULFILLMENT_LABEL[f.kind];
+}
+
 /** "Dine-in, table 4", "Phone, delivery", "Walk-in": where an order came from and how it leaves. */
 export function sourceLabel(channel: Channel, f: Fulfillment): string {
-  if (f.kind === "dine_in") return f.table ? `Dine-in, table ${f.table}` : "Dine-in";
+  if (f.kind === "dine_in") return `Dine-in, table ${f.table}`;
   return channel === "walk_in" && f.kind === "pickup" ? "Walk-in" : `${SALES_CHANNEL_LABEL[channel]}, ${f.kind}`;
 }
 

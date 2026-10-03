@@ -5,6 +5,7 @@ import {
   PAYMENT_LABEL,
   channelLabel,
   dueCents,
+  fulfillmentLabel,
   modifierLabel,
   orderHistory,
   paymentState,
@@ -48,12 +49,6 @@ export const STATUS_META: Record<
     className: "text-muted-foreground!",
   },
   canceled: { label: "Canceled", variant: "destructive" },
-};
-
-const TYPE_LABEL: Record<OrderView["fulfillment"]["kind"], string> = {
-  pickup: "Pickup",
-  delivery: "Delivery",
-  dine_in: "Dine-in",
 };
 
 export function StatusBadge({ status }: { status: KitchenStatus }) {
@@ -122,8 +117,7 @@ export function OrderCard({ order, tz }: { order: OrderView; tz: string }) {
           <StatusBadge status={order.status} />
           <Badge variant="secondary">{channelLabel(order.channel, f.kind)}</Badge>
           <Badge variant="outline" className="text-muted-foreground!">
-            {TYPE_LABEL[f.kind]}
-            {f.kind === "dine_in" && f.table ? ` · Table ${f.table}` : ""}
+            {fulfillmentLabel(f)}
           </Badge>
           <PaymentPill order={order} />
         </CardTitle>
