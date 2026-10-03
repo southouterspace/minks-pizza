@@ -1,6 +1,7 @@
 import "server-only";
 import { and, asc, desc, eq, gte, inArray, isNull, ne, sql } from "drizzle-orm";
 import { db, orderItems, orders, storeSettings } from "@/db";
+import { inventorySyncStatement, planOrderUsage, syncStockOuts } from "@/lib/inventory";
 import { RECALLABLE } from "@/lib/order-workflow";
 import { transitionStatement, type Actor } from "@/lib/order-writes";
 import {
@@ -232,15 +233,21 @@ export async function applyKdsAction(
         .update(orderItems)
         .set({ ovenAt: null, doneAt: null })
         .where(eq(orderItems.orderId, action.orderId)),
+      inventorySyncStatement(await planOrderUsage(action.orderId)),
     ]);
+    await syncStockOuts({ orderId: action.orderId });
     return;
   }
 
-  await transitionStatement({
-    orderId: action.orderId,
-    from: ["ready"],
-    to: "completed",
-    actor,
-    now,
-  });
+  await db.batch([
+    transitionStatement({
+      orderId: action.orderId,
+      from: ["ready"],
+      to: "completed",
+      actor,
+      now,
+    }),
+    inventorySyncStatement(await planOrderUsage(action.orderId)),
+  ]);
+  await syncStockOuts({ orderId: action.orderId });
 }

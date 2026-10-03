@@ -1,6 +1,7 @@
 import "server-only";
 import { and, eq, inArray, sql, type SQL } from "drizzle-orm";
 import { db, orderEvents, orders } from "@/db";
+import { inventorySyncStatement, planOrderUsage, syncStockOuts } from "@/lib/inventory";
 import {
   canTransition,
   COOKING_STATUSES,
@@ -116,12 +117,13 @@ export async function transitionOrder(args: {
   if (args.to === "canceled" && !args.cancelReason) {
     return { ok: false, reason: "Pick a reason for canceling." };
   }
-  const { rows } = await transitionStatement({
-    ...args,
-    from: [order.status],
-    now: new Date(),
-  });
-  return rows.length > 0 ? { ok: true } : { ok: false, reason: STALE };
+  const [{ rows }] = await db.batch([
+    transitionStatement({ ...args, from: [order.status], now: new Date() }),
+    inventorySyncStatement(await planOrderUsage(args.orderId)),
+  ]);
+  if (rows.length === 0) return { ok: false, reason: STALE };
+  await syncStockOuts({ orderId: args.orderId });
+  return { ok: true };
 }
 
 export async function adjustPromisedTime(args: {
