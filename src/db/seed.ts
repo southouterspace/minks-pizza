@@ -1,6 +1,7 @@
 /**
- * Seeds the database with the singleton store settings row and a starter
- * pizzeria menu the operator can edit or replace from the admin dashboard.
+ * Seeds the database with the singleton store settings row, demo POS staff,
+ * and a starter pizzeria menu the operator can edit or replace from the
+ * admin dashboard.
  *
  * Run with: npm run db:seed  (idempotent — skips if categories already exist)
  */
@@ -8,6 +9,7 @@ import { neon } from "@neondatabase/serverless";
 import { drizzle } from "drizzle-orm/neon-http";
 import * as schema from "./schema";
 import { databaseUrl } from "./url";
+import { pinDigest } from "../lib/pin";
 
 const sql = neon(databaseUrl());
 const db = drizzle(sql, { schema });
@@ -46,6 +48,16 @@ async function main() {
     })
     .onConflictDoNothing();
 
+  // Demo staff for the POS terminal (PINs documented in README). PINs are
+  // unique among active staff, so a re-run skips them.
+  await db
+    .insert(schema.employees)
+    .values([
+      { name: "Morgan Manager", role: "manager", pinDigest: pinDigest("1234") },
+      { name: "Casey Cashier", role: "cashier", pinDigest: pinDigest("5678") },
+    ])
+    .onConflictDoNothing();
+
   const existing = await db.select().from(schema.categories);
   if (existing.length > 0) {
     console.log("Menu already seeded — skipping.");
@@ -55,15 +67,15 @@ async function main() {
   // --- Modifier groups -----------------------------------------------------
   const [sizeGroup] = await db
     .insert(schema.modifierGroups)
-    .values({ name: "Size", minSelect: 1, maxSelect: 1, sortOrder: 0 })
+    .values({ name: "Size", role: "size", minSelect: 1, maxSelect: 1, sortOrder: 0 })
     .returning();
   const [crustGroup] = await db
     .insert(schema.modifierGroups)
-    .values({ name: "Crust", minSelect: 1, maxSelect: 1, sortOrder: 1 })
+    .values({ name: "Crust", role: "crust", minSelect: 1, maxSelect: 1, sortOrder: 1 })
     .returning();
   const [toppingsGroup] = await db
     .insert(schema.modifierGroups)
-    .values({ name: "Extra Toppings", minSelect: 0, maxSelect: null, sortOrder: 2 })
+    .values({ name: "Extra Toppings", role: "topping", minSelect: 0, maxSelect: null, sortOrder: 2 })
     .returning();
   const [wingSauceGroup] = await db
     .insert(schema.modifierGroups)

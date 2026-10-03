@@ -1,30 +1,53 @@
 import {
   boolean,
+  index,
   integer,
   jsonb,
   pgEnum,
   pgTable,
   text,
   timestamp,
+  uniqueIndex,
   uuid,
 } from "drizzle-orm/pg-core";
-import { relations } from "drizzle-orm";
+import { relations, sql } from "drizzle-orm";
 import { KITCHEN_STATIONS } from "../lib/kds";
+import { GROUP_ROLES, HALF_TOPPING_RULES, type LineModifier } from "../lib/pricing";
 
 // ---------------------------------------------------------------------------
 // Enums
 // ---------------------------------------------------------------------------
 
+/**
+ * Kitchen lifecycle, derived from line stamps by the status fold in
+ * orders-server.ts. `held` = nothing fired yet (scheduled or a held check).
+ */
 export const orderStatusEnum = pgEnum("order_status", [
+  "held",
   "new",
-  "confirmed",
   "preparing",
   "ready",
   "completed",
   "canceled",
 ]);
 
-export const orderTypeEnum = pgEnum("order_type", ["pickup", "delivery"]);
+export const orderTypeEnum = pgEnum("order_type", ["pickup", "delivery", "dine_in"]);
+
+export const orderChannelEnum = pgEnum("order_channel", ["online", "walk_in", "phone"]);
+
+export const modifierRoleEnum = pgEnum("modifier_role", GROUP_ROLES);
+
+export const halfToppingRuleEnum = pgEnum("half_topping_rule", HALF_TOPPING_RULES);
+
+export const employeeRoleEnum = pgEnum("employee_role", ["cashier", "manager", "owner"]);
+
+export const tenderDirectionEnum = pgEnum("tender_direction", ["payment", "refund"]);
+
+export const tenderMethodEnum = pgEnum("tender_method", ["cash", "card_external"]);
+
+export const adjustmentKindEnum = pgEnum("adjustment_kind", ["discount", "comp"]);
+
+export const drawerEventKindEnum = pgEnum("drawer_event_kind", ["no_sale", "paid_in", "paid_out"]);
 
 /**
  * Where a category's items are made, for kitchen-display routing. `counter`
@@ -32,12 +55,6 @@ export const orderTypeEnum = pgEnum("order_type", ["pickup", "delivery"]);
  * ticket for the expo but never hold an order back from "ready".
  */
 export const kitchenStationEnum = pgEnum("kitchen_station", KITCHEN_STATIONS);
-
-export const paymentStatusEnum = pgEnum("payment_status", [
-  "pending", // awaiting payment integration (Stripe) — v1 default
-  "paid",
-  "refunded",
-]);
 
 // ---------------------------------------------------------------------------
 // Operator accounts
@@ -98,6 +115,15 @@ export const storeSettings = pgTable("store_settings", {
   kdsLateMinutes: integer("kds_late_minutes").notNull().default(15),
   /** Kitchen display: oven bake countdown for a pie (minutes). */
   kdsOvenMinutes: integer("kds_oven_minutes").notNull().default(7),
+  halfToppingRule: halfToppingRuleEnum("half_topping_rule").notNull().default("average"),
+  /** Price of an "extra" portion as a multiple of the topping price (20000 = 2×). */
+  extraToppingBps: integer("extra_topping_bps").notNull().default(20_000),
+  /** Discounts above this need a manager. */
+  discountApprovalCents: integer("discount_approval_cents").notNull().default(500),
+  ovenCapacityPies: integer("oven_capacity_pies").notNull().default(6),
+  makeMinutes: integer("make_minutes").notNull().default(3),
+  /** The POS drops back to the PIN pad after this long. */
+  posLockSeconds: integer("pos_lock_seconds").notNull().default(120),
   isPublished: boolean("is_published").notNull().default(false),
   isAcceptingOrders: boolean("is_accepting_orders").notNull().default(true),
   updatedAt: timestamp("updated_at", { withTimezone: true })
@@ -159,6 +185,8 @@ export const menuItems = pgTable("menu_items", {
 export const modifierGroups = pgTable("modifier_groups", {
   id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
   name: text("name").notNull(), // "Size", "Crust", "Toppings"
+  /** Drives builder order, half placement, and the KDS layout. */
+  role: modifierRoleEnum("role").notNull().default("option"),
   /** Minimum selections required (0 = optional group). */
   minSelect: integer("min_select").notNull().default(0),
   /** Maximum selections allowed (null = unlimited). 1 ⇒ radio, else checkboxes. */
@@ -197,70 +225,224 @@ export const itemModifierGroups = pgTable("item_modifier_groups", {
 // Orders
 // ---------------------------------------------------------------------------
 
-/** Snapshot of one chosen modifier, denormalized into the order line. */
-export type OrderItemModifier = {
-  groupName: string;
-  modifierName: string;
-  priceDeltaCents: number;
-};
+export const employees = pgTable(
+  "employees",
+  {
+    id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+    name: text("name").notNull(),
+    role: employeeRoleEnum("role").notNull().default("cashier"),
+    /** HMAC-SHA256(SESSION_SECRET, pin): a PIN is found with one indexed lookup. */
+    pinDigest: text("pin_digest").notNull(),
+    isActive: boolean("is_active").notNull().default(true),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [uniqueIndex("employees_active_pin").on(t.pinDigest).where(sql`is_active`)],
+);
 
-export const orders = pgTable("orders", {
-  id: uuid("id").primaryKey().defaultRandom(),
-  orderNumber: integer("order_number").notNull().generatedAlwaysAsIdentity({
-    startWith: 1001,
-  }),
-  status: orderStatusEnum("status").notNull().default("new"),
-  orderType: orderTypeEnum("order_type").notNull(),
-  customerName: text("customer_name").notNull(),
-  customerPhone: text("customer_phone").notNull(),
-  customerEmail: text("customer_email"),
-  addressLine1: text("address_line1"),
-  addressLine2: text("address_line2"),
-  city: text("city"),
-  zip: text("zip"),
-  orderNotes: text("order_notes"),
-  subtotalCents: integer("subtotal_cents").notNull(),
-  taxCents: integer("tax_cents").notNull(),
-  deliveryFeeCents: integer("delivery_fee_cents").notNull().default(0),
-  tipCents: integer("tip_cents").notNull().default(0),
-  totalCents: integer("total_cents").notNull(),
-  paymentStatus: paymentStatusEnum("payment_status")
-    .notNull()
-    .default("pending"),
-  placedAt: timestamp("placed_at", { withTimezone: true })
-    .notNull()
-    .defaultNow(),
-  /** Set when the kitchen bumps the order (status → ready); cleared on recall. */
-  readyAt: timestamp("ready_at", { withTimezone: true }),
-  updatedAt: timestamp("updated_at", { withTimezone: true })
-    .notNull()
-    .defaultNow(),
+/** Failed PIN entries per signed-in device, so 4 digits can't be walked. */
+export const pinAttempts = pgTable("pin_attempts", {
+  operatorId: integer("operator_id")
+    .primaryKey()
+    .references(() => operators.id, { onDelete: "cascade" }),
+  failures: integer("failures").notNull().default(0),
+  windowStart: timestamp("window_start", { withTimezone: true }).notNull().defaultNow(),
 });
 
-export const orderItems = pgTable("order_items", {
-  id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
-  orderId: uuid("order_id")
-    .notNull()
-    .references(() => orders.id, { onDelete: "cascade" }),
-  menuItemId: integer("menu_item_id").references(() => menuItems.id, {
-    onDelete: "set null",
-  }),
-  itemName: text("item_name").notNull(),
-  quantity: integer("quantity").notNull().default(1),
-  /** Per-unit price including modifier deltas, at time of order. */
-  unitPriceCents: integer("unit_price_cents").notNull(),
-  lineTotalCents: integer("line_total_cents").notNull(),
-  modifiers: jsonb("modifiers").$type<OrderItemModifier[]>().notNull(),
+export const customers = pgTable("customers", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  /** Digits only (see normalizePhone). */
+  phone: text("phone").notNull().unique(),
+  name: text("name").notNull(),
+  email: text("email"),
   notes: text("notes"),
-  /**
-   * Kitchen station snapshot, copied from the category at order time so
-   * re-routing a category never reshuffles tickets already on the line.
-   */
-  station: kitchenStationEnum("station").notNull().default("kitchen"),
-  /** Pizza line: set when the pie goes into the oven (make line → oven). */
-  ovenAt: timestamp("oven_at", { withTimezone: true }),
-  /** Set when the item is finished (pies: out of the oven, cut and boxed). */
-  doneAt: timestamp("done_at", { withTimezone: true }),
+  lastOrderAt: timestamp("last_order_at", { withTimezone: true }),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+});
+
+export const customerAddresses = pgTable(
+  "customer_addresses",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    customerId: uuid("customer_id")
+      .notNull()
+      .references(() => customers.id, { onDelete: "cascade" }),
+    line1: text("line1").notNull(),
+    line2: text("line2"),
+    city: text("city"),
+    zip: text("zip").notNull(),
+    lastUsedAt: timestamp("last_used_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [uniqueIndex("customer_addresses_unique").on(t.customerId, t.line1, t.zip)],
+);
+
+export const shifts = pgTable(
+  "shifts",
+  {
+    id: uuid("id").primaryKey(),
+    openedBy: integer("opened_by")
+      .notNull()
+      .references(() => employees.id),
+    openedAt: timestamp("opened_at", { withTimezone: true }).notNull().defaultNow(),
+    startingBankCents: integer("starting_bank_cents").notNull(),
+    closedBy: integer("closed_by").references(() => employees.id),
+    closedAt: timestamp("closed_at", { withTimezone: true }),
+    countedCashCents: integer("counted_cash_cents"),
+    cardBatchCents: integer("card_batch_cents"),
+    declaredCashTipsCents: integer("declared_cash_tips_cents"),
+    notes: text("notes"),
+  },
+  (t) => [uniqueIndex("shifts_one_open").on(sql`(closed_at is null)`).where(sql`${t.closedAt} is null`)],
+);
+
+export const orders = pgTable(
+  "orders",
+  {
+    /** Client-minted at the POS, so a replayed submit lands on the same row. */
+    id: uuid("id").primaryKey().defaultRandom(),
+    orderNumber: integer("order_number").notNull().generatedAlwaysAsIdentity({
+      startWith: 1001,
+    }),
+    status: orderStatusEnum("status").notNull().default("held"),
+    orderType: orderTypeEnum("order_type").notNull(),
+    channel: orderChannelEnum("channel").notNull().default("online"),
+    tableLabel: text("table_label"),
+    customerId: uuid("customer_id").references(() => customers.id, { onDelete: "set null" }),
+    customerName: text("customer_name").notNull(),
+    customerPhone: text("customer_phone").notNull(),
+    customerEmail: text("customer_email"),
+    addressLine1: text("address_line1"),
+    addressLine2: text("address_line2"),
+    city: text("city"),
+    zip: text("zip"),
+    orderNotes: text("order_notes"),
+    /** Null = online. */
+    createdBy: integer("created_by").references(() => employees.id),
+    /** When a held order fires to the kitchen on its own (see fireDue). */
+    fireAt: timestamp("fire_at", { withTimezone: true }),
+    promisedAt: timestamp("promised_at", { withTimezone: true }),
+    /** Set on a split-by-item check: the KDS keeps it on its parent's ticket. */
+    ticketOrderId: uuid("ticket_order_id"),
+    // Money folds: written only by recomputeTotals in orders-server.ts.
+    subtotalCents: integer("subtotal_cents").notNull().default(0),
+    discountCents: integer("discount_cents").notNull().default(0),
+    taxCents: integer("tax_cents").notNull().default(0),
+    deliveryFeeCents: integer("delivery_fee_cents").notNull().default(0),
+    tipCents: integer("tip_cents").notNull().default(0),
+    totalCents: integer("total_cents").notNull().default(0),
+    paidCents: integer("paid_cents").notNull().default(0),
+    refundedCents: integer("refunded_cents").notNull().default(0),
+    placedAt: timestamp("placed_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+    /** Set when the kitchen bumps the order (status → ready); cleared on recall. */
+    readyAt: timestamp("ready_at", { withTimezone: true }),
+    updatedAt: timestamp("updated_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (t) => [
+    index("orders_customer").on(t.customerId),
+    index("orders_held_fire_at").on(t.fireAt).where(sql`${t.status} = 'held'`),
+  ],
+);
+
+export const orderItems = pgTable(
+  "order_items",
+  {
+    id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+    /** Client-minted line id the POS addresses lines by; makes line inserts replayable. */
+    lineUid: uuid("line_uid").notNull().unique().defaultRandom(),
+    orderId: uuid("order_id")
+      .notNull()
+      .references(() => orders.id, { onDelete: "cascade" }),
+    menuItemId: integer("menu_item_id").references(() => menuItems.id, {
+      onDelete: "set null",
+    }),
+    itemName: text("item_name").notNull(),
+    quantity: integer("quantity").notNull().default(1),
+    /** Per-unit price including modifier deltas, at time of order. */
+    unitPriceCents: integer("unit_price_cents").notNull(),
+    lineTotalCents: integer("line_total_cents").notNull(),
+    modifiers: jsonb("modifiers").$type<LineModifier[]>().notNull(),
+    notes: text("notes"),
+    /**
+     * Kitchen station snapshot, copied from the category at order time so
+     * re-routing a category never reshuffles tickets already on the line.
+     */
+    station: kitchenStationEnum("station").notNull().default("kitchen"),
+    /** Null = held back from the kitchen. */
+    firedAt: timestamp("fired_at", { withTimezone: true }),
+    /** Pizza line: set when the pie goes into the oven (make line → oven). */
+    ovenAt: timestamp("oven_at", { withTimezone: true }),
+    /** Set when the item is finished (pies: out of the oven, cut and boxed). */
+    doneAt: timestamp("done_at", { withTimezone: true }),
+    voidedAt: timestamp("voided_at", { withTimezone: true }),
+    voidedBy: integer("voided_by").references(() => employees.id),
+    voidReason: text("void_reason"),
+    voidApprovedBy: integer("void_approved_by").references(() => employees.id),
+  },
+  (t) => [index("order_items_order").on(t.orderId)],
+);
+
+/** The money ledger. Refunds are rows, never edits. */
+export const tenders = pgTable(
+  "tenders",
+  {
+    id: uuid("id").primaryKey(),
+    orderId: uuid("order_id")
+      .notNull()
+      .references(() => orders.id),
+    /** Null only for tenders not taken at a till (online payments, later). */
+    shiftId: uuid("shift_id").references(() => shifts.id),
+    direction: tenderDirectionEnum("direction").notNull(),
+    method: tenderMethodEnum("method").notNull(),
+    /** Applied to the order. Cash change = tendered - amount. */
+    amountCents: integer("amount_cents").notNull(),
+    tenderedCents: integer("tendered_cents"),
+    tipCents: integer("tip_cents").notNull().default(0),
+    last4: text("last4"),
+    employeeId: integer("employee_id").references(() => employees.id),
+    approvedBy: integer("approved_by").references(() => employees.id),
+    reason: text("reason"),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [index("tenders_order").on(t.orderId), index("tenders_shift").on(t.shiftId)],
+);
+
+export const adjustments = pgTable(
+  "adjustments",
+  {
+    id: uuid("id").primaryKey(),
+    orderId: uuid("order_id")
+      .notNull()
+      .references(() => orders.id),
+    /** Null = the whole check. */
+    lineUid: uuid("line_uid"),
+    kind: adjustmentKindEnum("kind").notNull(),
+    cents: integer("cents").notNull(),
+    reason: text("reason").notNull(),
+    employeeId: integer("employee_id")
+      .notNull()
+      .references(() => employees.id),
+    approvedBy: integer("approved_by").references(() => employees.id),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [index("adjustments_order").on(t.orderId)],
+);
+
+export const drawerEvents = pgTable("drawer_events", {
+  id: uuid("id").primaryKey(),
+  shiftId: uuid("shift_id")
+    .notNull()
+    .references(() => shifts.id),
+  kind: drawerEventKindEnum("kind").notNull(),
+  cents: integer("cents").notNull().default(0),
+  reason: text("reason"),
+  employeeId: integer("employee_id")
+    .notNull()
+    .references(() => employees.id),
+  approvedBy: integer("approved_by").references(() => employees.id),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
 });
 
 // ---------------------------------------------------------------------------
@@ -310,6 +492,16 @@ export const itemModifierGroupsRelations = relations(
 
 export const ordersRelations = relations(orders, ({ many }) => ({
   items: many(orderItems),
+  tenders: many(tenders),
+  adjustments: many(adjustments),
+}));
+
+export const tendersRelations = relations(tenders, ({ one }) => ({
+  order: one(orders, { fields: [tenders.orderId], references: [orders.id] }),
+}));
+
+export const adjustmentsRelations = relations(adjustments, ({ one }) => ({
+  order: one(orders, { fields: [adjustments.orderId], references: [orders.id] }),
 }));
 
 export const orderItemsRelations = relations(orderItems, ({ one }) => ({
