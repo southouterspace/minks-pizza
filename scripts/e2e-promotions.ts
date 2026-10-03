@@ -19,15 +19,13 @@ import {
   db,
   menuItems,
   orderDiscounts,
-  orderEvents,
   orders,
   operators,
   promotionCodes,
   promotions,
   storeSettings,
 } from "../src/db";
-import { createOrder } from "../src/lib/checkout";
-import { OrderError } from "../src/lib/orders";
+import { createOrder, OrderError } from "../src/lib/checkout";
 import { checkoutSchema } from "../src/lib/validation";
 
 const BASE = process.env.E2E_BASE_URL ?? "http://localhost:3000";
@@ -363,9 +361,13 @@ async function main() {
       return o.discountCents === 1019 && o.taxCents === 212 && o.totalCents === 2787;
     }),
   );
-  const compEvent = (await db.select().from(orderEvents).where(eq(orderEvents.orderId, secondId))).find((e) => e.type === "discount");
-  check("comp logs a discount event by the operator", compEvent?.note === "−$3.00 · Late order" && compEvent.actor === NAME);
-  check("timeline shows the comp", await shows(detail, "timeline", "Discount · −$3.00 · Late order"));
+  const [operator] = await db.select({ id: operators.id }).from(operators).where(eq(operators.email, EMAIL));
+  const compRow = (await db.select().from(orderDiscounts).where(eq(orderDiscounts.orderId, secondId))).find((d) => d.source === "comp");
+  check(
+    "comp is a discount row by the operator",
+    compRow?.label === "Late order" && compRow.amountCents === 300 && compRow.operatorId === operator.id && compRow.employeeId === null,
+  );
+  check("timeline shows the comp", await shows(detail, "timeline", "Discounted the check by 3.00 (Late order)"));
   check("detail totals list both discounts", await shows(detail, "discount-line", "Late order"));
   check("order detail: no sideways scroll at 375px", await noSideScroll(detail));
   await detail.screenshot({ path: `${SHOT_DIR}/admin-order-comp-375.png`, fullPage: true });

@@ -7,7 +7,7 @@ import { getLoyaltySettings, getMember, memberLedger, memberStatus } from "@/lib
 import { restoreExpired } from "../../actions";
 import { AdjustPointsForm, MemberBirthdayForms, MissingOrderForm } from "@/components/admin/member-forms";
 import { formatDateTime } from "@/components/admin/ui";
-import { getSettings } from "@/lib/orders";
+import { getSettings } from "@/lib/settings-server";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { cn } from "@/lib/utils";

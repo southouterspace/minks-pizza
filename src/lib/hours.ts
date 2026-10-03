@@ -12,12 +12,12 @@ export const STORE_TIMEZONES = [
   { value: "Pacific/Honolulu", label: "Hawaii" },
 ] as const;
 
-/** Open/closed per the viewer's local clock (informational, not enforced). */
-export function isOpenNow(hours: DayHours[] | null, now = new Date()): boolean | null {
+/** Open/closed on the store's clock (informational, not enforced). */
+export function isOpenNow(hours: DayHours[] | null, timeZone: string, now = new Date()): boolean | null {
   if (!hours || hours.length === 0) return null;
-  const today = hours.find((h) => h.day === now.getDay());
+  const { day, minutes } = zonedParts(now, timeZone);
+  const today = hours.find((h) => h.day === day);
   if (!today || today.closed) return false;
-  const minutes = now.getHours() * 60 + now.getMinutes();
   return minutes >= hhmmMinutes(today.open) && minutes < hhmmMinutes(today.close);
 }
 

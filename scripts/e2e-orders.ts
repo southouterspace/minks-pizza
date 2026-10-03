@@ -1,10 +1,11 @@
 /**
  * Order management e2e against a running dev server and its database:
- * orders placed through the real checkout path, then the board (advance
- * through every status, +10 min, cancel with a reason, two tablets tapping
- * the same button), history search, filters and CSV export, the detail
- * page timeline, payment and notes, a KDS recall's audit row, and the
- * new-order alert. Asserts both the screen and what the database recorded.
+ * orders placed through the real checkout path, then the kitchen's taps
+ * moving them through the lanes and the board's Complete button, +10 min,
+ * cancel with a reason, two tablets tapping the same button, history
+ * search, filters and CSV export, the detail page timeline, payment and
+ * notes, a KDS recall's audit row, and the new-order alert. Asserts both the
+ * screen and what the database recorded.
  *
  * Run: npx tsx --env-file=.env.local scripts/e2e-orders.ts
  * Mutates orders and adds a temporary operator: point MINKS_DATABASE_URL at
@@ -14,8 +15,10 @@ import { mkdirSync } from "node:fs";
 import bcrypt from "bcryptjs";
 import { chromium, type Browser, type Page } from "playwright";
 import { and, asc, eq, inArray } from "drizzle-orm";
-import { db, menuItems, modifierGroups, modifiers, operators, orderEvents, orders, storeSettings } from "../src/db";
+import { db, menuItems, modifierGroups, modifiers, operators, orderEvents, orderItems, orders, storeSettings, tenders } from "../src/db";
+import { ACTIVE_STATUSES } from "../src/lib/order-workflow";
 import { createOrder } from "../src/lib/checkout";
+import { cancelOrder } from "./e2e/harness";
 
 const BASE = process.env.E2E_BASE_URL ?? "http://localhost:3000";
 const SHOT_DIR = process.env.E2E_SHOT_DIR ?? "/tmp/e2e-orders";
@@ -68,10 +71,12 @@ async function menu() {
   const item = (name: string) => items.find((i) => i.name === name)!.id;
   const pick = (group: string, name: string) =>
     mods.find((m) => m.groupId === groups.find((g) => g.name === group)!.id && m.name === name)!.id;
+  const whole = (modifierId: number) => ({ modifierId, placement: "whole" as const, amount: "regular" as const });
   const pie = (quantity = 1) => ({
     itemId: item("Cheese Pizza"),
     quantity,
-    modifiers: [pick("Size", 'Large 14"'), pick("Crust", "Thin Crust")].map((id) => ({ id })),
+    notes: null,
+    selections: [whole(pick("Size", 'Large 14"')), whole(pick("Crust", "Thin Crust"))],
   });
   return { item, pie };
 }
@@ -95,10 +100,9 @@ async function main() {
     .returning();
 
   // Clear the board so lane contents are predictable.
-  await db
-    .update(orders)
-    .set({ status: "completed" })
-    .where(inArray(orders.status, ["new", "confirmed", "preparing", "ready"]));
+  for (const o of await db.select({ id: orders.id }).from(orders).where(inArray(orders.status, [...ACTIVE_STATUSES]))) {
+    await cancelOrder(o.id);
+  }
 
   const { item, pie } = await menu();
   const [settings] = await db.select().from(storeSettings);
@@ -108,7 +112,7 @@ async function main() {
     customerPhone: "(555) 246-8135",
     customerEmail: "ozzie@example.com",
     tipCents: 300,
-    lines: [pie(2), { itemId: item("Garlic Knots (6)"), quantity: 1, modifiers: [], notes: "extra butter" }],
+    lines: [pie(2), { itemId: item("Garlic Knots (6)"), quantity: 1, selections: [], notes: "extra butter" }],
   });
   const b = await createOrder({
     orderType: "delivery",
@@ -122,20 +126,22 @@ async function main() {
   });
 
   // --- Checkout --------------------------------------------------------------
+  const ms = (iso: string | null) => (iso ? new Date(iso).getTime() : NaN);
+  // Promised = the quote at submit time: prep minutes plus the oven queue ahead (none on a cleared
+  // board). placed_at is the database clock and the quote the app's, so allow a few seconds between.
+  const within = (actual: number, expected: number) => Math.abs(actual - expected) < 5_000;
   check(
     "checkout quotes promisedAt = placedAt + pickup prep minutes",
-    a.promisedAt!.getTime() - a.placedAt.getTime() === settings.pickupPrepMinutes * 60_000,
-    `${a.placedAt.toISOString()} → ${a.promisedAt?.toISOString()}`,
+    within(ms(a.promisedAt) - ms(a.placedAt), settings.pickupPrepMinutes * 60_000),
+    `${a.placedAt} → ${a.promisedAt}`,
   );
   check(
     "checkout uses delivery prep minutes for delivery",
-    b.promisedAt!.getTime() - b.placedAt.getTime() === settings.deliveryPrepMinutes * 60_000,
+    within(ms(b.promisedAt) - ms(b.placedAt), settings.deliveryPrepMinutes * 60_000),
   );
   const placed = (await events(a.id))[0];
-  check(
-    "checkout writes a placed event by Customer",
-    placed?.type === "placed" && placed.actor === "Customer" && placed.toStatus === "new",
-  );
+  check("checkout writes a placed event by Customer", placed?.type === "placed" && placed.actor === "Customer");
+  check("a web order is fired to the kitchen as it is placed", JSON.stringify(await moves(a.id)) === JSON.stringify(["held->new"]));
 
   const browser = await chromium.launch({
     executablePath: process.env.CHROMIUM_PATH ?? "/opt/pw-browsers/chromium",
@@ -144,49 +150,57 @@ async function main() {
   const card = (n: number) => page.getByTestId(`board-order-${n}`);
   const lane = (title: string) => page.getByTestId(`lane-${title}`);
 
-  // --- Board: advance through every status -----------------------------------
-  await card(a.orderNumber).waitFor();
-  check("new order sits in the New lane", await lane("New").getByTestId(`board-order-${a.orderNumber}`).isVisible());
+  // --- Board: the kitchen's taps move the order, the board completes it ---------
+  await card(a.number).waitFor();
+  check("new order sits in the New lane", await lane("New").getByTestId(`board-order-${a.number}`).isVisible());
   check("KPI strip renders", (await page.getByTestId("kpi-strip").innerText()).includes("Net sales"));
   await page.screenshot({ path: `${SHOT_DIR}/board-desktop.png`, fullPage: true });
 
-  const steps = [
-    { label: "Confirm", to: "confirmed", lane: "In kitchen" },
-    { label: "Start preparing", to: "preparing", lane: "In kitchen" },
-    { label: "Mark ready", to: "ready", lane: "Ready" },
-  ] as const;
-  for (const step of steps) {
-    const button = page.getByTestId(`advance-${a.orderNumber}`).filter({ hasText: step.label });
-    check(
-      `button reads "${step.label}"`,
-      await button.waitFor({ timeout: 8_000 }).then(() => true).catch(() => false),
-    );
-    await button.click();
-    check(`board moves the order to ${step.to}`, await statusIs(a.id, step.to));
-    await lane(step.lane).getByTestId(`board-order-${a.orderNumber}`).waitFor({ timeout: 8_000 });
-    check(`card shows in the ${step.lane} lane`, true);
-  }
+  // The display's own endpoint: a pie into the oven starts the order, every item done makes it ready.
+  const kds = (data: object) => page.request.post(`${BASE}/api/kds`, { data });
+  const itemsOf = (id: string) => db.select().from(orderItems).where(eq(orderItems.orderId, id)).orderBy(asc(orderItems.id));
+  const [aPie] = await itemsOf(a.id);
+  await kds({ type: "item", itemId: aPie.id, stage: "oven" });
+  check("a pie in the oven moves the order to preparing", await statusIs(a.id, "preparing"));
+  // The kitchen's taps don't revalidate the admin page; a reload is the board's next poll.
+  await page.reload({ waitUntil: "networkidle" });
+  await lane("In kitchen").getByTestId(`board-order-${a.number}`).waitFor({ timeout: 8_000 });
+  check("card shows in the In kitchen lane", true);
+  for (const i of await itemsOf(a.id)) await kds({ type: "item", itemId: i.id, stage: "done" });
+  check("every item done makes the order ready", await statusIs(a.id, "ready"));
+  await page.reload({ waitUntil: "networkidle" });
+  await lane("Ready").getByTestId(`board-order-${a.number}`).waitFor({ timeout: 8_000 });
+  check("card shows in the Ready lane", true);
   check("ready stamps readyAt", (await orderRow(a.id)).readyAt !== null);
-  await page.getByTestId(`advance-${a.orderNumber}`).click();
+  const complete = page.getByTestId(`advance-${a.number}`).filter({ hasText: "Complete" });
+  check('the board\'s one button reads "Complete"', await complete.waitFor({ timeout: 8_000 }).then(() => true).catch(() => false));
+  await complete.click();
   check("Complete finishes the order", await statusIs(a.id, "completed"));
   check("completedAt stamped", (await orderRow(a.id)).completedAt !== null);
-  await card(a.orderNumber).waitFor({ state: "detached", timeout: 8_000 });
+  await card(a.number).waitFor({ state: "detached", timeout: 8_000 });
   check("completed order leaves the board", true);
   const aMoves = await moves(a.id);
   check(
     "one status event per move, in order",
-    JSON.stringify(aMoves) === JSON.stringify(["new->confirmed", "confirmed->preparing", "preparing->ready", "ready->completed"]),
+    JSON.stringify(aMoves) === JSON.stringify(["held->new", "new->preparing", "preparing->ready", "ready->completed"]),
     JSON.stringify(aMoves),
   );
   const aEvents = await events(a.id);
+  const actorOf = (to: string) => aEvents.find((e) => e.type === "status_changed" && e.toStatus === to)?.actor;
   check(
-    "board events carry the operator",
-    aEvents.filter((e) => e.type === "status_changed").every((e) => e.actor === NAME && e.operatorId === operator.id),
+    "status events name who moved the order",
+    [actorOf("new"), actorOf("preparing"), actorOf("ready"), actorOf("completed")].join(" | ") ===
+      ["Customer", `Kitchen display · ${NAME}`, `Kitchen display · ${NAME}`, NAME].join(" | "),
+    aEvents.map((e) => `${e.toStatus}:${e.actor}`).join(", "),
+  );
+  check(
+    "the operator's move carries their id",
+    aEvents.some((e) => e.toStatus === "completed" && e.operatorId === operator.id),
   );
 
   // --- +10 min ------------------------------------------------------------------
   const before = (await orderRow(b.id)).promisedAt!;
-  await page.getByTestId(`eta10-${b.orderNumber}`).click();
+  await page.getByTestId(`eta10-${b.number}`).click();
   check(
     "+10 pushes promisedAt by exactly ten minutes",
     await eventually(async () => (await orderRow(b.id)).promisedAt!.getTime() - before.getTime() === 600_000),
@@ -195,7 +209,7 @@ async function main() {
   check("+10 logs an eta_changed event", eta?.note === "+10 min" && eta.actor === NAME);
 
   // --- Cancel with a reason ----------------------------------------------------
-  await page.getByTestId(`cancel-${b.orderNumber}`).click();
+  await page.getByTestId(`cancel-${b.number}`).click();
   const dialog = page.getByRole("dialog");
   await dialog.waitFor();
   await page.screenshot({ path: `${SHOT_DIR}/board-cancel-dialog.png` });
@@ -211,6 +225,7 @@ async function main() {
     "cancel logs an event with the reason",
     cancelEvent?.fromStatus === "new" && cancelEvent.note === "Kitchen too busy: Oven down",
   );
+  check("cancel voids the lines and folds the total to zero", bRow.totalCents === 0 && (await itemsOf(b.id)).every((i) => i.voidedAt !== null));
   await dialog.waitFor({ state: "detached", timeout: 5_000 });
   check("dialog closes after canceling", true);
 
@@ -239,7 +254,7 @@ async function main() {
     .then(() => true)
     .catch(() => false);
   check("an arriving order flashes the tab title", flashed, await page.title());
-  await card(c.orderNumber).waitFor();
+  await card(c.number).waitFor();
   await page.screenshot({ path: `${SHOT_DIR}/board-alert.png`, fullPage: true });
   const toggle = page.getByTestId("chime-toggle");
   await toggle.click();
@@ -257,18 +272,22 @@ async function main() {
   );
   await toggle.click();
 
-  // --- Two tablets tap Confirm on the same order --------------------------------
+  // --- Two tablets tap Complete on the same order --------------------------------
+  for (const i of await itemsOf(c.id)) await kds({ type: "item", itemId: i.id, stage: "done" });
+  await statusIs(c.id, "ready");
+  await page.reload({ waitUntil: "networkidle" });
   const tablet2 = await signIn(browser);
-  await tablet2.getByTestId(`advance-${c.orderNumber}`).waitFor();
-  await page.getByTestId(`advance-${c.orderNumber}`).click();
-  await statusIs(c.id, "confirmed");
-  await tablet2.getByTestId(`advance-${c.orderNumber}`).click();
-  const toast = tablet2.getByText("Order is already confirmed.");
+  await tablet2.getByTestId(`advance-${c.number}`).waitFor();
+  await page.getByTestId(`advance-${c.number}`).waitFor();
+  await page.getByTestId(`advance-${c.number}`).click();
+  await statusIs(c.id, "completed");
+  await tablet2.getByTestId(`advance-${c.number}`).click();
+  const toast = tablet2.getByText("Order is already completed.");
   check(
     "the second tablet's stale tap is refused with a toast",
     await toast.waitFor({ timeout: 8_000 }).then(() => true).catch(() => false),
   );
-  check("and applied once", JSON.stringify(await moves(c.id)) === JSON.stringify(["new->confirmed"]));
+  check("and applied once", (await moves(c.id)).filter((m) => m === "ready->completed").length === 1, JSON.stringify(await moves(c.id)));
   await tablet2.close();
 
   // --- History: search, filters, export -----------------------------------------
@@ -276,20 +295,20 @@ async function main() {
   await page.fill('input[name="q"]', "Ozzie");
   await page.getByRole("button", { name: "Search", exact: true }).click();
   await page.waitForURL(/q=Ozzie/);
-  check("history search by name finds the order", await page.getByTestId(`history-row-${a.orderNumber}`).isVisible());
-  check("…and only matching orders", !(await page.getByTestId(`history-row-${b.orderNumber}`).isVisible()));
+  check("history search by name finds the order", await page.getByTestId(`history-row-${a.number}`).isVisible());
+  check("…and only matching orders", !(await page.getByTestId(`history-row-${b.number}`).isVisible()));
   await page.screenshot({ path: `${SHOT_DIR}/history-desktop.png`, fullPage: true });
 
   await page.goto(`${BASE}/admin/orders?q=${encodeURIComponent("246-8135")}`);
-  check("search by phone digits ignores formatting", await page.getByTestId(`history-row-${a.orderNumber}`).isVisible());
+  check("search by phone digits ignores formatting", await page.getByTestId(`history-row-${a.number}`).isVisible());
   await page.goto(`${BASE}/admin/orders?q=5557770101`);
-  check("bare digits match a dotted phone", await page.getByTestId(`history-row-${b.orderNumber}`).isVisible());
-  await page.goto(`${BASE}/admin/orders?q=${a.orderNumber}`);
-  check("search by order number", await page.getByTestId(`history-row-${a.orderNumber}`).isVisible());
+  check("bare digits match a dotted phone", await page.getByTestId(`history-row-${b.number}`).isVisible());
+  await page.goto(`${BASE}/admin/orders?q=${a.number}`);
+  check("search by order number", await page.getByTestId(`history-row-${a.number}`).isVisible());
 
   await page.goto(`${BASE}/admin/orders?status=canceled`);
-  check("status filter keeps canceled orders", await page.getByTestId(`history-row-${b.orderNumber}`).isVisible());
-  check("status filter drops completed ones", !(await page.getByTestId(`history-row-${a.orderNumber}`).isVisible()));
+  check("status filter keeps canceled orders", await page.getByTestId(`history-row-${b.number}`).isVisible());
+  check("status filter drops completed ones", !(await page.getByTestId(`history-row-${a.number}`).isVisible()));
   check(
     "filter state survives in the form",
     (await page.locator('select[name="status"]').inputValue()) === "canceled",
@@ -300,7 +319,7 @@ async function main() {
   check("CSV export responds as text/csv", csv.status() === 200 && (csv.headers()["content-type"] ?? "").startsWith("text/csv"));
   check(
     "CSV row present with comma-safe quoting",
-    csvText.split("\r\n").some((l) => l.startsWith(`${b.orderNumber},`) && l.includes('"Bella Cancel, Jr."')),
+    csvText.split("\r\n").some((l) => l.startsWith(`${b.number},`) && l.includes('"Bella Cancel, Jr."')),
     csvText.split("\r\n").slice(0, 2).join(" | "),
   );
   check("CSV has the cancel reason column", csvText.includes("Kitchen too busy: Oven down"));
@@ -309,15 +328,16 @@ async function main() {
 
   // --- Detail: payment, note, timeline -------------------------------------------
   await page.goto(`${BASE}/admin/orders/${a.id}`, { waitUntil: "networkidle" });
-  await page.getByTestId("pay-card").click();
+  await page.getByTestId("pay-card_external").click();
   check(
-    "record payment flips paymentStatus",
+    "record payment writes one card tender for the balance and folds it paid",
     await eventually(async () => {
       const o = await orderRow(a.id);
-      return o.paymentStatus === "paid" && o.paymentMethod === "card";
+      const rows = await db.select().from(tenders).where(eq(tenders.orderId, a.id));
+      return o.paidCents === o.totalCents && rows.length === 1 && rows[0].method === "card_external" && rows[0].amountCents === o.totalCents;
     }),
   );
-  await page.getByTestId("pay-card").waitFor({ state: "detached", timeout: 8_000 });
+  await page.getByTestId("pay-card_external").waitFor({ state: "detached", timeout: 8_000 });
   check("payment buttons disappear once paid", true);
   await page.fill("#order-note", "Customer called: running late");
   await page.getByTestId("add-note").click();
@@ -337,14 +357,15 @@ async function main() {
 
   await page.reload({ waitUntil: "networkidle" });
   const timeline = await page.getByTestId("timeline").innerText();
+  const paid = (await orderRow(a.id)).totalCents / 100;
   const expected = [
-    "Order placed",
-    "Confirmed",
+    "Placed (Online, pickup)",
+    "Sent to kitchen",
     "Preparing",
     "Ready",
     "Completed",
-    "Payment recorded · Card",
-    "Note · Customer called: running late",
+    `Paid ${paid.toFixed(2)} card`,
+    "Note: Customer called: running late",
     "Recalled to the kitchen",
   ];
   let cursor = -1;
@@ -367,7 +388,7 @@ async function main() {
   await page.screenshot({ path: `${SHOT_DIR}/history-375.png`, fullPage: true });
   await page.goto(`${BASE}/admin`, { waitUntil: "networkidle" });
   const lanes = await Promise.all(
-    ["New", "In kitchen", "Ready"].map(async (t) => (await lane(t).boundingBox())!),
+    ["New", "In kitchen", "Ready", "Scheduled"].map(async (t) => (await lane(t).boundingBox())!),
   );
   check("lanes stack on a phone", lanes[0].y < lanes[1].y && lanes[1].y < lanes[2].y && lanes[0].x === lanes[1].x);
   const overflow = await page.evaluate(() => document.documentElement.scrollWidth > window.innerWidth);
@@ -377,10 +398,12 @@ async function main() {
   await browser.close();
 
   // Leave the board as found: test orders off it, test operator gone.
-  await db
-    .update(orders)
-    .set({ status: "completed" })
-    .where(and(inArray(orders.id, [a.id, c.id]), inArray(orders.status, ["new", "confirmed", "preparing", "ready"])));
+  for (const o of await db
+    .select({ id: orders.id })
+    .from(orders)
+    .where(and(inArray(orders.id, [a.id, c.id]), inArray(orders.status, [...ACTIVE_STATUSES])))) {
+    await cancelOrder(o.id);
+  }
   await db.delete(operators).where(eq(operators.email, EMAIL));
   const [gone] = await db.select().from(operators).where(eq(operators.email, EMAIL));
   check("test operator cleaned up", gone === undefined);

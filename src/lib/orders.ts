@@ -1,315 +1,496 @@
-import { cache } from "react";
-import { eq, getTableColumns, inArray, sql, type Column, type SQL } from "drizzle-orm";
-import type { BatchItem } from "drizzle-orm/batch";
-import type { PgTable } from "drizzle-orm/pg-core";
-import {
-  categories,
-  db,
-  itemModifierGroups,
-  menuItems,
-  modifierGroups,
-  modifiers,
-  orderDiscounts,
-  orderEvents,
-  orderItems,
-  orders,
-  storeSettings,
-  type OrderItemModifier,
-} from "@/db";
+/**
+ * Order domain: the types every screen renders and the pure rules over them
+ * (payment state, role policy, activity log) and the wire contract the POS
+ * and storefront share with the server. No I/O; the server seam that reads
+ * and writes these lives in orders-server/.
+ */
+import type { OrderSource } from "@/lib/delivery/types";
 import type { KitchenStation } from "@/lib/kds";
-import type { AppliedDiscount } from "@/lib/promotion-engine";
-import type { RedemptionCheck } from "@/lib/promotion-usage";
-import { DEFAULT_CHOICE, toppingPriceCents } from "@/lib/toppings";
-import type { CheckoutInput } from "@/lib/validation";
+import { describeEvent, type OrderEventType, type OrderStatus } from "@/lib/order-workflow";
+import { type PosAccess, roleSatisfies } from "@/lib/pos-access";
+import type { LineModifier, MenuItem, PricingPolicy, Selection } from "@/lib/pricing";
+import type { DiscountSource, DiscountTarget } from "@/lib/promotion-schema";
 
-export type PricedLine = {
-  itemId: number;
-  categoryId: number;
-  /** Chosen modifier ids, so promotions can target a size. */
-  modifierIds: number[];
-  itemName: string;
+export type { OrderSource };
+
+/** Where the store's own orders come from; marketplace orders arrive through ingestion. */
+export type StoreSource = Extract<OrderSource, "web" | "walk_in" | "phone">;
+
+export const MARKETPLACE_SOURCES: readonly OrderSource[] = ["doordash", "ubereats", "grubhub"];
+
+export const TENDER_METHODS = ["cash", "card_external", "other", "marketplace"] as const;
+export type TenderMethod = (typeof TENDER_METHODS)[number];
+export const TENDER_METHOD_LABEL: Record<TenderMethod, string> = {
+  cash: "Cash",
+  card_external: "Card",
+  other: "Other",
+  marketplace: "Marketplace",
+};
+export type DrawerEventKind = "no_sale" | "paid_in" | "paid_out";
+
+export type Address = {
+  line1: string;
+  line2: string | null;
+  city: string | null;
+  zip: string;
+};
+
+/** An address cannot exist on a pickup; a table cannot exist on a delivery. */
+export type Fulfillment =
+  | { kind: "pickup" }
+  | { kind: "delivery"; address: Address }
+  | { kind: "dine_in"; table: string };
+
+/** The employee at the terminal, as the role policy and the audit trail see them. */
+export type StaffActor = { employeeId: number; name: string; access: PosAccess };
+
+export type LineView = {
+  /** The line_uid: what the POS addresses a line by. */
+  lineId: string;
+  itemId: number | null;
+  name: string;
   quantity: number;
   unitPriceCents: number;
   lineTotalCents: number;
-  modifiers: OrderItemModifier[];
-  notes?: string;
+  modifiers: LineModifier[];
+  notes: string | null;
   station: KitchenStation;
+  firedAt: string | null;
+  ovenAt: string | null;
+  doneAt: string | null;
+  voided: null | { at: string; by: number | null; reason: string; approvedBy: number | null };
 };
 
-export type PricedCart = {
-  lines: PricedLine[];
-  subtotalCents: number;
-  deliveryFeeCents: number;
+export type Tender = {
+  id: string;
+  direction: "payment" | "refund";
+  method: TenderMethod;
+  amountCents: number;
+  tenderedCents: number | null;
+  tipCents: number;
+  last4: string | null;
+  employeeId: number | null;
+  approvedBy: number | null;
+  reason: string | null;
+  at: string;
 };
 
-export class OrderError extends Error {}
+/** One order_discounts row: a promotion, a loyalty reward, or a staff comp or discount. */
+export type Discount = {
+  id: number;
+  /** Client-minted at the POS; null for promotion and loyalty rows. */
+  uid: string | null;
+  /** Set on a comp of one line; null = the check. */
+  lineId: string | null;
+  label: string;
+  amountCents: number;
+  target: DiscountTarget;
+  source: DiscountSource;
+  employeeId: number | null;
+  approvedBy: number | null;
+  operatorId: number | null;
+  at: string;
+};
 
-export type StoreSettings = typeof storeSettings.$inferSelect;
+/** One order_events row: a status move, an ETA push, an operator note. */
+export type OrderEvent = {
+  id: number;
+  type: OrderEventType;
+  fromStatus: OrderStatus | null;
+  toStatus: OrderStatus | null;
+  actor: string;
+  employeeId: number | null;
+  approvedBy: number | null;
+  note: string | null;
+  at: string;
+};
 
-/** Read once per request (React cache); outside a render it reads every time. */
-export const getSettings = cache(async (): Promise<StoreSettings> => {
-  const [settings] = await db
-    .select()
-    .from(storeSettings)
-    .where(eq(storeSettings.id, 1));
-  if (!settings) throw new OrderError("Store is not configured yet.");
-  return settings;
-});
-
-export async function priceCart(
-  lines: CheckoutInput["lines"],
-  orderType: "pickup" | "delivery",
-  settings: StoreSettings,
-): Promise<PricedCart> {
-  const itemIds = [...new Set(lines.map((l) => l.itemId))];
-  const items = await db
-    .select({ item: menuItems, station: categories.station })
-    .from(menuItems)
-    .innerJoin(categories, eq(categories.id, menuItems.categoryId))
-    .where(inArray(menuItems.id, itemIds));
-  const itemById = new Map(
-    items.map(({ item, station }) => [item.id, { ...item, station }]),
-  );
-
-  const links = itemIds.length
-    ? await db
-        .select()
-        .from(itemModifierGroups)
-        .where(inArray(itemModifierGroups.itemId, itemIds))
-    : [];
-  const groupIds = [...new Set(links.map((l) => l.groupId))];
-  const groups = groupIds.length
-    ? await db
-        .select()
-        .from(modifierGroups)
-        .where(inArray(modifierGroups.id, groupIds))
-    : [];
-  const mods = groupIds.length
-    ? await db
-        .select()
-        .from(modifiers)
-        .where(inArray(modifiers.groupId, groupIds))
-    : [];
-  const groupById = new Map(groups.map((g) => [g.id, g]));
-  const modById = new Map(mods.map((m) => [m.id, m]));
-
-  const priced: PricedLine[] = lines.map((line) => {
-    const item = itemById.get(line.itemId);
-    if (!item || !item.isAvailable) {
-      throw new OrderError(
-        `"${item?.name ?? "An item"}" is no longer available. Please remove it from your cart.`,
-      );
-    }
-
-    const allowedGroupIds = new Set(
-      links.filter((l) => l.itemId === item.id).map((l) => l.groupId),
-    );
-
-    const chosen: OrderItemModifier[] = [];
-    const countByGroup = new Map<number, number>();
-    let unitPrice = item.basePriceCents;
-
-    for (const selection of line.modifiers) {
-      const mod = modById.get(selection.id);
-      const group = mod ? groupById.get(mod.groupId) : undefined;
-      if (!mod || !group || !allowedGroupIds.has(mod.groupId) || !mod.isAvailable) {
-        throw new OrderError(
-          `An option on "${item.name}" is no longer available. Please re-add it to your cart.`,
-        );
-      }
-      const isTopping = group.kind === "toppings";
-      const choice = {
-        placement: selection.placement ?? DEFAULT_CHOICE.placement,
-        portion: selection.portion ?? DEFAULT_CHOICE.portion,
-      };
-      if (!isTopping && (choice.placement !== "whole" || choice.portion !== "regular")) {
-        throw new OrderError(
-          `"${mod.name}" on "${item.name}" can't be split or portioned. Please re-add it to your cart.`,
-        );
-      }
-      if (choice.portion === "extra" && mod.extraPriceDeltaCents === null) {
-        throw new OrderError(
-          `Extra ${mod.name} isn't offered on "${item.name}". Please re-add it to your cart.`,
-        );
-      }
-      const priceDeltaCents = isTopping
-        ? toppingPriceCents(mod, choice, settings)
-        : mod.priceDeltaCents;
-      chosen.push({
-        modifierId: mod.id,
-        groupName: group.name,
-        modifierName: mod.name,
-        priceDeltaCents,
-        ...(isTopping ? choice : {}),
-      });
-      countByGroup.set(mod.groupId, (countByGroup.get(mod.groupId) ?? 0) + 1);
-      unitPrice += priceDeltaCents;
-    }
-
-    for (const groupId of allowedGroupIds) {
-      const group = groupById.get(groupId);
-      if (!group) continue;
-      const count = countByGroup.get(groupId) ?? 0;
-      if (count < group.minSelect) {
-        throw new OrderError(
-          `"${item.name}" requires a ${group.name} selection.`,
-        );
-      }
-      if (group.maxSelect !== null && count > group.maxSelect) {
-        throw new OrderError(
-          `Too many ${group.name} selections on "${item.name}".`,
-        );
-      }
-    }
-
-    return {
-      itemId: item.id,
-      categoryId: item.categoryId,
-      modifierIds: line.modifiers.map((m) => m.id),
-      itemName: item.name,
-      quantity: line.quantity,
-      unitPriceCents: unitPrice,
-      lineTotalCents: unitPrice * line.quantity,
-      modifiers: chosen,
-      notes: line.notes,
-      station: item.station,
-    };
-  });
-
-  const subtotalCents = priced.reduce((sum, l) => sum + l.lineTotalCents, 0);
-  const deliveryFeeCents =
-    orderType === "delivery" ? settings.deliveryFeeCents : 0;
-
-  return { lines: priced, subtotalCents, deliveryFeeCents };
-}
-
-/** Everything an order row and its children are written from. */
-export type NewOrder = {
-  input: CheckoutInput;
-  prepMinutes: number;
-  lines: PricedLine[];
+export type Totals = {
   subtotalCents: number;
   discountCents: number;
   taxCents: number;
   deliveryFeeCents: number;
-  /** Including the tip. */
+  tipCents: number;
   totalCents: number;
-  discounts: AppliedDiscount[];
-  /** Null when the program is off. */
-  loyalty: {
-    /** The signed-in member, or null for a guest (who may be enrolled after). */
-    memberId: number | null;
-    /** The reward the member spends points on; recorded as an items discount. */
-    reward: { name: string; pointsCost: number; discountCents: number } | null;
-    pointsEarned: number;
-  } | null;
+  paidCents: number;
+  refundedCents: number;
+};
+
+export type OrderView = {
+  id: string;
+  number: number;
+  /** The KDS ticket this order rides on: its own id unless split off another. */
+  ticketOrderId: string;
+  status: OrderStatus;
+  source: OrderSource;
+  fulfillment: Fulfillment;
+  customer: { id: string | null; name: string; phone: string; email: string | null };
+  notes: string | null;
+  placedAt: string;
+  fireAt: string | null;
+  promisedAt: string | null;
+  readyAt: string | null;
+  createdBy: number | null;
+  lines: LineView[];
+  tenders: Tender[];
+  discounts: Discount[];
+  events: OrderEvent[];
+  totals: Totals;
+  /** Names for every employee id above, for the activity log. */
+  staff: Record<number, string>;
+};
+
+// ---------------------------------------------------------------------------
+// Payment state: derived from the ledger folds, never stored
+// ---------------------------------------------------------------------------
+
+export type PaymentState = "unpaid" | "partial" | "paid" | "refunded";
+type Money = Pick<Totals, "totalCents" | "paidCents" | "refundedCents">;
+
+export function paymentState(t: Money): PaymentState {
+  const net = t.paidCents - t.refundedCents;
+  if (t.refundedCents > 0 && net < t.totalCents) return "refunded";
+  if (net >= t.totalCents && t.paidCents > 0) return "paid";
+  if (net > 0) return "partial";
+  return t.totalCents === 0 ? "paid" : "unpaid";
+}
+
+export function dueCents(t: Money): number {
+  return Math.max(0, t.totalCents - (t.paidCents - t.refundedCents));
+}
+
+export const PAYMENT_LABEL: Record<PaymentState, string> = {
+  unpaid: "Unpaid",
+  partial: "Part paid",
+  paid: "Paid",
+  refunded: "Refunded",
 };
 
 /**
- * `insert into t (cols) select cols from jsonb_populate_recordset(null::t, rows) where cond`.
- * Postgres types each value by the table's own row type, so the rows need no
- * casts and TypeScript checks them against the schema. Only the columns some
- * row sets are written; the rest take their defaults or generated values.
+ * Dine-in is its own channel whatever rang it in, and the three marketplaces
+ * are one: on badges, in the activity log and in reports.
  */
-function insertRowsWhere<T extends PgTable>(table: T, rows: T["$inferInsert"][], cond: SQL): SQL {
-  const columns: Record<string, Column> = getTableColumns(table);
-  const keys = Object.keys(columns).filter((k) => rows.some((r) => r[k as keyof typeof r] !== undefined));
-  const names = sql.join(keys.map((k) => sql.identifier(columns[k].name)), sql`, `);
-  const json = rows.map((r) => Object.fromEntries(keys.map((k) => [columns[k].name, r[k as keyof typeof r] ?? null])));
-  return sql`insert into ${table} (${names})
-    select ${names} from jsonb_populate_recordset(null::${table}, ${JSON.stringify(json)}::jsonb) where ${cond}`;
+export type SalesChannel = StoreSource | "dine_in" | "marketplace";
+
+export const SALES_CHANNELS: readonly SalesChannel[] = ["walk_in", "phone", "dine_in", "web", "marketplace"];
+
+export const SALES_CHANNEL_LABEL: Record<SalesChannel, string> = {
+  walk_in: "Walk-in",
+  phone: "Phone",
+  dine_in: "Dine-in",
+  web: "Online",
+  marketplace: "Marketplace",
+};
+
+export const SOURCE_LABEL: Record<OrderSource, string> = {
+  web: "Online",
+  walk_in: "Walk-in",
+  phone: "Phone",
+  doordash: "DoorDash",
+  ubereats: "Uber Eats",
+  grubhub: "Grubhub",
+};
+
+export function salesChannel(source: OrderSource, kind: Fulfillment["kind"]): SalesChannel {
+  if (kind === "dine_in") return "dine_in";
+  return MARKETPLACE_SOURCES.includes(source) ? "marketplace" : (source as StoreSource);
 }
 
+export function channelLabel(source: OrderSource, kind: Fulfillment["kind"]): string {
+  return kind === "dine_in" ? SALES_CHANNEL_LABEL.dine_in : SOURCE_LABEL[source];
+}
+
+/** "1 Main St, Apt 2, The Woodlands, 77354". */
+export function formatAddress(a: Address): string {
+  return [a.line1, a.line2, a.city, a.zip].filter(Boolean).join(", ");
+}
+
+export const FULFILLMENT_LABEL: Record<Fulfillment["kind"], string> = {
+  pickup: "Pickup",
+  delivery: "Delivery",
+  dine_in: "Dine-in",
+};
+
+/** "Pickup", "Delivery", "Dine-in · Table 4". */
+export function fulfillmentLabel(f: Fulfillment): string {
+  return f.kind === "dine_in" ? `${FULFILLMENT_LABEL.dine_in} · Table ${f.table}` : FULFILLMENT_LABEL[f.kind];
+}
+
+/** "Dine-in, table 4", "Phone, delivery", "Walk-in", "DoorDash, pickup": where an order came from and how it leaves. */
+export function sourceLabel(source: OrderSource, f: Fulfillment): string {
+  if (f.kind === "dine_in") return `Dine-in, table ${f.table}`;
+  return source === "walk_in" && f.kind === "pickup" ? "Walk-in" : `${SOURCE_LABEL[source]}, ${f.kind}`;
+}
+
+// ---------------------------------------------------------------------------
+// Mutations and the role policy
+// ---------------------------------------------------------------------------
+
+export type SubmitLine = {
+  lineId: string;
+  itemId: number;
+  quantity: number;
+  selections: Selection[];
+  notes: string | null;
+};
+
+export type TenderInput = {
+  id: string;
+  method: TenderMethod;
+  amountCents: number;
+  /** Cash only: what the customer handed over. */
+  tenderedCents: number | null;
+  tipCents: number;
+  last4: string | null;
+};
+
+export type CustomerInput = {
+  phone: string;
+  name: string;
+  email: string | null;
+  saveAddress: boolean;
+};
+
+export type FirePlan = { kind: "now" } | { kind: "hold" } | { kind: "at"; at: string };
+
+/** Every POS verb against an existing order. One union, one handler. */
+export type OrderMutation =
+  | { kind: "add_lines"; lines: SubmitLine[]; fire: boolean }
+  | { kind: "fire"; lineIds: string[] | "all" }
+  | { kind: "void_line"; lineId: string; reason: string }
+  | { kind: "discount"; id: string; lineId: string | null; cents: number; reason: string; promotionId?: number | null }
+  | { kind: "comp"; id: string; lineId: string; reason: string }
+  | { kind: "remove_discount"; discountId: number }
+  | { kind: "tender"; tender: TenderInput }
+  | { kind: "refund"; id: string; method: TenderMethod; amountCents: number; reason: string }
+  | { kind: "set_customer"; customer: CustomerInput }
+  | { kind: "set_fulfillment"; fulfillment: Fulfillment }
+  | { kind: "set_schedule"; fire: FirePlan; promisedAt: string | null }
+  | { kind: "cancel"; reason: string }
+  | { kind: "split_by_item"; lineIds: string[]; newOrderId: string }
+  | { kind: "handoff" };
+
 /**
- * Inserts the order, its lines, its "placed" event and its discounts as
- * one statement that writes nothing unless the redemption guard holds, after
- * the lock that lets the guard see any order that won a race.
- * Returns null when the guard failed (a deal's limit went to another order
- * after the quote). Drizzle's builders can't make an insert conditional on
- * another table, hence the SQL template.
- *
- * `after` adds statements to the same transaction, run once the order is
- * read back; each must write nothing when the order row is missing.
+ * The fact row a mutation creates, keyed by a client-minted id, when it
+ * creates one. A replay of that fact is a no-op.
  */
-export async function insertOrder(
-  o: NewOrder,
-  check: RedemptionCheck,
-  after: (orderId: string) => BatchItem<"pg">[] = () => [],
-): Promise<typeof orders.$inferSelect | null> {
-  const { input } = o;
-  const orderId = crypto.randomUUID();
-  const placedAt = new Date();
-  const placed = sql`exists (select 1 from placed)`;
-  const reward = o.loyalty?.reward ?? null;
-  const discountRows: (typeof orderDiscounts.$inferInsert)[] = [
-    ...o.discounts.map((a) => ({
-      orderId,
-      promotionId: a.promotionId,
-      codeId: a.codeId,
-      label: a.label,
-      amountCents: a.amountCents,
-      target: a.target,
-      source: "promotion" as const,
-    })),
-    ...(reward && reward.discountCents > 0
-      ? [{ orderId, label: reward.name, amountCents: reward.discountCents, target: "items" as const, source: "loyalty" as const }]
-      : []),
-  ];
-  const children = [
-    insertRowsWhere(orderEvents, [{ orderId, type: "placed", toStatus: "new", actor: "Customer", createdAt: placedAt }], placed),
-    insertRowsWhere(
-      orderItems,
-      o.lines.map((l) => ({
-        orderId,
-        menuItemId: l.itemId,
-        itemName: l.itemName,
-        quantity: l.quantity,
-        unitPriceCents: l.unitPriceCents,
-        lineTotalCents: l.lineTotalCents,
-        modifiers: l.modifiers,
-        notes: l.notes || null,
-        station: l.station,
-      })),
-      placed,
-    ),
-    ...(discountRows.length ? [insertRowsWhere(orderDiscounts, discountRows, placed)] : []),
-  ];
-  const order = insertRowsWhere(
-    orders,
-    [
-      {
-        id: orderId,
-        placedAt,
-        promisedAt: new Date(placedAt.getTime() + o.prepMinutes * 60_000),
-        orderType: input.orderType,
-        customerName: input.customerName,
-        customerPhone: input.customerPhone,
-        customerEmail: input.customerEmail || null,
-        addressLine1: input.addressLine1 || null,
-        addressLine2: input.addressLine2 || null,
-        city: input.city || null,
-        zip: input.zip || null,
-        orderNotes: input.orderNotes || null,
-        subtotalCents: o.subtotalCents,
-        discountCents: o.discountCents,
-        taxCents: o.taxCents,
-        deliveryFeeCents: o.deliveryFeeCents,
-        tipCents: input.tipCents,
-        totalCents: o.totalCents,
-        loyaltyMemberId: o.loyalty?.memberId ?? null,
-        loyaltyRewardName: reward?.name ?? null,
-        loyaltyPointsRedeemed: reward?.pointsCost ?? 0,
-        loyaltyPointsEarned: o.loyalty?.pointsEarned ?? 0,
-      },
-    ],
-    check.guard,
-  );
-  const place = db.execute(sql`
-    with placed as (${order} returning id),
-    ${sql.join(children.map((c, i) => sql`${sql.identifier(`child${i}`)} as (${c})`), sql`, `)}
-    select id from placed`);
-  // Read back in the same transaction; no row means the guard failed.
-  const read = db.select().from(orders).where(eq(orders.id, orderId));
-  const [, , [row]] = await db.batch([db.execute(check.lock), place, read, ...after(orderId)]);
-  return row ?? null;
+export function factId(m: OrderMutation): string | null {
+  switch (m.kind) {
+    case "discount":
+    case "comp":
+    case "refund":
+      return m.id;
+    case "tender":
+      return m.tender.id;
+    case "split_by_item":
+      return m.newOrderId;
+    case "add_lines":
+    case "fire":
+    case "void_line":
+    case "remove_discount":
+    case "set_customer":
+    case "set_fulfillment":
+    case "set_schedule":
+    case "cancel":
+    case "handoff":
+      return null;
+  }
+}
+
+export function hasFact(o: OrderView, id: string): boolean {
+  return o.discounts.some((d) => d.uid === id) || o.tenders.some((t) => t.id === id);
+}
+
+export type Approval = { managerPin: string };
+
+export type RequiredRole = "cashier" | "manager";
+
+export type PolicyContext = {
+  order: { lines: Pick<LineView, "lineId" | "firedAt" | "voided">[] };
+  discountApprovalCents: number;
+};
+
+/**
+ * Who may perform a mutation, decided on the server at the moment of the
+ * action. A sent (fired) line costs food, so voiding it needs a manager.
+ */
+export function requiredRole(m: OrderMutation, ctx: PolicyContext): RequiredRole {
+  switch (m.kind) {
+    case "void_line": {
+      const line = ctx.order.lines.find((l) => l.lineId === m.lineId);
+      return line?.firedAt ? "manager" : "cashier";
+    }
+    case "cancel":
+      return ctx.order.lines.some((l) => l.firedAt && !l.voided) ? "manager" : "cashier";
+    case "discount":
+      return m.cents > ctx.discountApprovalCents ? "manager" : "cashier";
+    case "comp":
+    case "remove_discount":
+    case "refund":
+      return "manager";
+    case "add_lines":
+    case "fire":
+    case "tender":
+    case "set_customer":
+    case "set_fulfillment":
+    case "set_schedule":
+    case "split_by_item":
+    case "handoff":
+      return "cashier";
+  }
+}
+
+export const DRAWER_ROLE: Record<DrawerEventKind, RequiredRole> = {
+  no_sale: "manager",
+  paid_in: "cashier",
+  paid_out: "manager",
+};
+
+export { roleSatisfies };
+
+// ---------------------------------------------------------------------------
+// The wire contract: what the POS, the storefront and the server seam exchange
+// ---------------------------------------------------------------------------
+
+export type SubmitOrderRequest = {
+  orderId: string;
+  source: StoreSource;
+  fulfillment: Fulfillment;
+  customer: CustomerInput | null;
+  notes: string | null;
+  fire: FirePlan;
+  promisedAt: string | null;
+  /** Online gratuity added to the order total; POS card tips ride on tenders. */
+  tipCents: number;
+  lines: SubmitLine[];
+  tenders: TenderInput[];
+};
+
+export type Rejected = { ok: false; reason: "rejected"; message: string };
+
+export type Failure =
+  | { ok: false; reason: "needs_manager" | "bad_pin" | "locked_out" | "no_open_shift" | "not_found" }
+  | Rejected;
+
+export type FailureReason = Failure["reason"];
+
+/** The terminal's unlock has lapsed: show the PIN pad. */
+export type Locked = { ok: false; reason: "locked" };
+
+/**
+ * Every way a POS action can fail, as the terminal sees it: the seam's
+ * refusals, the lock, and the two the client finds out for itself.
+ */
+export type ActionFailure = Failure | Locked | { ok: false; reason: "signed_out" | "offline" };
+
+export const rejected = (message: string): Rejected => ({ ok: false, reason: "rejected", message });
+
+export type MutationResult = { ok: true; order: OrderView } | Failure;
+
+export type ShiftResult = { ok: true; shiftId: string } | Failure;
+
+export type PosMenu = {
+  /** Changes whenever anything that affects entry or pricing changes. */
+  version: string;
+  policy: PricingPolicy;
+  taxRateBps: number;
+  deliveryFeeCents: number;
+  discountApprovalCents: number;
+  categories: { id: number; name: string; items: MenuItem[] }[];
+};
+
+export type Quote = { pickupMinutes: number; deliveryMinutes: number; piesAhead: number };
+
+export type Board = {
+  serverNow: string;
+  /** Held (scheduled or open checks) and on-the-line orders, oldest first. */
+  openOrders: OrderView[];
+  quote: Quote;
+  shift: { id: string; openedAt: string; openedBy: number } | null;
+};
+
+export type CustomerLookup = {
+  customer: { id: string; name: string; phone: string; email: string | null; notes: string | null } | null;
+  addresses: { id: string; line1: string; line2: string | null; city: string | null; zip: string }[];
+  recentOrders: OrderView[];
+};
+
+export const digitsOf = (s: string) => s.replace(/\D/g, "");
+
+/** "+1 (555) 010-2233" → "5550102233". The customers table keys on this. */
+export function normalizePhone(raw: string): string {
+  const digits = digitsOf(raw);
+  return digits.length === 11 && digits.startsWith("1") ? digits.slice(1) : digits;
+}
+
+// ---------------------------------------------------------------------------
+// Activity log: a read-time union over the order's facts
+// ---------------------------------------------------------------------------
+
+export type HistoryEntry = {
+  at: string;
+  who: string | null;
+  approvedBy: string | null;
+  text: string;
+};
+
+/**
+ * The activity log: status moves, ETA pushes and notes come from order_events;
+ * fires, voids, discounts and tenders are read off their own rows.
+ */
+export function orderHistory(o: OrderView): HistoryEntry[] {
+  const name = (id: number | null) => (id === null ? null : (o.staff[id] ?? `#${id}`));
+  const lineName = (lineId: string | null) => {
+    const line = o.lines.find((l) => l.lineId === lineId);
+    return line ? `${line.quantity} × ${line.name}` : "the check";
+  };
+  const placedText = `Placed (${sourceLabel(o.source, o.fulfillment)})`;
+  const entries: HistoryEntry[] = [];
+  for (const e of o.events) {
+    const text = e.type === "placed" ? placedText : e.note ? `${describeEvent(e)}: ${e.note}` : describeEvent(e);
+    entries.push({ at: e.at, who: e.actor, approvedBy: name(e.approvedBy), text });
+  }
+  // Orders inserted before the placed event existed get one from their row.
+  const placed: HistoryEntry[] = o.events.some((e) => e.type === "placed")
+    ? []
+    : [{ at: o.placedAt, who: name(o.createdBy), approvedBy: null, text: placedText }];
+  const firedAt = [...new Set(o.lines.flatMap((l) => (l.firedAt ? [l.firedAt] : [])))];
+  for (const at of firedAt) {
+    const fired = o.lines.filter((l) => l.firedAt === at);
+    entries.push({ at, who: null, approvedBy: null, text: `Sent to kitchen: ${fired.map((l) => `${l.quantity} × ${l.name}`).join(", ")}` });
+  }
+  for (const l of o.lines) {
+    if (!l.voided) continue;
+    entries.push({
+      at: l.voided.at,
+      who: name(l.voided.by),
+      approvedBy: name(l.voided.approvedBy),
+      text: `Voided ${l.quantity} × ${l.name} (${l.voided.reason})`,
+    });
+  }
+  for (const d of o.discounts) {
+    const text =
+      d.source === "comp"
+        ? `${d.lineId ? "Comped" : "Discounted"} ${lineName(d.lineId)} by ${(d.amountCents / 100).toFixed(2)} (${d.label})`
+        : `${d.source === "loyalty" ? "Reward" : "Deal"}: ${d.label} (−${(d.amountCents / 100).toFixed(2)})`;
+    entries.push({ at: d.at, who: name(d.employeeId), approvedBy: name(d.approvedBy), text });
+  }
+  for (const t of o.tenders) {
+    const method = TENDER_METHOD_LABEL[t.method].toLowerCase();
+    const amount = (t.amountCents / 100).toFixed(2);
+    entries.push({
+      at: t.at,
+      who: name(t.employeeId),
+      approvedBy: name(t.approvedBy),
+      text:
+        t.direction === "payment"
+          ? `Paid ${amount} ${method}${t.tipCents > 0 ? ` + ${(t.tipCents / 100).toFixed(2)} tip` : ""}`
+          : `Refunded ${amount} ${method} (${t.reason ?? "no reason"})`,
+    });
+  }
+  // Placed leads even though lines fired with the order share its placed_at
+  // stamp (both are the database's now() for the submit batch).
+  const sorted = entries.sort((a, b) => a.at.localeCompare(b.at));
+  const first = sorted.findIndex((e) => e.text === placedText);
+  return first > 0 ? [sorted[first], ...sorted.filter((_, i) => i !== first)] : [...placed, ...sorted];
 }

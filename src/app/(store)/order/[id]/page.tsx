@@ -8,8 +8,10 @@ import { COURIER_STATUS_LABEL, TERMINAL_COURIER_STATUSES } from "@/lib/delivery/
 import { formatClock } from "@/lib/zoned";
 import { orderPointsStatus } from "@/lib/loyalty";
 import { formatCents } from "@/lib/money";
+import { dueCents, paymentState } from "@/lib/orders";
+import { describeChoice } from "@/lib/pricing";
 import { isActive, isCooking } from "@/lib/order-workflow";
-import { getSettings } from "@/lib/orders";
+import { getSettings } from "@/lib/settings-server";
 import { OrderAutoRefresh } from "@/components/store/order-auto-refresh";
 import { orderTotals, TotalsList } from "@/components/totals-list";
 import { buttonVariants } from "@/components/ui/button";
@@ -21,21 +23,20 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { cn } from "@/lib/utils";
-import { describeChoice } from "@/lib/toppings";
 
 export const metadata: Metadata = { title: "Order status" };
 export const dynamic = "force-dynamic";
 
-const STATUS_STEPS = ["new", "confirmed", "preparing", "ready", "completed"] as const;
+const STATUS_STEPS = ["new", "preparing", "ready", "completed"] as const;
 
 const STATUS_LABELS: Record<string, { title: string; blurb: string }> = {
+  held: {
+    title: "Scheduled",
+    blurb: "We'll start making it closer to your time.",
+  },
   new: {
     title: "Order received",
-    blurb: "We've got your order — the kitchen will confirm it shortly.",
-  },
-  confirmed: {
-    title: "Order confirmed",
-    blurb: "The kitchen has confirmed your order.",
+    blurb: "We've got your order and sent it to the kitchen.",
   },
   preparing: {
     title: "In the kitchen",
@@ -206,7 +207,7 @@ export default async function OrderPage({
                   </p>
                   {item.modifiers.length > 0 ? (
                     <p className="mt-0.5 text-xs text-muted-foreground">
-                      {item.modifiers.map((m) => describeChoice(m.modifierName, m)).join(" · ")}
+                      {item.modifiers.map((m) => (m.kind === "option" ? `${m.groupName}: ${describeChoice(m)}` : describeChoice(m))).join(" · ")}
                     </p>
                   ) : null}
                   {item.notes ? (
@@ -227,9 +228,9 @@ export default async function OrderPage({
           <p className="flex justify-between text-sm text-muted-foreground">
             <span>Payment</span>
             <span>
-              {order.paymentStatus === "paid"
-                ? "Paid online"
-                : `Due at ${order.orderType === "pickup" ? "pickup" : "delivery"}`}
+              {paymentState(order) === "paid"
+                ? "Paid"
+                : `${formatCents(dueCents(order))} due at ${order.orderType === "pickup" ? "pickup" : "delivery"}`}
             </span>
           </p>
         </CardFooter>

@@ -26,6 +26,7 @@ export default async function NewEmployeePage({ searchParams }: PageProps<"/admi
           hiredOn: null,
           notes: null,
           hasPin: false,
+          posAccess: "none",
           roles: [],
           availability: ANY_TIME,
         }}

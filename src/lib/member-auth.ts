@@ -14,7 +14,7 @@ import {
   memberByReferralCode,
   refreshMember,
 } from "@/lib/loyalty-server";
-import { getSettings } from "@/lib/orders";
+import { getSettings } from "@/lib/settings-server";
 import { sendLoginCode } from "@/lib/sms";
 
 const MEMBER_COOKIE = "minks_member";

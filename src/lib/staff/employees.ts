@@ -1,6 +1,6 @@
 import "server-only";
-import { createHmac, randomInt } from "node:crypto";
-import { and, asc, desc, eq, gte, isNull, lt, notExists, notInArray } from "drizzle-orm";
+import { randomInt } from "node:crypto";
+import { and, asc, desc, eq, gte, isNull, lt, notExists, notInArray, sql } from "drizzle-orm";
 import { db, employeeRoles, employees, shifts, timeEntries } from "@/db";
 import { isUniqueViolation } from "@/db/errors";
 import { nextId } from "@/db/ids";
@@ -11,15 +11,13 @@ import {
   type StoredAvailability,
   type WeeklyAvailability,
 } from "@/lib/timeclock";
+import { pinDigest } from "@/lib/pin";
+import type { PosAccess } from "@/lib/pos-access";
 import { weekBounds } from "@/lib/zoned";
 import { resolveWeek, type StaffConfig } from "@/lib/staff/config";
 import { ROLE_COLUMNS, toPayEntry } from "@/lib/staff/queries";
 
-export function pinDigest(pin: string): string {
-  const secret = process.env.SESSION_SECRET;
-  if (!secret) throw new Error("SESSION_SECRET is not set");
-  return createHmac("sha256", secret).update(`pin:${pin}`).digest("hex");
-}
+export { pinDigest };
 
 /** A random 4-digit PIN nobody else has. */
 export async function generatePin(): Promise<string> {
@@ -42,6 +40,7 @@ export type EmployeeInput = {
   notes: string | null;
   availability: StoredAvailability | null;
   roles: [EmployeeRole, ...EmployeeRole[]];
+  posAccess: PosAccess;
   /** Undefined leaves the PIN alone. */
   pin: string | undefined;
 };
@@ -84,9 +83,13 @@ export async function saveEmployee(id: number | null, input: EmployeeInput): Pro
  * Archiving takes someone off the clock and the schedule but keeps every
  * punch for payroll. Their upcoming shifts become open shifts to fill.
  * Both writes carry the "not on the clock" guard, so a clock-in racing the
- * archive leaves them active and on their shifts.
+ * archive leaves them active and on their shifts. The last active POS
+ * manager stays: without one, nobody could approve anything at the till.
  */
-export async function setEmployeeActive(id: number, active: boolean): Promise<"archived" | "restored" | "on-clock"> {
+export async function setEmployeeActive(
+  id: number,
+  active: boolean,
+): Promise<"archived" | "restored" | "on-clock" | "last-manager"> {
   const now = new Date();
   if (active) {
     await db.update(employees).set({ isActive: true, updatedAt: now }).where(eq(employees.id, id));
@@ -98,18 +101,25 @@ export async function setEmployeeActive(id: number, active: boolean): Promise<"a
       .from(timeEntries)
       .where(and(eq(timeEntries.employeeId, id), isNull(timeEntries.clockOutAt))),
   );
+  const anotherManager = sql`exists (select 1 from ${employees} e
+    where e.id <> ${id} and e.is_active and e.pos_access = 'manager')`;
   const [archived] = await db.batch([
     db
       .update(employees)
       .set({ isActive: false, updatedAt: now })
-      .where(and(eq(employees.id, id), offTheClock))
+      .where(and(eq(employees.id, id), offTheClock, sql`(${employees.posAccess} <> 'manager' or ${anotherManager})`))
       .returning({ id: employees.id }),
     db
       .update(shifts)
       .set({ employeeId: null, updatedAt: now })
       .where(and(eq(shifts.employeeId, id), gte(shifts.startsAt, now), offTheClock)),
   ]);
-  return archived.length > 0 ? "archived" : "on-clock";
+  if (archived.length > 0) return "archived";
+  const [row] = await db
+    .select({ onClock: sql<boolean>`not ${offTheClock}`, lastManager: sql<boolean>`not ${anotherManager}` })
+    .from(employees)
+    .where(eq(employees.id, id));
+  return row?.onClock ? "on-clock" : "last-manager";
 }
 
 export async function removeEmployeePin(id: number): Promise<void> {
@@ -161,6 +171,7 @@ export type EmployeeDetail = {
   notes: string | null;
   isActive: boolean;
   hasPin: boolean;
+  posAccess: PosAccess;
   roles: EmployeeRole[];
   availability: WeeklyAvailability;
 };
@@ -177,6 +188,7 @@ export async function getEmployee(id: number): Promise<EmployeeDetail | null> {
     notes: e.notes,
     isActive: e.isActive,
     hasPin: e.pinDigest !== null,
+    posAccess: e.posAccess,
     roles: e.roles,
     availability: availabilityFromStored(e.availability),
   };

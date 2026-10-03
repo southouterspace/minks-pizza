@@ -2,7 +2,7 @@ import type { Metadata } from "next";
 import Link from "next/link";
 import { ArrowLeft } from "lucide-react";
 import { requireOperator } from "@/lib/auth";
-import { getSettings } from "@/lib/orders";
+import { getSettings } from "@/lib/settings-server";
 import { catalogNames, getMenuCatalog } from "@/lib/promotion-admin";
 import { EMPTY_DRAFT } from "@/lib/promotion-codec";
 import { PromotionForm } from "@/components/admin/promotion-form";

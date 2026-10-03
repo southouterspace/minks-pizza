@@ -161,7 +161,7 @@ describe("loyalty", { timeout: 120_000 }, () => {
     assert.deepEqual([placed.loyaltyMemberId, placed.loyaltyPointsEarned], [member.id, 199]);
     assert.deepEqual(await ledgerOf(member.id), []);
 
-    await completeOnBoard(op, placed);
+    await completeOnBoard(op, { id: placed.id, number: placed.orderNumber });
     assert.equal(ledgerSummary(await ledgerOf(member.id)), "earn:199,signup_bonus:200");
     assert.equal((await memberByPhone(phone.digits)).pointsBalance, 399);
 
@@ -274,7 +274,7 @@ describe("loyalty", { timeout: 120_000 }, () => {
 
     for (let i = 0; i < 2; i++) {
       const placed = await createOrder(order(friendPhone.display, "Finn Friend"), await getMember(friend.id));
-      await moveOrder(placed.id, "confirmed", "preparing", "ready", "completed");
+      await moveOrder(placed.id, "ready", "completed");
     }
     assert.equal(ledgerSummary(await ledgerOf(friend.id)), "earn:199,earn:199,referee_bonus:300,signup_bonus:200");
     assert.equal(ledgerSummary(await ledgerOf(referrer.id)), "referrer_bonus:500");
@@ -305,7 +305,7 @@ describe("loyalty", { timeout: 120_000 }, () => {
     );
 
     const placed = await createOrder(order(m.display, m.name), await getMember(m.id));
-    await moveOrder(placed.id, "confirmed", "preparing", "ready", "completed");
+    await moveOrder(placed.id, "ready", "completed");
     await db.update(loyaltyMembers).set({ birthdaySetAt: new Date(now.getTime() - 40 * DAY_MS) }).where(eq(loyaltyMembers.id, m.id));
     await page.reload();
     await page.reload();
@@ -368,7 +368,7 @@ describe("loyalty", { timeout: 120_000 }, () => {
   it("sign-in claims recent orders on the phone; the operator adds one by number, once", async () => {
     const phone = uniquePhone();
     const past = await createOrder(order(phone.display, "Cara Claimer"));
-    await moveOrder(past.id, "confirmed", "preparing", "ready", "completed");
+    await moveOrder(past.id, "ready", "completed");
     assert.equal((await orderRow(past.id)).loyaltyMemberId, null);
 
     const page = await customer();
@@ -376,25 +376,25 @@ describe("loyalty", { timeout: 120_000 }, () => {
     const m = await memberByPhone(phone.digits);
     assert.equal((await orderRow(past.id)).loyaltyMemberId, m.id);
     assert.equal(ledgerSummary(await ledgerOf(m.id)), "earn:199,signup_bonus:200");
-    assert.match((await page.getByTestId(`member-order-${past.orderNumber}`).textContent()) ?? "", /Posted/);
+    assert.match((await page.getByTestId(`member-order-${past.number}`).textContent()) ?? "", /Posted/);
 
     const pending = await createOrder(order(phone.display, m.name!), await getMember(m.id));
     const canceled = await createOrder(order(phone.display, m.name!), await getMember(m.id));
     await cancelOrder(canceled.id);
     await page.reload();
-    assert.match((await page.getByTestId(`member-order-${pending.orderNumber}`).textContent()) ?? "", /Pending/);
-    assert.match((await page.getByTestId(`member-order-${canceled.orderNumber}`).textContent()) ?? "", /Reversed/);
+    assert.match((await page.getByTestId(`member-order-${pending.number}`).textContent()) ?? "", /Pending/);
+    assert.match((await page.getByTestId(`member-order-${canceled.number}`).textContent()) ?? "", /Reversed/);
     await cancelOrder(pending.id);
 
     const elsewhere = await createOrder(order(uniquePhone().display, m.name!));
-    await moveOrder(elsewhere.id, "confirmed", "preparing", "ready", "completed");
+    await moveOrder(elsewhere.id, "ready", "completed");
     await op.goto(`${BASE}/admin/loyalty/members/${m.id}`);
     const form = op.getByTestId("claim-form");
-    await form.getByLabel("Order number").fill(String(elsewhere.orderNumber));
+    await form.getByLabel("Order number").fill(String(elsewhere.number));
     await form.getByRole("button", { name: "Add order" }).click();
     await form.getByTestId("form-notice").waitFor();
     assert.equal((await orderRow(elsewhere.id)).loyaltyMemberId, m.id);
-    await form.getByLabel("Order number").fill(String(elsewhere.orderNumber));
+    await form.getByLabel("Order number").fill(String(elsewhere.number));
     await form.getByRole("button", { name: "Add order" }).click();
     await form.getByTestId("form-error").waitFor();
     assert.equal(await form.getByTestId("form-error").textContent(), "That order already belongs to a member.");
@@ -433,7 +433,7 @@ describe("loyalty", { timeout: 120_000 }, () => {
     await signInCustomer(page, m.display, m.name);
     assert.match((await page.getByTestId(`reward-${reward.id}`).getByTestId("price-increase").textContent()) ?? "", /^Price going up to 400 on /);
     const placed = await createOrder(order(m.display, m.name, { rewardId: reward.id }), await getMember(m.id));
-    assert.equal(placed.loyaltyPointsRedeemed, 200);
+    assert.equal((await orderRow(placed.id)).loyaltyPointsRedeemed, 200);
     await cancelOrder(placed.id);
 
     await op.goto(`${BASE}/admin/loyalty/rewards`);
@@ -466,7 +466,7 @@ describe("loyalty", { timeout: 120_000 }, () => {
   it("a member deletes their account: ledger gone, orders kept and unlinked", async () => {
     const m = await seedMember(0, "Del Deleter");
     const placed = await createOrder(order(m.display, m.name), await getMember(m.id));
-    await moveOrder(placed.id, "confirmed", "preparing", "ready", "completed");
+    await moveOrder(placed.id, "ready", "completed");
     const page = await customer();
     await signInCustomer(page, m.display, m.name);
     await page.getByRole("button", { name: "Delete my rewards account" }).click();

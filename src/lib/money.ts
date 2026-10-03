@@ -26,3 +26,10 @@ export function parseDollars(raw: string): number | null {
   const n = Number.parseFloat(raw);
   return Number.isNaN(n) || n < 0 ? null : Math.round(n * 100);
 }
+
+/** "12.5" → 1250, "$1,200" → 120000; null when it isn't money. */
+export function parseCents(s: string): number | null {
+  const t = s.replace(/[$,\s]/g, "");
+  if (!/^\d*(\.\d{0,2})?$/.test(t) || t === "" || t === ".") return null;
+  return Math.round(Number(t) * 100);
+}

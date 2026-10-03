@@ -5,7 +5,7 @@
  */
 import type { orderItems, orders, storeSettings } from "@/db/schema";
 
-export const ORDER_SOURCES = ["web", "doordash", "ubereats", "grubhub"] as const;
+export const ORDER_SOURCES = ["web", "walk_in", "phone", "doordash", "ubereats", "grubhub"] as const;
 export type OrderSource = (typeof ORDER_SOURCES)[number];
 
 export const COURIER_PROVIDERS = ["uber_direct", "doordash_drive"] as const;

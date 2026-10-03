@@ -28,8 +28,8 @@ const at = (iso: string) => new Date(iso);
 
 test("transition table matches the lifecycle", () => {
   assert.deepEqual(TRANSITIONS, {
-    new: ["confirmed", "canceled"],
-    confirmed: ["preparing", "canceled"],
+    held: ["new", "canceled"],
+    new: ["preparing", "ready", "canceled"],
     preparing: ["ready", "canceled"],
     ready: ["completed", "canceled"],
     completed: [],
@@ -42,10 +42,11 @@ test("every legal move, and nothing else", () => {
     ORDER_STATUSES.filter((to) => canTransition(from, to)).map((to) => `${from}->${to}`),
   );
   assert.deepEqual(legal, [
-    "new->confirmed",
+    "held->new",
+    "held->canceled",
+    "new->preparing",
+    "new->ready",
     "new->canceled",
-    "confirmed->preparing",
-    "confirmed->canceled",
     "preparing->ready",
     "preparing->canceled",
     "ready->completed",
@@ -54,15 +55,16 @@ test("every legal move, and nothing else", () => {
 });
 
 test("no skipping ahead or going back", () => {
-  assert.equal(canTransition("new", "ready"), false);
+  assert.equal(canTransition("held", "ready"), false);
+  assert.equal(canTransition("new", "completed"), false);
   assert.equal(canTransition("ready", "preparing"), false);
   assert.equal(canTransition("completed", "canceled"), false);
   assert.equal(canTransition("canceled", "new"), false);
 });
 
 test("isLate: cooking orders past their promise", () => {
+  assert.equal(isLate(at("2026-10-03T23:29:00Z"), "held", now), true);
   assert.equal(isLate(at("2026-10-03T23:29:00Z"), "new", now), true);
-  assert.equal(isLate(at("2026-10-03T23:29:00Z"), "confirmed", now), true);
   assert.equal(isLate(at("2026-10-03T23:29:00Z"), "preparing", now), true);
 });
 
@@ -82,8 +84,8 @@ test("minutesUntil rounds and goes negative", () => {
 });
 
 test("statusTimestamps per destination", () => {
-  assert.deepEqual(statusTimestamps("new", now), {});
-  assert.deepEqual(statusTimestamps("confirmed", now), {});
+  assert.deepEqual(statusTimestamps("held", now), {});
+  assert.deepEqual(statusTimestamps("new", now), { readyAt: null, completedAt: null });
   assert.deepEqual(statusTimestamps("preparing", now), { readyAt: null, completedAt: null });
   assert.deepEqual(statusTimestamps("ready", now), { readyAt: at("2026-10-03T23:30:00.000Z") });
   assert.deepEqual(statusTimestamps("completed", now), {
@@ -95,19 +97,21 @@ test("statusTimestamps per destination", () => {
 });
 
 test("active and cooking statuses", () => {
-  assert.deepEqual(ORDER_STATUSES.filter(isActive), ["new", "confirmed", "preparing", "ready"]);
-  assert.deepEqual(ORDER_STATUSES.filter(isCooking), ["new", "confirmed", "preparing"]);
+  assert.deepEqual(ORDER_STATUSES.filter(isActive), ["held", "new", "preparing", "ready"]);
+  assert.deepEqual(ORDER_STATUSES.filter(isCooking), ["held", "new", "preparing"]);
 });
 
 test("describeEvent headlines", () => {
   const status = (fromStatus: OrderStatus | null, toStatus: OrderStatus | null) =>
     describeEvent({ type: "status_changed", fromStatus, toStatus });
-  assert.equal(describeEvent({ type: "placed", fromStatus: null, toStatus: "new" }), "Order placed");
-  assert.equal(status("new", "confirmed"), "Confirmed");
+  assert.equal(describeEvent({ type: "placed", fromStatus: null, toStatus: null }), "Order placed");
+  assert.equal(status("held", "new"), "Sent to kitchen");
+  assert.equal(status("ready", "new"), "More food fired");
   assert.equal(status("preparing", "canceled"), "Canceled");
   assert.equal(status("ready", "preparing"), "Recalled to the kitchen");
   assert.equal(status("completed", "preparing"), "Recalled to the kitchen");
-  assert.equal(status("confirmed", "preparing"), "Preparing");
+  assert.equal(status("new", "preparing"), "Preparing");
+  assert.equal(status("preparing", "ready"), "Ready");
   assert.equal(status(null, null), "Status changed");
   assert.equal(describeEvent({ type: "eta_changed", fromStatus: null, toStatus: null }), "Promised time pushed");
 });

@@ -4,7 +4,7 @@ import { CartProvider, PromoLinkCapture } from "@/components/cart-context";
 import { StoreMark } from "@/components/store-mark";
 import { CartBadge } from "@/components/store/cart-badge";
 import { Separator } from "@/components/ui/separator";
-import { getSettings } from "@/lib/orders";
+import { getSettings } from "@/lib/settings-server";
 import { getRefreshedCurrentMember } from "@/lib/member-auth";
 import { getLoyaltySettings } from "@/lib/loyalty-server";
 

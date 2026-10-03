@@ -10,7 +10,9 @@ export type PromotionRow = typeof promotions.$inferSelect;
 
 /** A row as the evaluator reads it; the reward is re-parsed so a bad row fails loudly here. */
 export function toTerms(row: PromotionRow): PromotionTerms {
-  return { ...row, reward: promotionRewardSchema.parse(row.reward) };
+  // Deals are offered online only; dine-in is rung in at the counter.
+  const orderTypes = row.orderTypes.filter((t): t is "pickup" | "delivery" => t !== "dine_in");
+  return { ...row, orderTypes, reward: promotionRewardSchema.parse(row.reward) };
 }
 
 async function hasOrdered(customerKey: string | null): Promise<boolean> {

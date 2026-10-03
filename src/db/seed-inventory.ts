@@ -66,8 +66,8 @@ export async function seedInventory(db: Db): Promise<{ ingredients: number; reci
   const sizeGroup = groups.find((g) => g.name === "Size");
   const toppingsGroup = groups.find((g) => g.name === "Extra Toppings");
   if (!sizeGroup || !toppingsGroup) throw new Error("Seed the menu first: Size and Extra Toppings groups are missing.");
-  await db.update(schema.modifierGroups).set({ kind: "size" }).where(eq(schema.modifierGroups.id, sizeGroup.id));
-  await db.update(schema.modifierGroups).set({ kind: "toppings" }).where(eq(schema.modifierGroups.id, toppingsGroup.id));
+  await db.update(schema.modifierGroups).set({ role: "size" }).where(eq(schema.modifierGroups.id, sizeGroup.id));
+  await db.update(schema.modifierGroups).set({ role: "topping" }).where(eq(schema.modifierGroups.id, toppingsGroup.id));
 
   const mods = await db.select().from(schema.modifiers);
   const sizeIds = SIZES.map((name) => mods.find((m) => m.groupId === sizeGroup.id && m.name === name)?.id ?? null);

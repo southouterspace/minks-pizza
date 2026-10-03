@@ -26,6 +26,10 @@ import {
 import { onHand, recordMoves } from "../src/lib/inventory";
 import { createOrder } from "../src/lib/checkout";
 import { transitionOrder } from "../src/lib/order-writes";
+import type { Amount, Placement, Selection } from "../src/lib/pricing";
+import { moveOrder } from "./e2e/harness";
+
+const sel = (modifierId: number, placement: Placement = "whole", amount: Amount = "regular"): Selection => ({ modifierId, placement, amount });
 
 const BASE = process.env.E2E_BASE_URL ?? "http://localhost:3000";
 const SHOT_DIR = process.env.E2E_SHOT_DIR ?? "/tmp/e2e-reports";
@@ -88,7 +92,7 @@ async function main() {
     .insert(operators)
     .values({ email: EMAIL, name: NAME, passwordHash: await bcrypt.hash(PASSWORD, 10) })
     .returning();
-  const actor = { name: operator.name, operatorId: operator.id };
+  const actor = { name: operator.name, operatorId: operator.id, employeeId: null };
   const [{ maxMove }] = await db
     .select({ maxMove: sql<number>`coalesce(max(${inventoryMoves.id}), 0)`.mapWith(Number) })
     .from(inventoryMoves);
@@ -131,16 +135,15 @@ async function main() {
     const small = pick("Size", 'Small 10"');
     const tossed = pick("Crust", "Hand Tossed");
     const carts = [
-      [{ itemId: item("Cheese Pizza"), quantity: 2, modifiers: [{ id: large }, { id: tossed }, { id: pick("Extra Toppings", "Pepperoni") }, { id: pick("Extra Toppings", "Mushrooms"), placement: "left" as const }] }],
-      [{ itemId: item("Pepperoni Classic"), quantity: 1, modifiers: [{ id: small }, { id: tossed }] }],
-      [{ itemId: item("Cheese Pizza"), quantity: 1, modifiers: [{ id: small }, { id: tossed }, { id: pick("Extra Toppings", "Extra Cheese"), portion: "extra" as const }] }],
+      [{ itemId: item("Cheese Pizza"), quantity: 2, notes: null, selections: [sel(large), sel(tossed), sel(pick("Extra Toppings", "Pepperoni")), sel(pick("Extra Toppings", "Mushrooms"), "left")] }],
+      [{ itemId: item("Pepperoni Classic"), quantity: 1, notes: null, selections: [sel(small), sel(tossed)] }],
+      [{ itemId: item("Cheese Pizza"), quantity: 1, notes: null, selections: [sel(small), sel(tossed), sel(pick("Extra Toppings", "Extra Cheese"), "whole", "extra")] }],
     ];
     for (const lines of carts) {
       const order = await createOrder({ orderType: "pickup", customerName: "Report E2E", customerPhone: "(555) 010-0200", tipCents: 0, lines });
       orderIds.push(order.id);
-      for (const to of ["confirmed", "preparing", "ready", "completed"] as const) {
-        await transitionOrder({ orderId: order.id, to, actor });
-      }
+      await moveOrder(order.id, "ready");
+      await transitionOrder({ orderId: order.id, to: "completed", actor });
     }
     await recordMoves([{ ingredientId: mozz, kind: "waste", qtyMilli: -8 * OZ, wasteReason: "dropped", operatorId: operator.id }]);
     await count("spot", (held) => [
@@ -154,7 +157,9 @@ async function main() {
     const page = await signIn(browser);
 
     await page.goto(`${BASE}/admin/reports`, { waitUntil: "networkidle" });
-    check("/admin/reports opens on food cost", page.url().endsWith("/admin/reports/food-cost"), page.url());
+    check("/admin/reports opens on sales", (await page.getByRole("link", { name: "Sales", exact: true }).getAttribute("aria-current")) === "page", page.url());
+    await page.getByRole("link", { name: "Food cost", exact: true }).click();
+    await page.waitForURL(/\/admin\/reports\/food-cost$/);
     const today = new Date().toLocaleDateString("sv-SE", { timeZone: settings.timezone });
     await page.fill("#r-from", today);
     await page.fill("#r-to", today);

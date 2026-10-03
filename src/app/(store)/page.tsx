@@ -1,5 +1,5 @@
 import { getPublicMenu } from "@/lib/menu";
-import { getSettings } from "@/lib/orders";
+import { getSettings } from "@/lib/settings-server";
 import { MenuBrowser } from "@/components/store/menu-browser";
 import { ComingSoon } from "@/components/store/coming-soon";
 import { StoreStatusBanner } from "@/components/store/status-banner";
@@ -47,6 +47,7 @@ export default async function StorePage() {
           <div className="mt-6 flex flex-wrap items-center gap-x-5 gap-y-2 text-sm text-muted-foreground">
             <StoreStatusBanner
               hours={settings.hours ?? null}
+              timeZone={settings.timezone}
               acceptingOrders={settings.isAcceptingOrders}
             />
             {settings.pickupEnabled ? (

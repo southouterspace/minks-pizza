@@ -3,7 +3,7 @@ import { categories, db } from "@/db";
 import { requireOperator } from "@/lib/auth";
 import { formatStoreDate } from "@/lib/loyalty";
 import { listRewards } from "@/lib/loyalty-server";
-import { getSettings } from "@/lib/orders";
+import { getSettings } from "@/lib/settings-server";
 import { deleteReward } from "../actions";
 import { ConfirmButton } from "@/components/admin/confirm-button";
 import { RewardForm } from "@/components/admin/reward-form";

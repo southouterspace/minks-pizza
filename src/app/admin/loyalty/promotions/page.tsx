@@ -1,7 +1,7 @@
 import { requireOperator } from "@/lib/auth";
 import { activePromotion } from "@/lib/loyalty";
 import { listPromotions } from "@/lib/loyalty-server";
-import { getSettings } from "@/lib/orders";
+import { getSettings } from "@/lib/settings-server";
 import { deletePromotion } from "../actions";
 import { LoyaltyPromotionForm } from "@/components/admin/loyalty-promotion-form";
 import { ConfirmButton } from "@/components/admin/confirm-button";

@@ -1,14 +1,15 @@
 /**
- * Seeds the database with the singleton store settings row and a starter
- * pizzeria menu the operator can edit or replace from the admin dashboard.
+ * Seeds the database with the singleton store settings row, demo POS staff,
+ * and a starter pizzeria menu the operator can edit or replace from the
+ * admin dashboard.
  *
  * Run with: npm run db:seed  (idempotent — skips if categories already exist)
  */
 import { neon } from "@neondatabase/serverless";
 import { drizzle } from "drizzle-orm/neon-http";
 import * as schema from "./schema";
-import { seedInventory } from "./seed-inventory";
 import { databaseUrl } from "./url";
+import { pinDigest } from "../lib/pin";
 
 const sql = neon(databaseUrl());
 const db = drizzle(sql, { schema });
@@ -47,26 +48,41 @@ async function main() {
     })
     .onConflictDoNothing();
 
+  // Demo staff for the POS terminal and the time clock (PINs documented in
+  // README). PINs are unique, so a re-run skips them.
+  const demoStaff = [
+    { name: "Morgan Manager", posAccess: "manager" as const, pin: "1234", job: "manager" as const, rate: 2200 },
+    { name: "Casey Cashier", posAccess: "cashier" as const, pin: "5678", job: "cashier" as const, rate: 1500 },
+  ];
+  for (const s of demoStaff) {
+    const [created] = await db
+      .insert(schema.employees)
+      .values({ name: s.name, posAccess: s.posAccess, pinDigest: pinDigest(s.pin) })
+      .onConflictDoNothing()
+      .returning({ id: schema.employees.id });
+    if (created) {
+      await db.insert(schema.employeeRoles).values({ employeeId: created.id, role: s.job, hourlyRateCents: s.rate, isPrimary: true });
+    }
+  }
+
   const existing = await db.select().from(schema.categories);
   if (existing.length > 0) {
     console.log("Menu already seeded — skipping.");
-    const added = await seedInventory(db);
-    console.log(`Inventory: ${added.ingredients} ingredients and ${added.recipeLines} recipe lines added.`);
     return;
   }
 
   // --- Modifier groups -----------------------------------------------------
   const [sizeGroup] = await db
     .insert(schema.modifierGroups)
-    .values({ name: "Size", kind: "size", minSelect: 1, maxSelect: 1, sortOrder: 0 })
+    .values({ name: "Size", role: "size", minSelect: 1, maxSelect: 1, sortOrder: 0 })
     .returning();
   const [crustGroup] = await db
     .insert(schema.modifierGroups)
-    .values({ name: "Crust", minSelect: 1, maxSelect: 1, sortOrder: 1 })
+    .values({ name: "Crust", role: "crust", minSelect: 1, maxSelect: 1, sortOrder: 1 })
     .returning();
   const [toppingsGroup] = await db
     .insert(schema.modifierGroups)
-    .values({ name: "Extra Toppings", kind: "toppings", minSelect: 0, maxSelect: null, sortOrder: 2 })
+    .values({ name: "Extra Toppings", role: "topping", minSelect: 0, maxSelect: null, sortOrder: 2 })
     .returning();
   const [wingSauceGroup] = await db
     .insert(schema.modifierGroups)
@@ -164,10 +180,7 @@ async function main() {
     { itemId: byName["House Salad"].id, groupId: dressingGroup.id, sortOrder: 0 },
   ]);
 
-  const added = await seedInventory(db);
-  console.log(
-    `Seeded store settings + starter menu, ${added.ingredients} ingredients and ${added.recipeLines} recipe lines.`,
-  );
+  console.log("Seeded store settings + starter menu.");
 }
 
 main().then(

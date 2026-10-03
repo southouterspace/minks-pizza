@@ -3,8 +3,9 @@
  * partner-gated (docs/delivery-platforms-research.md, Part A), so there are
  * no adapters yet: one would parse its platform's payload into ExternalOrder.
  */
-import type { OrderItemModifier, orderItems, orders } from "@/db/schema";
+import type { orderItems, orders, tenders } from "@/db/schema";
 import type { KitchenStation } from "@/lib/kds";
+import type { LineModifier } from "@/lib/pricing";
 
 export type ExternalOrder = {
   source: "doordash" | "ubereats" | "grubhub";
@@ -24,7 +25,8 @@ export type ExternalOrder = {
     name: string;
     quantity: number;
     unitPriceCents: number;
-    modifiers: OrderItemModifier[];
+    /** Names only: a marketplace's modifiers are not ours. */
+    modifiers: { groupName: string; modifierName: string; priceDeltaCents: number }[];
     notes: string | null;
   }[];
   subtotalCents: number;
@@ -34,18 +36,26 @@ export type ExternalOrder = {
   totalCents: number;
 };
 
+/**
+ * Our rows for a marketplace order. The platform priced, taxed and collected
+ * it, so the money columns are copied (the fold leaves marketplace totals
+ * alone) and the payment is one `marketplace` tender for the total. The tax
+ * rate is implied, to the basis point, for the record.
+ */
 export function externalOrderRows(
   order: ExternalOrder,
   stationByItemId: ReadonlyMap<number, KitchenStation>,
 ): {
   order: typeof orders.$inferInsert;
   items: Omit<typeof orderItems.$inferInsert, "orderId">[];
+  tender: Omit<typeof tenders.$inferInsert, "orderId" | "id">;
 } {
   return {
     order: {
       source: order.source,
       sourceOrderId: order.sourceOrderId,
       sourceDisplayId: order.sourceDisplayId,
+      status: "held",
       orderType: order.orderType,
       customerName: order.customerName,
       customerPhone: order.customerPhone,
@@ -56,11 +66,11 @@ export function externalOrderRows(
       orderNotes: order.notes,
       subtotalCents: order.subtotalCents,
       taxCents: order.taxCents,
+      taxRateBps: order.subtotalCents > 0 ? Math.round((order.taxCents * 10_000) / order.subtotalCents) : 0,
       deliveryFeeCents: order.deliveryFeeCents,
       tipCents: order.tipCents,
       totalCents: order.totalCents,
-      // The marketplace collected the money.
-      paymentStatus: "paid",
+      paidCents: order.totalCents,
     },
     items: order.lines.map((line) => {
       const station =
@@ -73,10 +83,18 @@ export function externalOrderRows(
         quantity: line.quantity,
         unitPriceCents: line.unitPriceCents,
         lineTotalCents: line.unitPriceCents * line.quantity,
-        modifiers: line.modifiers,
+        modifiers: line.modifiers.map(
+          (m): LineModifier => ({ kind: "option", modifierId: null, role: "option", ...m }),
+        ),
         notes: line.notes,
         station: station ?? "kitchen",
       };
     }),
+    tender: {
+      direction: "payment",
+      method: "marketplace",
+      amountCents: order.totalCents,
+      tipCents: 0,
+    },
   };
 }

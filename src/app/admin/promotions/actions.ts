@@ -6,7 +6,7 @@ import { and, eq, notExists, sql } from "drizzle-orm";
 import { z } from "zod";
 import { db, orderDiscounts, promotionCodes, promotions } from "@/db";
 import { requireOperator } from "@/lib/auth";
-import { getSettings } from "@/lib/orders";
+import { getSettings } from "@/lib/settings-server";
 import { displayCode, normalizeCode } from "@/lib/promo-code";
 import { promotionColumns, promotionInputSchema } from "@/lib/promotion-schema";
 

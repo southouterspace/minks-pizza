@@ -1,5 +1,5 @@
-import "server-only";
-import { eq, inArray, or, sql, type SQL } from "drizzle-orm";
+// Not server-only: folds.ts runs the stock reconcile from scripts too.
+import { and, eq, inArray, isNull, or, sql, type SQL } from "drizzle-orm";
 import {
   db,
   ingredientPacks,
@@ -32,7 +32,7 @@ import {
   type RecipeContext,
   type UsageLine,
 } from "@/lib/recipes";
-import { DEFAULT_PORTIONS } from "@/lib/toppings";
+import { DEFAULT_PORTIONS } from "@/lib/recipes";
 
 function intRows(rows: readonly (readonly (number | null)[])[]): SQL {
   return sql`(values ${sql.join(
@@ -73,7 +73,7 @@ export async function planOrderUsage(orderId: string): Promise<OrderUsagePlan> {
         modifiers: orderItems.modifiers,
       })
       .from(orderItems)
-      .where(eq(orderItems.orderId, orderId)),
+      .where(and(eq(orderItems.orderId, orderId), isNull(orderItems.voidedAt))),
     portionSettings(),
   ]);
 
@@ -81,7 +81,7 @@ export async function planOrderUsage(orderId: string): Promise<OrderUsagePlan> {
   const modifierIds = [
     ...new Set(
       lines.flatMap((l) =>
-        l.modifiers.flatMap((m) => (m.modifierId === undefined ? [] : [m.modifierId])),
+        l.modifiers.flatMap((m) => (m.modifierId === null ? [] : [m.modifierId])),
       ),
     ),
   ];
@@ -97,7 +97,7 @@ export async function planOrderUsage(orderId: string): Promise<OrderUsagePlan> {
           .select({ id: modifiers.id })
           .from(modifiers)
           .innerJoin(modifierGroups, eq(modifierGroups.id, modifiers.groupId))
-          .where(sql`${modifierGroups.kind} = 'size' and ${inArray(modifiers.id, modifierIds)}`)
+          .where(and(eq(modifierGroups.role, "size"), inArray(modifiers.id, modifierIds)))
       : [],
   ]);
 
@@ -123,8 +123,8 @@ export async function planOrderUsage(orderId: string): Promise<OrderUsagePlan> {
 
 /**
  * One statement that brings the order's `sale` moves in line with its
- * status: a completed, unrefunded order holds its full theoretical usage,
- * any other order holds nothing. It reads the status itself, so placed in a
+ * status: a completed order holds its full theoretical usage (the food was
+ * made whatever was refunded), any other order holds nothing. It reads the status itself, so placed in a
  * `db.batch` right after a status transition it sees that transition, and
  * it only inserts the difference, so running it again changes nothing. It
  * also stamps each line's food cost while the order is completed. Built
@@ -132,9 +132,9 @@ export async function planOrderUsage(orderId: string): Promise<OrderUsagePlan> {
  * returning it from an async function would run it on the caller's await.
  */
 export function inventorySyncStatement({ orderId, usage, lineCosts }: OrderUsagePlan) {
-  return db.execute<{ ingredient_id: number; qty_milli: number }>(sql`
+  return db.execute<{ order_id: string; ingredient_id: number; qty_milli: number }>(sql`
     with wanted as (
-      select (${orders.status} = 'completed' and ${orders.paymentStatus} <> 'refunded') as active
+      select (${orders.status} = 'completed') as active
       from ${orders} where ${orders.id} = ${orderId}
       for update
     ), target as (
@@ -159,7 +159,7 @@ export function inventorySyncStatement({ orderId, usage, lineCosts }: OrderUsage
       from ${pairs(lineCosts)} as c(id, cost_cents), wanted
       where ${orderItems.id} = c.id
     )
-    select ingredient_id, qty_milli from moved
+    select ${orderId}::uuid as order_id, ingredient_id, qty_milli from moved
   `);
 }
 

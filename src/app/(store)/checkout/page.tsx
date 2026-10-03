@@ -1,5 +1,5 @@
 import type { Metadata } from "next";
-import { getSettings } from "@/lib/orders";
+import { getSettings } from "@/lib/settings-server";
 import { formatPhone } from "@/lib/loyalty";
 import { getLoyaltySettings } from "@/lib/loyalty-server";
 import { getRefreshedCurrentMember } from "@/lib/member-auth";

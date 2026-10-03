@@ -1,3 +1,5 @@
+import { dueCents } from "@/lib/orders";
+import { formatClock } from "@/lib/zoned";
 import Link from "next/link";
 import { ChevronRight } from "lucide-react";
 import { formatCents } from "@/lib/money";
@@ -31,6 +33,7 @@ export function BoardCard({
     <Card
       size="sm"
       data-testid={`board-order-${order.orderNumber}`}
+      data-order-number={order.orderNumber}
       className={cn("gap-2!", late && "ring-destructive/40")}
     >
       <div className="flex items-start justify-between gap-2 px-3">
@@ -66,11 +69,15 @@ export function BoardCard({
         ) : null}
         <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
           <PromisedTime promisedAt={order.promisedAt} late={late} now={now} timeZone={timeZone} />
-          {order.status === "confirmed" || order.status === "preparing" ? (
-            <StatusBadge status={order.status} />
+          {order.status === "preparing" || order.status === "held" ? <StatusBadge status={order.status} /> : null}
+          <PaymentBadge order={order} />
+          {dueCents(order) > 0 ? (
+            <Link href={`/pos?order=${order.id}`} className="text-xs font-medium underline underline-offset-4">
+              Collect {formatCents(dueCents(order))} at POS
+            </Link>
           ) : null}
-          {order.paymentStatus !== "pending" ? (
-            <PaymentBadge status={order.paymentStatus} method={order.paymentMethod} />
+          {order.status === "held" && order.fireAt ? (
+            <span className="text-muted-foreground">Fires {formatClock(order.fireAt, timeZone)}</span>
           ) : null}
         </div>
       </div>

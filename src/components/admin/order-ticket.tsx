@@ -1,10 +1,10 @@
 import { formatClock } from "@/lib/zoned";
 import { formatCents } from "@/lib/money";
-import { PAYMENT_METHOD_LABEL } from "@/lib/order-workflow";
+import { PAYMENT_LABEL, paymentState } from "@/lib/orders";
 import type { OrderDetail } from "@/lib/order-queries";
 import { orderTotals, TotalsList } from "@/components/totals-list";
 import { formatDateTime } from "./ui";
-import { describeChoice } from "@/lib/toppings";
+import { describeChoice } from "@/lib/pricing";
 
 export function addressLine(o: OrderDetail): string | null {
   if (o.orderType !== "delivery" || !o.addressLine1) return null;
@@ -42,7 +42,7 @@ export function PrintTicket({ order, timeZone }: { order: OrderDetail; timeZone:
           </p>
           {line.modifiers.map((m) => (
             <p key={`${m.groupName}-${m.modifierName}`} className="pl-3">
-              {describeChoice(m.modifierName, m)}
+              {describeChoice(m)}
             </p>
           ))}
           {line.notes ? <p className="pl-3 italic">* {line.notes}</p> : null}
@@ -54,9 +54,7 @@ export function PrintTicket({ order, timeZone }: { order: OrderDetail; timeZone:
       <hr className="my-2 border-dashed border-black" />
       <TotalsList totals={orderTotals(order)} audience="staff" />
       <p className="mt-2 text-center font-bold uppercase">
-        {order.paymentStatus === "paid"
-          ? `Paid${order.paymentMethod ? ` · ${PAYMENT_METHOD_LABEL[order.paymentMethod]}` : ""}`
-          : "Payment due"}
+        {paymentState(order) === "paid" ? PAYMENT_LABEL.paid : "Payment due"}
       </p>
     </div>
   );

@@ -2,8 +2,8 @@ import "server-only";
 import { eq } from "drizzle-orm";
 import type { PgColumn } from "drizzle-orm/pg-core";
 import { db, storeSettings } from "@/db";
-import { DEFAULT_STAFF_RULES, DEFAULT_TIMEZONE, type StaffRules } from "@/lib/timeclock";
-import { localDateOf, localDateSchema, toWeekday, weekStartOf, type LocalDate } from "@/lib/zoned";
+import { DEFAULT_STAFF_RULES, type StaffRules } from "@/lib/timeclock";
+import { DEFAULT_TIMEZONE, localDateOf, localDateSchema, toWeekday, weekStartOf, type LocalDate } from "@/lib/zoned";
 
 export type StaffConfig = { storeName: string; timezone: string; rules: StaffRules };
 

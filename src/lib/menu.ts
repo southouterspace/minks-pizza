@@ -7,30 +7,15 @@ import {
   modifierGroups,
   modifiers,
 } from "@/db";
-import { getSettings } from "@/lib/orders";
-import type { ToppingPriceSettings } from "@/lib/toppings";
+import type { MenuGroup, MenuModifier, PricingPolicy } from "@/lib/pricing";
+import { getSettings, policyOf } from "@/lib/settings-server";
 
-export type ModifierView = {
-  id: number;
-  name: string;
-  priceDeltaCents: number;
-  extraPriceDeltaCents: number | null;
-  isDefault: boolean;
-};
-
-type GroupFields = {
-  id: number;
-  name: string;
-  minSelect: number;
-  maxSelect: number | null;
-  modifiers: ModifierView[];
-};
-
-export type ModifierGroupView =
-  | (GroupFields & { kind: "choice" | "size" })
-  | (GroupFields & { kind: "toppings"; pricing: ToppingPriceSettings });
+export type ModifierView = MenuModifier;
+export type ModifierGroupView = MenuGroup;
 
 export type MenuItemView = {
+  /** The store's pricing rules, so the item dialog quotes what checkout charges. */
+  policy: PricingPolicy;
   id: number;
   name: string;
   description: string | null;
@@ -99,13 +84,15 @@ export async function getPublicMenu(): Promise<CategoryView[]> {
         .orderBy(asc(modifiers.sortOrder), asc(modifiers.id))
     : [];
 
-  const { halfToppingPriceBps } = await getSettings();
+  const policy = policyOf(await getSettings());
 
   const groupView = new Map<number, ModifierGroupView>(
-    groups.map((g) => {
-      const fields: GroupFields = {
+    groups.map((g) => [
+      g.id,
+      {
         id: g.id,
         name: g.name,
+        role: g.role,
         minSelect: g.minSelect,
         maxSelect: g.maxSelect,
         modifiers: mods
@@ -116,15 +103,10 @@ export async function getPublicMenu(): Promise<CategoryView[]> {
             priceDeltaCents: m.priceDeltaCents,
             extraPriceDeltaCents: m.extraPriceDeltaCents,
             isDefault: m.isDefault,
+            isAvailable: m.isAvailable,
           })),
-      };
-      return [
-        g.id,
-        g.kind === "toppings"
-          ? { ...fields, kind: g.kind, pricing: { halfToppingPriceBps } }
-          : { ...fields, kind: g.kind },
-      ];
-    }),
+      },
+    ]),
   );
 
   return cats
@@ -135,6 +117,7 @@ export async function getPublicMenu(): Promise<CategoryView[]> {
       items: availableItems
         .filter((i) => i.categoryId === c.id)
         .map((i) => ({
+          policy,
           id: i.id,
           name: i.name,
           description: i.description,

@@ -1,11 +1,7 @@
 "use client";
 
 import { useActionState } from "react";
-import {
-  addOperator,
-  changeOwnPassword,
-  type AuthFormState,
-} from "@/app/admin/actions";
+import { addOperator, changeOwnPassword, type AuthFormState } from "@/app/admin/actions";
 import { Button } from "@/components/ui/button";
 import {
   Field,
@@ -116,3 +112,5 @@ export function ChangePasswordForm() {
     </form>
   );
 }
+
+/** Masked, digits-only PIN entry. A PIN is never shown back once saved. */

@@ -111,31 +111,32 @@ async function ids() {
   };
 }
 
-async function setGroupKind(page: Page, groupId: number, kind: string) {
-  await page.locator(`details:has(#group-${groupId}-kind) > summary`).click();
-  await page.selectOption(`#group-${groupId}-kind`, kind);
-  await page.locator(`form:has(#group-${groupId}-kind) button[type="submit"]`).click();
+async function setGroupRole(page: Page, groupId: number, role: string) {
+  await page.locator(`details:has(#group-${groupId}-role) > summary`).click();
+  await page.selectOption(`#group-${groupId}-role`, role);
+  await page.locator(`form:has(#group-${groupId}-role) button[type="submit"]`).click();
 }
 
-async function groupKindsFlow(page: Page) {
-  await db.update(modifierGroups).set({ kind: "choice" });
+async function groupRolesFlow(page: Page) {
+  // Only the two groups under test start neutral; the rest keep their roles.
+  await db.update(modifierGroups).set({ role: "option" }).where(inArray(modifierGroups.name, ["Size", "Extra Toppings"]));
   const { group } = await ids();
   await page.goto(`${BASE}/admin/modifiers`, { waitUntil: "networkidle" });
-  await setGroupKind(page, group("Size"), "size");
+  await setGroupRole(page, group("Size"), "size");
   await page.waitForLoadState("networkidle");
-  await setGroupKind(page, group("Extra Toppings"), "toppings");
+  await setGroupRole(page, group("Extra Toppings"), "topping");
   const kinds = async () =>
-    Object.fromEntries((await db.select().from(modifierGroups)).map((g) => [g.name, g.kind]));
+    Object.fromEntries((await db.select().from(modifierGroups)).map((g) => [g.name, g.role]));
   check(
-    "group kinds saved: Size = size, Extra Toppings = toppings, Crust = choice",
+    "group roles saved: Size = size, Extra Toppings = topping, Crust untouched",
     await eventually(async () => {
       const k = await kinds();
-      return k["Size"] === "size" && k["Extra Toppings"] === "toppings" && k["Crust"] === "choice";
+      return k["Size"] === "size" && k["Extra Toppings"] === "topping" && k["Crust"] === "crust";
     }),
     JSON.stringify(await kinds()),
   );
   await page.goto(`${BASE}/admin/modifiers`, { waitUntil: "networkidle" });
-  check("kind badge shows Toppings", (await page.getByTestId(`group-kind-${group("Extra Toppings")}`).innerText()) === "Toppings");
+  check("role badge shows Topping", (await page.getByTestId(`group-role-${group("Extra Toppings")}`).innerText()) === "Topping");
 }
 
 async function toppingFlow(page: Page, phone: Page) {
@@ -378,7 +379,7 @@ async function main() {
   const phone = await signIn(browser, 375);
   try {
     const provolone = await ingredientFlow(page, phone);
-    await groupKindsFlow(page);
+    await groupRolesFlow(page);
     await toppingFlow(page, phone);
     await removalFlow(page);
     await itemRecipeFlow(page, phone);

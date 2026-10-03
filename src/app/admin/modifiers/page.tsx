@@ -20,13 +20,9 @@ import {
   modifierRecipeLines,
   recipeIngredients,
   sizeModifiers,
-} from "@/components/admin/recipe-data";
+} from "@/lib/recipe-data";
 import { NativeSelect, NativeSelectOption } from "@/components/ui/native-select";
-import {
-  GROUP_KIND_LABEL,
-  MODIFIER_GROUP_KINDS,
-  type ModifierGroupKind,
-} from "@/lib/toppings";
+import { GROUP_ROLE_LABEL, GROUP_ROLES, isPlaceable, type GroupRole } from "@/lib/pricing";
 import { Button, buttonVariants } from "@/components/ui/button";
 import {
   Card,
@@ -58,7 +54,7 @@ function GroupFields({
   idPrefix: string;
   defaults?: {
     name: string;
-    kind: ModifierGroupKind;
+    role: GroupRole;
     minSelect: number;
     maxSelect: number | null;
   };
@@ -78,16 +74,16 @@ function GroupFields({
         />
       </Field>
       <Field>
-        <FieldLabel htmlFor={`${idPrefix}-kind`}>Kind</FieldLabel>
+        <FieldLabel htmlFor={`${idPrefix}-role`}>Role</FieldLabel>
         <NativeSelect
-          id={`${idPrefix}-kind`}
-          name="kind"
-          defaultValue={defaults?.kind ?? "choice"}
+          id={`${idPrefix}-role`}
+          name="role"
+          defaultValue={defaults?.role ?? "option"}
           className="w-full"
         >
-          {MODIFIER_GROUP_KINDS.map((k) => (
+          {GROUP_ROLES.map((k) => (
             <NativeSelectOption key={k} value={k}>
-              {GROUP_KIND_LABEL[k]}
+              {GROUP_ROLE_LABEL[k]}
             </NativeSelectOption>
           ))}
         </NativeSelect>
@@ -232,8 +228,8 @@ export default async function ModifiersPage() {
           const groupModifiers = allModifiers.filter(
             (m) => m.groupId === group.id,
           );
-          const isToppings = group.kind === "toppings";
-          const recipeSizes = group.kind === "size" ? [] : sizes;
+          const isToppings = isPlaceable(group.role);
+          const recipeSizes = group.role === "size" ? [] : sizes;
           const usedBy = [
             ...new Set(
               usage.filter((u) => u.groupId === group.id).map((u) => u.itemName),
@@ -247,9 +243,9 @@ export default async function ModifiersPage() {
                   <span className="text-sm font-semibold">{group.name}</span>
                   <span
                     className="rounded-md border border-border px-1.5 py-0.5 text-xs font-normal"
-                    data-testid={`group-kind-${group.id}`}
+                    data-testid={`group-role-${group.id}`}
                   >
-                    {GROUP_KIND_LABEL[group.kind]}
+                    {GROUP_ROLE_LABEL[group.role]}
                   </span>
                   <span className="text-xs font-normal text-muted-foreground">
                     {ruleSummary(group.minSelect, group.maxSelect)}
@@ -272,7 +268,7 @@ export default async function ModifiersPage() {
                           idPrefix={`group-${group.id}`}
                           defaults={{
                             name: group.name,
-                            kind: group.kind,
+                            role: group.role,
                             minSelect: group.minSelect,
                             maxSelect: group.maxSelect,
                           }}

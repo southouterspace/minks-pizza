@@ -11,17 +11,10 @@ import {
 import { toast } from "sonner";
 import { z } from "zod";
 import { displayCode, normalizeCode } from "@/lib/promo-code";
-import { DEFAULT_CHOICE, type Placement, type Portion } from "@/lib/toppings";
-import { cartModifierSchema, type CartLineInput } from "@/lib/validation";
+import { AMOUNTS, PLACEMENTS, type LineModifier, type Selection } from "@/lib/pricing";
+import type { CartLineInput } from "@/lib/validation";
 
-export type CartModifier = {
-  id: number;
-  groupName: string;
-  modifierName: string;
-  priceDeltaCents: number;
-  placement?: Placement;
-  portion?: Portion;
-};
+export type CartModifier = LineModifier;
 
 export type CartLine = {
   key: string;
@@ -30,6 +23,9 @@ export type CartLine = {
   /** Base + modifier deltas, per unit (display only; server re-prices). */
   unitPriceCents: number;
   quantity: number;
+  /** What the server prices: ids and topping choices. */
+  selections: Selection[];
+  /** The priced snapshot, for display only. */
   modifiers: CartModifier[];
   notes?: string;
 };
@@ -74,38 +70,67 @@ export function toCartLineInput(line: CartLine): CartLineInput {
   return {
     itemId: line.itemId,
     quantity: line.quantity,
-    modifiers: line.modifiers.map((m) => ({ id: m.id, placement: m.placement, portion: m.portion })),
-    notes: line.notes,
+    selections: line.selections,
+    notes: line.notes ?? null,
   };
 }
 
-function lineKey(line: Omit<CartLine, "key">): string {
-  const mods = [...line.modifiers]
-    .sort((a, b) => a.id - b.id)
-    .map((m) => {
-      const placement = m.placement ?? DEFAULT_CHOICE.placement;
-      const portion = m.portion ?? DEFAULT_CHOICE.portion;
-      return placement === DEFAULT_CHOICE.placement && portion === DEFAULT_CHOICE.portion
-        ? `${m.id}`
-        : `${m.id}/${placement}/${portion}`;
-    });
+function lineKey(line: Pick<CartLine, "itemId" | "selections" | "notes">): string {
+  const mods = [...line.selections]
+    .sort((a, b) => a.modifierId - b.modifierId)
+    .map((s) =>
+      s.placement === "whole" && s.amount === "regular" ? `${s.modifierId}` : `${s.modifierId}/${s.placement}/${s.amount}`,
+    );
   return `${line.itemId}:${mods.join(",")}:${line.notes ?? ""}`;
 }
 
-const storedLineSchema = z.object({
-  itemId: z.number().int().positive(),
-  itemName: z.string(),
-  unitPriceCents: z.number().int(),
-  quantity: z.number().int().min(1),
-  modifiers: z.array(
-    cartModifierSchema.extend({
-      groupName: z.string(),
-      modifierName: z.string(),
-      priceDeltaCents: z.number().int(),
-    }),
-  ),
-  notes: z.string().optional(),
+const id = z.number().int().positive();
+const selectionSchema = z.object({
+  modifierId: id,
+  placement: z.enum(PLACEMENTS).default("whole"),
+  amount: z.enum(AMOUNTS).default("regular"),
 });
+/** Carts saved before selections existed: ids only, or ids with a placement and portion. */
+const legacyModifierSchema = z.object({
+  id,
+  placement: z.enum(PLACEMENTS).optional(),
+  portion: z.enum(["light", "regular", "extra"]).optional(),
+});
+const snapshotSchema = z.object({
+  kind: z.enum(["option", "placed"]).optional(),
+  groupName: z.string(),
+  modifierName: z.string(),
+  priceDeltaCents: z.number().int(),
+});
+
+const storedLineSchema = z
+  .object({
+    itemId: id,
+    itemName: z.string(),
+    unitPriceCents: z.number().int(),
+    quantity: z.number().int().min(1),
+    selections: z.array(selectionSchema).optional(),
+    modifiers: z.array(z.unknown()),
+    notes: z.string().optional(),
+  })
+  .transform(({ selections, modifiers, ...line }) => {
+    const snapshots = modifiers.flatMap((m): CartModifier[] => {
+      const snap = snapshotSchema.safeParse(m);
+      if (!snap.success) return [];
+      if (snap.data.kind !== undefined) return [m as CartModifier];
+      const { groupName, modifierName, priceDeltaCents } = snap.data;
+      return [{ kind: "option", role: "option", modifierId: null, groupName, modifierName, priceDeltaCents }];
+    });
+    const picked =
+      selections ??
+      modifiers.flatMap((m) => {
+        const legacy = legacyModifierSchema.safeParse(m);
+        if (!legacy.success) return [];
+        const { id, placement, portion } = legacy.data;
+        return [{ modifierId: id, placement: placement ?? "whole", amount: portion ?? "regular" } satisfies Selection];
+      });
+    return { ...line, selections: picked, modifiers: snapshots };
+  });
 
 function parseStoredCart(raw: string): CartLine[] {
   const parsed: unknown = JSON.parse(raw);

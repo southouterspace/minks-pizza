@@ -29,6 +29,10 @@ import { inventorySyncStatement, onHand, planOrderUsage, recordMoves, syncStockO
 import { applyKdsAction } from "../src/lib/kds-server";
 import { createOrder } from "../src/lib/checkout";
 import { transitionOrder, transitionStatements, type Actor } from "../src/lib/order-writes";
+import type { Amount, Placement, Selection } from "../src/lib/pricing";
+import { moveOrder } from "./e2e/harness";
+
+const sel = (modifierId: number, placement: Placement = "whole", amount: Amount = "regular"): Selection => ({ modifierId, placement, amount });
 
 let passed = 0;
 async function test(name: string, fn: () => Promise<void>) {
@@ -108,7 +112,7 @@ async function main() {
     .insert(operators)
     .values({ email: `${tag}@minks.example`, passwordHash: "x", name: "Inventory Test" })
     .returning();
-  const actor: Actor = { name: operator.name, operatorId: operator.id };
+  const actor: Actor = { name: operator.name, operatorId: operator.id, employeeId: null };
   const kdsOperator = { id: operator.id, name: operator.name };
   const createdOrders: string[] = [];
   let created: { id: number }[] = [];
@@ -118,10 +122,10 @@ async function main() {
       .update(storeSettings)
       .set({ isPublished: true, isAcceptingOrders: true, pickupEnabled: true })
       .where(eq(storeSettings.id, 1));
-    await db.update(modifierGroups).set({ kind: "size" }).where(eq(modifierGroups.id, group("Size").id));
+    await db.update(modifierGroups).set({ role: "size" }).where(eq(modifierGroups.id, group("Size").id));
     await db
       .update(modifierGroups)
-      .set({ kind: "toppings" })
+      .set({ role: "topping" })
       .where(eq(modifierGroups.id, group("Extra Toppings").id));
     created = await db
       .insert(ingredients)
@@ -152,48 +156,41 @@ async function main() {
         {
           itemId: cheesePizza.id,
           quantity: 1,
-          modifiers: [
-            { id: large.id },
-            { id: handTossed.id },
-            { id: pepMod.id, placement: "left" },
-            { id: extraCheese.id },
-          ],
+          notes: null,
+          selections: [sel(large.id), sel(handTossed.id), sel(pepMod.id, "left"), sel(extraCheese.id)],
         },
       ],
     });
     createdOrders.push(order.id);
 
     await test("checkout prices a half topping and snapshots the choice", async () => {
-      assert.equal(order.subtotalCents, 1099 + 600 + 0 + 88 + 200);
+      assert.equal(order.totals.subtotalCents, 1099 + 600 + 0 + 88 + 200);
       const [line] = await db.select().from(orderItems).where(eq(orderItems.orderId, order.id));
       assert.deepEqual(line.modifiers, [
-        { modifierId: large.id, groupName: "Size", modifierName: 'Large 14"', priceDeltaCents: 600 },
-        { modifierId: handTossed.id, groupName: "Crust", modifierName: "Hand Tossed", priceDeltaCents: 0 },
-        { modifierId: pepMod.id, groupName: "Extra Toppings", modifierName: `${tag} Pepperoni`, priceDeltaCents: 88, placement: "left", portion: "regular" },
-        { modifierId: extraCheese.id, groupName: "Extra Toppings", modifierName: `${tag} Extra Cheese`, priceDeltaCents: 200, placement: "whole", portion: "regular" },
+        { kind: "option", modifierId: large.id, role: "size", groupName: "Size", modifierName: 'Large 14"', priceDeltaCents: 600 },
+        { kind: "option", modifierId: handTossed.id, role: "crust", groupName: "Crust", modifierName: "Hand Tossed", priceDeltaCents: 0 },
+        { kind: "placed", modifierId: pepMod.id, role: "topping", groupName: "Extra Toppings", modifierName: `${tag} Pepperoni`, priceDeltaCents: 88, placement: "left", amount: "regular" },
+        { kind: "placed", modifierId: extraCheese.id, role: "topping", groupName: "Extra Toppings", modifierName: `${tag} Extra Cheese`, priceDeltaCents: 200, placement: "whole", amount: "regular" },
       ]);
       assert.equal(line.costCents, null);
     });
 
-    await test("checkout refuses a half on a non-topping and extra without a price", async () => {
+    await test("checkout refuses a half on a non-topping; extra uses the menu's extra price or the multiplier", async () => {
       const base = { orderType: "pickup" as const, customerName: "X", customerPhone: "5550100000", tipCents: 0 };
       await assert.rejects(
-        createOrder({ ...base, lines: [{ itemId: cheesePizza.id, quantity: 1, modifiers: [{ id: large.id }, { id: handTossed.id, placement: "left" }] }] }),
-        new RegExp(`"Hand Tossed" on "${tag} Pizza" can't be split or portioned`),
+        createOrder({ ...base, lines: [{ itemId: cheesePizza.id, quantity: 1, notes: null, selections: [sel(large.id), sel(handTossed.id, "left")] }] }),
+        new RegExp(`Crust on "${tag} Pizza" cannot be split or changed in amount`),
       );
-      await assert.rejects(
-        createOrder({ ...base, lines: [{ itemId: cheesePizza.id, quantity: 1, modifiers: [{ id: large.id }, { id: handTossed.id }, { id: extraCheese.id, portion: "extra" }] }] }),
-        new RegExp(`Extra ${tag} Extra Cheese isn't offered on "${tag} Pizza"`),
-      );
-      const extra = await createOrder({ ...base, lines: [{ itemId: cheesePizza.id, quantity: 1, modifiers: [{ id: large.id }, { id: handTossed.id }, { id: pepMod.id, placement: "right", portion: "extra" }] }] });
+      const multiplied = await createOrder({ ...base, lines: [{ itemId: cheesePizza.id, quantity: 1, notes: null, selections: [sel(large.id), sel(handTossed.id), sel(extraCheese.id, "whole", "extra")] }] });
+      createdOrders.push(multiplied.id);
+      assert.equal(multiplied.totals.subtotalCents, 1099 + 600 + 400);
+      const extra = await createOrder({ ...base, lines: [{ itemId: cheesePizza.id, quantity: 1, notes: null, selections: [sel(large.id), sel(handTossed.id), sel(pepMod.id, "right", "extra")] }] });
       createdOrders.push(extra.id);
-      assert.equal(extra.subtotalCents, 1099 + 600 + 150);
+      assert.equal(extra.totals.subtotalCents, 1099 + 600 + 150);
     });
 
     await test("nothing moves before completion", async () => {
-      for (const to of ["confirmed", "preparing", "ready"] as const) {
-        assert.deepEqual(await transitionOrder({ orderId: order.id, to, actor }), { ok: true });
-      }
+      await moveOrder(order.id, "preparing", "ready");
       assert.deepEqual(await salesFor(order.id), []);
       assert.deepEqual(await lineCosts(order.id), [null]);
     });
@@ -217,7 +214,7 @@ async function main() {
         reason: "Order is already completed.",
       });
       const [{ rows }] = await db.batch(
-        await transitionStatements({ orderId: order.id, from: ["ready"], to: "completed", actor, now: new Date() }),
+        transitionStatements({ orderId: order.id, from: ["ready"], to: "completed", actor }),
       );
       assert.equal(rows.length, 0);
       assert.deepEqual(await salesFor(order.id), [[mozz, -340200], [pep, -42525]]);
@@ -232,7 +229,7 @@ async function main() {
 
     await test("completing again through the KDS crosses the threshold and 86's what uses pepperoni", async () => {
       await db.update(ingredients).set({ outAtMilli: 60_000 }).where(eq(ingredients.id, pep));
-      assert.deepEqual(await transitionOrder({ orderId: order.id, to: "ready", actor }), { ok: true });
+      await moveOrder(order.id, "ready");
       await applyKdsAction({ type: "handoff", orderId: order.id }, kdsOperator);
       assert.deepEqual(await netFor(order.id), [[mozz, -340200], [pep, -42525]]);
       assert.equal((await salesFor(order.id)).length, 6);
@@ -262,12 +259,11 @@ async function main() {
         customerName: "Inventory Test 2",
         customerPhone: "(555) 010-0001",
         tipCents: 0,
-        lines: [{ itemId: pepClassic.id, quantity: 1, modifiers: [{ id: large.id }, { id: handTossed.id }] }],
+        lines: [{ itemId: pepClassic.id, quantity: 1, notes: null, selections: [sel(large.id), sel(handTossed.id)] }],
       });
       createdOrders.push(second.id);
-      for (const to of ["confirmed", "preparing", "ready", "completed"] as const) {
-        assert.deepEqual(await transitionOrder({ orderId: second.id, to, actor }), { ok: true });
-      }
+      await moveOrder(second.id, "ready");
+      assert.deepEqual(await transitionOrder({ orderId: second.id, to: "completed", actor }), { ok: true });
       assert.deepEqual(await salesFor(second.id), [[pep, -56700]]);
       assert.equal((await onHand([pep])).get(pep), 775);
       assert.equal(await available(menuItems, pepClassic.id), true);

@@ -4,7 +4,7 @@ import { notFound } from "next/navigation";
 import { ArrowLeft } from "lucide-react";
 import { requireOperator } from "@/lib/auth";
 import { formatCents } from "@/lib/money";
-import { getSettings } from "@/lib/orders";
+import { getSettings } from "@/lib/settings-server";
 import { catalogNames, everUsed, getMenuCatalog, getPromotion } from "@/lib/promotion-admin";
 import { toDraft } from "@/lib/promotion-codec";
 import { promotionStatus } from "@/lib/promotion-engine";

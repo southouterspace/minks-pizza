@@ -4,6 +4,25 @@
  */
 import assert from "node:assert/strict";
 import { allDay, ticketLine, type KdsOrder } from "../src/lib/kds";
+import type { Amount, LineModifier, OptionRole, Placement, PlaceableRole } from "../src/lib/pricing";
+
+const option = (modifierId: number | null, role: OptionRole, groupName: string, modifierName: string, priceDeltaCents: number): LineModifier => ({
+  kind: "option",
+  modifierId,
+  role,
+  groupName,
+  modifierName,
+  priceDeltaCents,
+});
+const placed = (
+  modifierId: number | null,
+  role: PlaceableRole,
+  groupName: string,
+  modifierName: string,
+  priceDeltaCents: number,
+  placement: Placement,
+  amount: Amount,
+): LineModifier => ({ kind: "placed", modifierId, role, groupName, modifierName, priceDeltaCents, placement, amount });
 
 let passed = 0;
 function test(name: string, fn: () => void) {
@@ -12,23 +31,29 @@ function test(name: string, fn: () => void) {
   console.log(`PASS  ${name}`);
 }
 
-test("structured toppings group by placement with portions from the portion field", () => {
+test("placed toppings group by placement with their amount", () => {
   assert.deepEqual(
     ticketLine([
-      { modifierId: 1, groupName: "Size", modifierName: 'Large 14"', priceDeltaCents: 600 },
-      { modifierId: 5, groupName: "Crust", modifierName: "Thin Crust", priceDeltaCents: 0 },
-      { modifierId: 9, groupName: "Extra Toppings", modifierName: "Pepperoni", priceDeltaCents: 150, placement: "left", portion: "extra" },
-      { modifierId: 12, groupName: "Extra Toppings", modifierName: "Mushrooms", priceDeltaCents: 100, placement: "right", portion: "regular" },
-      { modifierId: 17, groupName: "Extra Toppings", modifierName: "Extra Cheese", priceDeltaCents: 250, placement: "whole", portion: "regular" },
-      { modifierId: 13, groupName: "Extra Toppings", modifierName: "Red Onions", priceDeltaCents: 100, placement: "right", portion: "light" },
-      { modifierId: 20, groupName: "Sauce", modifierName: "No sauce", priceDeltaCents: 0 },
+      option(1, "size", "Size", 'Large 14"', 600),
+      option(5, "crust", "Crust", "Thin Crust", 0),
+      placed(9, "topping", "Extra Toppings", "Pepperoni", 150, "left", "extra"),
+      placed(12, "topping", "Extra Toppings", "Mushrooms", 100, "right", "regular"),
+      placed(17, "topping", "Extra Toppings", "Extra Cheese", 250, "whole", "regular"),
+      placed(13, "topping", "Extra Toppings", "Red Onions", 100, "right", "light"),
+      placed(20, "sauce", "Sauce", "Marinara", 0, "whole", "none"),
     ]),
     {
       size: 'Large 14"',
       crust: "Thin Crust",
-      mods: [{ label: "No sauce", kind: "remove" }],
+      mods: [],
       toppings: [
-        { placement: "whole", mods: [{ label: "Extra Cheese", kind: "add" }] },
+        {
+          placement: "whole",
+          mods: [
+            { label: "Extra Cheese", kind: "add" },
+            { label: "No Marinara", kind: "remove" },
+          ],
+        },
         { placement: "left", mods: [{ label: "Extra Pepperoni", kind: "amount" }] },
         {
           placement: "right",
@@ -42,35 +67,35 @@ test("structured toppings group by placement with portions from the portion fiel
   );
 });
 
-test("a structured topping named like an amount is not mistaken for one", () => {
+test("a topping named like an amount is not mistaken for one", () => {
   assert.deepEqual(
-    ticketLine([
-      { modifierId: 17, groupName: "Extra Toppings", modifierName: "Extra Cheese", priceDeltaCents: 250, placement: "whole", portion: "regular" },
-    ]).toppings,
+    ticketLine([placed(17, "topping", "Extra Toppings", "Extra Cheese", 250, "whole", "regular")]).toppings,
     [{ placement: "whole", mods: [{ label: "Extra Cheese", kind: "add" }] }],
   );
 });
 
-test("legacy lines without modifierId render by name exactly as before", () => {
+test("lines migrated from name-only snapshots (null ids) render by role", () => {
   assert.deepEqual(
     ticketLine([
-      { groupName: "Size", modifierName: 'Medium 12"', priceDeltaCents: 300 },
-      { groupName: "Crust", modifierName: "Hand Tossed", priceDeltaCents: 0 },
-      { groupName: "Extra Toppings", modifierName: "Pepperoni", priceDeltaCents: 150 },
-      { groupName: "Extra Toppings", modifierName: "Extra Cheese", priceDeltaCents: 250 },
-      { groupName: "Extra Toppings", modifierName: "No onions", priceDeltaCents: 0 },
-      { groupName: "Dressing", modifierName: "Ranch", priceDeltaCents: 0 },
+      option(null, "size", "Size", 'Medium 12"', 300),
+      option(null, "crust", "Crust", "Hand Tossed", 0),
+      placed(null, "topping", "Extra Toppings", "Pepperoni", 150, "whole", "regular"),
+      placed(null, "topping", "Extra Toppings", "Extra Cheese", 250, "whole", "regular"),
+      option(null, "option", "Dressing", "Ranch", 0),
     ]),
     {
       size: 'Medium 12"',
       crust: "Hand Tossed",
-      mods: [
-        { label: "Pepperoni", kind: "add" },
-        { label: "Extra Cheese", kind: "amount" },
-        { label: "No onions", kind: "remove" },
-        { label: "Dressing: Ranch", kind: "option" },
+      mods: [{ label: "Dressing: Ranch", kind: "option" }],
+      toppings: [
+        {
+          placement: "whole",
+          mods: [
+            { label: "Pepperoni", kind: "add" },
+            { label: "Extra Cheese", kind: "add" },
+          ],
+        },
       ],
-      toppings: [],
     },
   );
 });
@@ -84,19 +109,19 @@ test("all-day counts still group by item and size for structured lines", () => {
     notes: null,
     ovenAt: null,
     doneAt: null,
-    modifiers: [
-      { modifierId: 1, groupName: "Size", modifierName: 'Large 14"', priceDeltaCents: 600 },
-      { modifierId: 9, groupName: "Extra Toppings", modifierName: "Pepperoni", priceDeltaCents: 150, placement, portion: "regular" as const },
-    ],
+    voidedAt: null,
+    modifiers: [option(1, "size", "Size", 'Large 14"', 600), placed(9, "topping", "Extra Toppings", "Pepperoni", 150, placement, "regular")],
   });
   const order: KdsOrder = {
     id: "o1",
     number: 1001,
     status: "new",
-    type: "pickup",
+    source: "web",
+    fulfillment: { kind: "pickup" },
+    fireAt: null,
+    promisedAt: null,
     customerName: "A",
     customerPhone: "",
-    address: null,
     notes: null,
     placedAt: "2026-10-03T12:00:00.000Z",
     readyAt: null,

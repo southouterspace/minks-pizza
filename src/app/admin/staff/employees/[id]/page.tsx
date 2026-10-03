@@ -18,6 +18,7 @@ const NOTICES: Record<string, { text: string; tone: "success" | "warning" }> = {
   restored: { text: "Restored. They can use the time clock again.", tone: "success" },
   "pin-removed": { text: "PIN removed. They can't use the time clock until they get a new one.", tone: "success" },
   "on-clock": { text: "They're on the clock. Clock them out before archiving.", tone: "warning" },
+  "last-manager": { text: "They're the only POS manager. Give someone else manager access before archiving.", tone: "warning" },
 };
 
 export default async function EmployeePage({ params, searchParams }: PageProps<"/admin/staff/employees/[id]">) {

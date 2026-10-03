@@ -6,6 +6,18 @@
  */
 import { z } from "zod";
 
+/** Mink's is in Texas. */
+export const DEFAULT_TIMEZONE = "America/Chicago";
+
+export function isTimeZone(tz: string): boolean {
+  try {
+    new Intl.DateTimeFormat("en-US", { timeZone: tz });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 export type LocalDate = string;
 
 export const localDateSchema = z
@@ -134,9 +146,37 @@ export function minutesOfDay(instant: Date, tz: string): number {
 }
 
 /** "HH:MM" on the store's wall clock, for time inputs. */
-export function hhmmOf(instant: Date, tz: string): string {
-  const w = wallClock(instant, tz);
+export function hhmmOf(instant: Date | string, tz: string): string {
+  const w = wallClock(new Date(instant), tz);
   return `${pad(w.hour)}:${pad(w.minute)}`;
+}
+
+/** The next instant, from `now` on, when the store's clock reads `hhmm`: today, or tomorrow once it has passed. */
+export function nextStoreTime(hhmm: string, now: Date, tz: string): Date {
+  const today = localDateOf(now, tz);
+  const at = zonedInstant(today, hhmm, tz);
+  return at.getTime() < now.getTime() ? zonedInstant(addDays(today, 1), hhmm, tz) : at;
+}
+
+/** "2026-10-03 14:45" in the store's zone: sortable, for CSV. */
+export function formatSortable(instant: Date, tz: string): string {
+  return `${localDateOf(instant, tz)} ${hhmmOf(instant, tz)}`;
+}
+
+/** "2:45:07 PM" in the store's zone: for "as of" stamps that change every poll. */
+export function formatClockSeconds(instant: Date | string, tz: string): string {
+  return new Date(instant).toLocaleTimeString("en-US", { timeZone: tz, hour: "numeric", minute: "2-digit", second: "2-digit" });
+}
+
+/** "Saturday, October 3, 2026" for a store date. */
+export function formatLongDay(date: LocalDate): string {
+  return toUtcDate(date).toLocaleDateString("en-US", {
+    timeZone: "UTC",
+    weekday: "long",
+    month: "long",
+    day: "numeric",
+    year: "numeric",
+  });
 }
 
 /** A `datetime-local` value ("2026-10-05T16:00") on the store's wall clock. */
@@ -165,15 +205,15 @@ export function formatHhmm(hhmm: string, { compact = false } = {}): string {
 
 const clockFormatters = new Map<string, Intl.DateTimeFormat>();
 
-/** "4:05 PM" on the store's wall clock. */
-export function formatClock(instant: Date, tz: string): string {
+/** "4:05 PM" on the store's wall clock; an ISO string is what the POS and KDS hold. */
+export function formatClock(instant: Date | string, tz: string): string {
   let f = clockFormatters.get(tz);
   if (!f) {
     f = new Intl.DateTimeFormat("en-US", { timeZone: tz, hour: "numeric", minute: "2-digit" });
     clockFormatters.set(tz, f);
   }
   // Newer ICU puts a narrow no-break space before AM/PM.
-  return f.format(instant).replace(/ /g, " ");
+  return f.format(new Date(instant)).replace(/ /g, " ");
 }
 
 const dayFormatter = new Intl.DateTimeFormat("en-US", {

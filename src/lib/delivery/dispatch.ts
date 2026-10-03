@@ -2,7 +2,7 @@ import "server-only";
 import { and, eq, type SQL } from "drizzle-orm";
 import { z } from "zod";
 import { courierDeliveries, db, integrationEvents, orders } from "@/db";
-import { getSettings } from "@/lib/orders";
+import { getSettings } from "@/lib/settings-server";
 import { courierProvider } from "./providers";
 import {
   CourierError,

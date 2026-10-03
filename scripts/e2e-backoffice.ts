@@ -1,0 +1,385 @@
+/**
+ * Back-office e2e against a running dev server and its database: staff
+ * management, POS settings, a shift rung through the order seam, the Z
+ * report and its CSV exports, and the inbox's Collect link and activity log.
+ *
+ * Run: E2E_BASE_URL=http://localhost:3001 npx tsx --env-file=.env.local scripts/e2e-backoffice.ts
+ * Mutates orders, staff and settings, and closes any open shift: point
+ * MINKS_DATABASE_URL at a test branch, not production. Expects the seeded
+ * menu, demo staff (manager PIN 1234, cashier PIN 5678) and 8.25% tax.
+ */
+import { randomUUID } from "node:crypto";
+import bcrypt from "bcryptjs";
+import { eq } from "drizzle-orm";
+import type { Page } from "playwright";
+import { db, employees, operators, pinAttempts, storeSettings } from "../src/db";
+import { submitOrder } from "../src/lib/orders-server/submit";
+import { mutateOrder } from "../src/lib/orders-server/mutate";
+import { getStoreBasics } from "../src/lib/settings-server";
+import { getPosMenu } from "../src/lib/menu-server";
+import { closeShift, getOpenShift, openShift, recordDrawerEvent } from "../src/lib/drawer-server";
+import type { OrderMutation, OrderView, SubmitOrderRequest } from "../src/lib/orders";
+import { checkPin, pinDigest } from "../src/lib/pin";
+import { localDateOf } from "../src/lib/zoned";
+import type { StaffContext } from "../src/lib/staff";
+import { BASE, check, launchBrowser, run, SHOT_DIR, signIn } from "./e2e/harness";
+
+const BACK_OFFICE = { email: "backoffice@minks.example", password: "pizza-test-1234", name: "Back Office" };
+
+/** RFC 4180: quoted cells may hold commas, quotes and newlines. */
+function parseCsv(text: string): string[][] {
+  const rows: string[][] = [];
+  let row: string[] = [];
+  let cell = "";
+  let quoted = false;
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i];
+    if (quoted) {
+      if (ch === '"' && text[i + 1] === '"') {
+        cell += '"';
+        i++;
+      } else if (ch === '"') quoted = false;
+      else cell += ch;
+    } else if (ch === '"') quoted = true;
+    else if (ch === ",") {
+      row.push(cell);
+      cell = "";
+    } else if (ch === "\n") {
+      rows.push([...row, cell.replace(/\r$/, "")]);
+      row = [];
+      cell = "";
+    } else cell += ch;
+  }
+  return rows;
+}
+
+/** Its own operator account, so the run never depends on another script's password. */
+async function ensureOperator() {
+  await db
+    .insert(operators)
+    .values({ email: BACK_OFFICE.email, name: BACK_OFFICE.name, passwordHash: await bcrypt.hash(BACK_OFFICE.password, 10) })
+    .onConflictDoNothing({ target: operators.email });
+  const [operator] = await db.select().from(operators).where(eq(operators.email, BACK_OFFICE.email));
+  return operator;
+}
+
+async function settingsFlow(page: Page) {
+  const [before] = await db.select().from(storeSettings).where(eq(storeSettings.id, 1));
+  try {
+    await page.goto(`${BASE}/admin/settings`, { waitUntil: "networkidle" });
+    const lockInput = page.locator('input[name="posLockSeconds"]');
+    check("the auto-lock input carries the server's bounds", [await lockInput.getAttribute("min"), await lockInput.getAttribute("max")], ["15", "3600"]);
+    await page.getByText("Higher half", { exact: true }).click();
+    await page.fill('input[name="extraToppingMultiplier"]', "1.5");
+    await page.fill('input[name="discountApproval"]', "7.50");
+    await page.fill('input[name="ovenCapacityPies"]', "8");
+    await page.fill('input[name="makeMinutes"]', "4");
+    await page.fill('input[name="posLockSeconds"]', "90");
+    await page.selectOption('select[name="timezone"]', "America/Denver");
+    await page.click('button:has-text("Save settings")');
+    await page.waitForURL(/saved=1/, { timeout: 15_000 });
+    const [saved] = await db.select().from(storeSettings).where(eq(storeSettings.id, 1));
+    check(
+      "POS settings save through the form",
+      [saved.halfToppingRule, saved.extraToppingBps, saved.discountApprovalCents, saved.ovenCapacityPies, saved.makeMinutes, saved.posLockSeconds, saved.timezone],
+      ["highest", 15_000, 750, 8, 4, 90, "America/Denver"],
+    );
+    await page.locator("text=Point of sale").scrollIntoViewIfNeeded();
+    await page.screenshot({ path: `${SHOT_DIR}/bo-settings.png` });
+
+    // The browser enforces min/max; skip it to prove the server does too.
+    await page.$eval("form:has(button:has-text('Save settings'))", (f) => f.setAttribute("novalidate", ""));
+    await page.fill('input[name="posLockSeconds"]', "5");
+    await page.click('button:has-text("Save settings")');
+    await page.waitForURL(/error=/, { timeout: 15_000 });
+    check("an out-of-range auto-lock is refused", await page.locator("main [role=alert]").innerText(), "Not saved: Auto-lock is at least 15 seconds.");
+    const [after] = await db.select().from(storeSettings).where(eq(storeSettings.id, 1));
+    check("and nothing was written", after.posLockSeconds, 90);
+  } finally {
+    const { halfToppingRule, extraToppingBps, discountApprovalCents, ovenCapacityPies, makeMinutes, posLockSeconds, timezone } = before;
+    await db
+      .update(storeSettings)
+      .set({ halfToppingRule, extraToppingBps, discountApprovalCents, ovenCapacityPies, makeMinutes, posLockSeconds, timezone })
+      .where(eq(storeSettings.id, 1));
+  }
+}
+
+async function freePin(): Promise<string> {
+  for (;;) {
+    const pin = String(1000 + Math.floor(Math.random() * 9000));
+    const [held] = await db.select({ id: employees.id }).from(employees).where(eq(employees.pinDigest, pinDigest(pin)));
+    if (!held) return pin;
+  }
+}
+
+async function staffFlow(page: Page, operatorId: number) {
+  const name = `Riley Test ${Date.now() % 100_000}`;
+  const [pin, newPin] = [await freePin(), await freePin()];
+  const add = async (who: string, access: "cashier" | "manager", p: string) => {
+    await page.goto(`${BASE}/admin/staff/employees/new`, { waitUntil: "networkidle" });
+    await page.fill('input[name="name"]', who);
+    await page.getByRole("checkbox", { name: "Cashier" }).click();
+    await page.fill('input[name="rate-cashier"]', "15.00");
+    await page.selectOption('select[name="posAccess"]', access);
+    await page.fill('input[name="pin"]', p);
+    await page.getByTestId("employee-save").click();
+  };
+
+  await add(name, "cashier", pin);
+  await page.getByTestId("employee-created").waitFor({ timeout: 15_000 });
+  const [created] = await db.select().from(employees).where(eq(employees.name, name));
+  check("new employee saved with cashier POS access and a cashier job", [created.posAccess, created.isActive], ["cashier", true]);
+  check("only a 64-hex-digit digest of the PIN is stored", [/^[0-9a-f]{64}$/.test(created.pinDigest ?? ""), (created.pinDigest ?? "").includes(pin)], [true, false]);
+  check("the new PIN unlocks the POS as the new cashier", await checkPin(pin, operatorId), { ok: true, actor: { employeeId: created.id, name, access: "cashier" } });
+
+  await add("Duplicate Dana", "manager", pin);
+  check("a PIN another employee holds is refused", await page.locator("[data-slot=field-error]").innerText(), "Someone else already has that PIN. Pick another.");
+  check("no duplicate was written", (await db.select().from(employees).where(eq(employees.name, "Duplicate Dana"))).length, 0);
+  await page.screenshot({ path: `${SHOT_DIR}/bo-team.png`, fullPage: true });
+
+  await page.goto(`${BASE}/admin/staff/employees/${created.id}`, { waitUntil: "networkidle" });
+  await page.fill('input[name="pin"]', "1234");
+  await page.getByTestId("employee-save").click();
+  check("changing to the demo manager's PIN is refused", await page.locator("[data-slot=field-error]").innerText(), "Someone else already has that PIN. Pick another.");
+  await page.fill('input[name="pin"]', newPin);
+  await page.getByTestId("employee-save").click();
+  await page.getByTestId("pin-notice").waitFor({ timeout: 15_000 });
+  check("after a new PIN is saved it unlocks as the same employee", await checkPin(newPin, operatorId), { ok: true, actor: { employeeId: created.id, name, access: "cashier" } });
+  check("and the old PIN no longer does", await checkPin(pin, operatorId), { ok: false, reason: "bad_pin" });
+  await db.delete(pinAttempts).where(eq(pinAttempts.operatorId, operatorId));
+
+  await page.goto(`${BASE}/admin/staff/employees/${created.id}`, { waitUntil: "networkidle" });
+  await page.selectOption('select[name="posAccess"]', "none");
+  await page.getByTestId("employee-save").click();
+  await page.getByText("Saved.").waitFor({ timeout: 15_000 });
+  check("taking POS access away keeps the PIN for the clock but not the terminal", await checkPin(newPin, operatorId), { ok: false, reason: "bad_pin" });
+  await db.delete(pinAttempts).where(eq(pinAttempts.operatorId, operatorId));
+
+  await page.getByRole("button", { name: "Archive" }).click();
+  await page.getByRole("button", { name: "Confirm archive" }).click();
+  await page.waitForURL(/notice=archived/, { timeout: 15_000 });
+  const [gone] = await db.select().from(employees).where(eq(employees.id, created.id));
+  check("archiving keeps the row but turns the employee off", gone.isActive, false);
+  await db.delete(employees).where(eq(employees.id, created.id));
+
+  const [morgan] = await db.select().from(employees).where(eq(employees.name, "Morgan Manager"));
+  try {
+    await page.goto(`${BASE}/admin/staff/employees/${morgan.id}`, { waitUntil: "networkidle" });
+    await page.getByRole("button", { name: "Archive" }).click();
+    await page.getByRole("button", { name: "Confirm archive" }).click();
+    await page.waitForURL(/notice=last-manager/, { timeout: 15_000 });
+    const [m] = await db.select().from(employees).where(eq(employees.id, morgan.id));
+    check("the last active POS manager can't be archived", m.isActive, true);
+  } finally {
+    await db.update(employees).set({ isActive: true }).where(eq(employees.id, morgan.id));
+  }
+}
+
+/**
+ * Rings a shift through the order seam (the POS screens are built
+ * elsewhere): two walk-ins paid cash, a phone order paid by card with a tip,
+ * a manager-approved void, an unpaid phone order, a paid-out and a no-sale.
+ * Medium Cheese is $13.99 and garlic knots $5.99 at 8.25% tax.
+ */
+async function ringShift() {
+  const [operator] = await db.select().from(operators).where(eq(operators.email, BACK_OFFICE.email));
+  const staff = await db.select().from(employees);
+  const as = (name: string): StaffContext => {
+    const e = staff.find((r) => r.name === name && r.isActive);
+    if (!e) throw new Error(`missing demo employee ${name}; run npm run db:seed`);
+    return { actor: { employeeId: e.id, name: e.name, access: e.posAccess }, operatorId: operator.id };
+  };
+  const cashier = as("Casey Cashier");
+  const manager = as("Morgan Manager");
+  await db.delete(pinAttempts).where(eq(pinAttempts.operatorId, operator.id));
+
+  const stale = await getOpenShift();
+  if (stale) {
+    await closeShift({ shiftId: stale.id, countedCashCents: 0, cardBatchCents: 0, declaredCashTipsCents: 0, notes: "closed by e2e" }, manager);
+  }
+  const shiftId = randomUUID();
+  const opened = await openShift({ shiftId, startingBankCents: 10_000 }, cashier);
+  if (!opened.ok) throw new Error(JSON.stringify(opened));
+
+  const items = (await getPosMenu()).categories.flatMap((c) => c.items);
+  const item = (name: string) => items.find((i) => i.name === name)!;
+  const cheese = item("Cheese Pizza");
+  const mod = (name: string) => cheese.groups.flatMap((g) => g.modifiers).find((m) => m.name === name)!.id;
+  const pie = () => ({
+    lineId: randomUUID(),
+    itemId: cheese.id,
+    quantity: 1,
+    notes: null,
+    selections: [mod('Medium 12"'), mod("Hand Tossed")].map((modifierId) => ({ modifierId, placement: "whole" as const, amount: "regular" as const })),
+  });
+  const knots = () => ({ lineId: randomUUID(), itemId: item("Garlic Knots (6)").id, quantity: 1, notes: null, selections: [] });
+  const order = (source: "walk_in" | "phone", lines: SubmitOrderRequest["lines"], name: string): SubmitOrderRequest => ({
+    orderId: randomUUID(),
+    source,
+    fulfillment: { kind: "pickup" },
+    customer: source === "phone" ? { phone: "5550104455", name, email: null, saveAddress: false } : null,
+    notes: null,
+    fire: { kind: "now" },
+    promisedAt: null,
+    tipCents: 0,
+    lines,
+    tenders: [],
+  });
+  const ok = (r: Awaited<ReturnType<typeof submitOrder>>): OrderView => {
+    if (!r.ok) throw new Error(JSON.stringify(r));
+    return r.order;
+  };
+  const cash = (amountCents: number, tenderedCents: number): OrderMutation => ({
+    kind: "tender",
+    tender: { id: randomUUID(), method: "cash", amountCents, tenderedCents, tipCents: 0, last4: null },
+  });
+
+  const a = ok(await submitOrder(order("walk_in", [pie()], "Walk-in"), { kind: "pos", staff: cashier }));
+  ok(await mutateOrder({ orderId: a.id, mutation: cash(1514, 2000) }, cashier));
+
+  const b = ok(await submitOrder(order("phone", [pie(), knots()], "Pat Phone"), { kind: "pos", staff: cashier }));
+  ok(
+    await mutateOrder(
+      { orderId: b.id, mutation: { kind: "tender", tender: { id: randomUUID(), method: "card_external", amountCents: 2163, tenderedCents: null, tipCents: 300, last4: "4242" } } },
+      cashier,
+    ),
+  );
+
+  const knotLine = knots();
+  const c = ok(await submitOrder(order("walk_in", [pie(), knotLine], "Walk-in"), { kind: "pos", staff: cashier }));
+  const voidKnots: OrderMutation = { kind: "void_line", lineId: knotLine.lineId, reason: "customer changed mind" };
+  check("voiding a fired line asks for a manager", await mutateOrder({ orderId: c.id, mutation: voidKnots }, cashier), { ok: false, reason: "needs_manager" });
+  ok(await mutateOrder({ orderId: c.id, mutation: voidKnots, approval: { managerPin: "1234" } }, cashier));
+  ok(await mutateOrder({ orderId: c.id, mutation: cash(1514, 1514) }, cashier));
+
+  const d = ok(await submitOrder(order("phone", [pie()], "Una Unpaid"), { kind: "pos", staff: cashier }));
+
+  await recordDrawerEvent({ id: randomUUID(), kind: "paid_out", cents: 300, reason: "bag of ice", approval: { managerPin: "1234" } }, cashier);
+  await recordDrawerEvent({ id: randomUUID(), kind: "no_sale", cents: 0, reason: "change for a twenty", approval: { managerPin: "1234" } }, cashier);
+
+  const closed = await closeShift(
+    { shiftId, countedCashCents: 12_700, cardBatchCents: 2463, declaredCashTipsCents: 1200, notes: null, approval: { managerPin: "1234" } },
+    cashier,
+  );
+  if (!closed.ok) throw new Error(JSON.stringify(closed));
+  return { shiftId, paidCash: a, paidCard: b, voided: c, unpaid: d };
+}
+
+async function reportsFlow(page: Page, shift: Awaited<ReturnType<typeof ringShift>>) {
+  const { timezone } = await getStoreBasics();
+  const today = localDateOf(new Date(), timezone);
+
+  await page.goto(`${BASE}/admin/reports`, { waitUntil: "networkidle" });
+  const row = page.locator(`[data-testid="shift-row"][href="/admin/reports/shift/${shift.shiftId}"]`);
+  check("the closed shift is listed with its over/short", [await row.locator("[data-testid=shift-cash]").innerText(), await row.locator("[data-testid=shift-card]").innerText()], ["Short $0.28", "Even"]);
+  check("and who opened and closed it", await row.locator("[data-testid=shift-people]").innerText(), "Opened by Casey Cashier · closed by Morgan Manager");
+  await page.screenshot({ path: `${SHOT_DIR}/bo-reports.png`, fullPage: true });
+
+  await row.click();
+  await page.waitForURL(`**/admin/reports/shift/${shift.shiftId}`);
+  const doc = page.locator('[data-testid="report-document"]');
+  const text = await doc.innerText();
+  const has = (label: string, line: string) => check(label, text.includes(line), true);
+  has("Z report title", "Z report");
+  has("walk-in sales", "Walk-in (2)\n$27.98");
+  has("phone sales", "Phone (2)\n$33.97");
+  has("net sales", "Net sales (4 orders)\n$61.95");
+  has("tax", "Tax\n$5.10");
+  has("cash payments", "Payments (2)\n$30.28");
+  has("card tips", "Tips\n$3.00");
+  has("net card incl. tips", "Net card incl. tips\n$24.63");
+  has("paid out in the drawer math", "Paid out\n−$3.00");
+  has("expected cash", "Expected cash\n$127.28");
+  check("cash over/short", await doc.locator("[data-testid=cash-over-short]").innerText(), "Cash over/short\nShort $0.28");
+  check("card total vs the terminal batch", await doc.locator("[data-testid=card-over-short]").innerText(), "Card over/short\nEven");
+  has("cash tips declared", "Cash tips declared\n$12.00");
+  const voids = await doc.locator("[data-testid=audit-void]").innerText();
+  check("void shows the line, who, the approver and the reason", voids.includes(`#${shift.voided.number} 1 × Garlic Knots (6)`) && voids.includes("Casey Cashier, approved by Morgan Manager") && voids.includes("“customer changed mind”"), true);
+  const drawer = await doc.locator("[data-testid=audit-no_sale]").innerText();
+  check("no-sale lists who opened it and why", drawer.includes("Casey Cashier, approved by Morgan Manager") && drawer.includes("“change for a twenty”"), true);
+  has("the unpaid order is listed", `#${shift.unpaid.number} Una Unpaid · New\n$15.14 due`);
+  await page.screenshot({ path: `${SHOT_DIR}/bo-zreport-letter.png`, fullPage: true });
+
+  await page.click('a:has-text("80mm receipt")');
+  await page.waitForURL(/paper=receipt/);
+  await page.emulateMedia({ media: "print" });
+  check("receipt layout prints at 80mm (302px at 96 dpi)", Math.round((await doc.boundingBox())!.width), 302);
+  check("print hides the admin sidebar", await page.locator("aside").isVisible(), false);
+  await page.screenshot({ path: `${SHOT_DIR}/bo-zreport-80mm-print.png`, fullPage: true });
+  await page.emulateMedia({ media: "screen" });
+
+  const lines = parseCsv(await (await page.request.get(`${BASE}/api/admin/reports/lines?shift=${shift.shiftId}`)).text());
+  check(
+    "lines CSV header",
+    lines[0],
+    ["order_number", "placed_at_local", "source", "order_type", "status", "customer", "item", "quantity", "unit_price", "line_total", "modifiers", "notes", "voided_at_local", "void_reason", "voided_by", "void_approved_by"],
+  );
+  const knotsRow = lines.find((l) => l[0] === String(shift.voided.number) && l[6] === "Garlic Knots (6)")!;
+  check("lines CSV: the voided knots with price, reason, who and approver", [knotsRow[8], knotsRow[9], ...knotsRow.slice(-3)], ["5.99", "5.99", "customer changed mind", "Casey Cashier", "Morgan Manager"]);
+  check("lines CSV: placed time is store-local and sortable", /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}$/.test(knotsRow[1]), true);
+  check("lines CSV has every line of the shift's orders", lines.length - 1, 6);
+  const tenderCsv = await page.request.get(`${BASE}/api/admin/reports/tenders?shift=${shift.shiftId}`);
+  check("tenders CSV downloads as a file", tenderCsv.headers()["content-disposition"]?.startsWith('attachment; filename="minks-tenders-shift-'), true);
+  check(
+    "tenders CSV: order, direction, method, amount, tip, tendered, change, last4, employee",
+    parseCsv(await tenderCsv.text()).slice(1).map((r) => r.slice(1, 10)),
+    [
+      [String(shift.paidCash.number), "payment", "cash", "15.14", "0", "20", "4.86", "", "Casey Cashier"],
+      [String(shift.paidCard.number), "payment", "card_external", "21.63", "3", "", "", "4242", "Casey Cashier"],
+      [String(shift.voided.number), "payment", "cash", "15.14", "0", "15.14", "0", "", "Casey Cashier"],
+    ],
+  );
+  const dayCsv = await page.request.get(`${BASE}/api/admin/reports/tenders?date=${today}`);
+  check("day tenders CSV includes the shift's tenders", (await dayCsv.text()).includes("4242"), true);
+  check("CSV needs an operator session", (await fetch(`${BASE}/api/admin/reports/lines?date=${today}`)).status, 401);
+
+  await page.goto(`${BASE}/admin/reports/day/${today}`, { waitUntil: "networkidle" });
+  const day = await doc.innerText();
+  check("today's day report includes the shift's unpaid order", [day.includes("Day report"), day.includes(`#${shift.unpaid.number} Una Unpaid · New\n$15.14 due`)], [true, true]);
+  await page.screenshot({ path: `${SHOT_DIR}/bo-day-report.png`, fullPage: true });
+}
+
+async function inboxFlow(page: Page, shift: Awaited<ReturnType<typeof ringShift>>) {
+  await page.goto(`${BASE}/admin`, { waitUntil: "networkidle" });
+  const unpaid = page.locator(`[data-testid="board-order-${shift.unpaid.number}"]`);
+  const collect = unpaid.getByRole("link", { name: /Collect/ });
+  check("an unpaid order links to the POS to collect", [await collect.innerText(), await collect.getAttribute("href")], ["Collect $15.14 at POS", `/pos?order=${shift.unpaid.id}`]);
+  const voided = page.locator(`[data-testid="board-order-${shift.voided.number}"]`);
+  check("a paid order has no Collect link", await voided.getByRole("link", { name: /Collect/ }).count(), 0);
+  await page.goto(`${BASE}/admin/orders/${shift.voided.id}`, { waitUntil: "networkidle" });
+  const activity = await page.locator('[data-testid="timeline"] li').evaluateAll((els) =>
+    els.map((li) => {
+      const [text, meta] = [...li.querySelectorAll("p")].map((p) => p.textContent ?? "");
+      const who = (meta ?? "").replace(/(^| · )[A-Z][a-z]{2} \d{1,2}, \d{1,2}:\d{2} [AP]M$/, "");
+      return who ? `${text} · ${who}` : text;
+    }),
+  );
+  const wanted = [
+    "Placed (Walk-in) · Casey Cashier",
+    "Sent to kitchen: 1 × Cheese Pizza, 1 × Garlic Knots (6)",
+    "Voided 1 × Garlic Knots (6) (customer changed mind) · Casey Cashier · approved by Morgan Manager",
+    "Paid 15.14 cash · Casey Cashier",
+  ];
+  let cursor = -1;
+  check(
+    "the detail timeline shows placed, sent, the approved void and the payment, in order",
+    wanted.every((w) => (cursor = activity.indexOf(w, cursor + 1)) >= 0) ? wanted : activity,
+    wanted,
+  );
+  await page.goto(`${BASE}/admin`, { waitUntil: "networkidle" });
+  await voided.scrollIntoViewIfNeeded();
+  await page.screenshot({ path: `${SHOT_DIR}/bo-inbox.png` });
+}
+
+run(async () => {
+  const operator = await ensureOperator();
+  const browser = await launchBrowser();
+  const page = await browser.newPage({ viewport: { width: 1280, height: 900 } });
+  await signIn(page, BACK_OFFICE);
+  await staffFlow(page, operator.id);
+  await settingsFlow(page);
+  const shift = await ringShift();
+  await reportsFlow(page, shift);
+  await inboxFlow(page, shift);
+  await browser.close();
+});

@@ -6,16 +6,10 @@ import { addOrderNoteAction, recordPaymentAction } from "@/app/admin/actions";
 import { requireOperator } from "@/lib/auth";
 import { courierProviders } from "@/lib/delivery/providers";
 import { formatCents } from "@/lib/money";
-import {
-  canComp,
-  canTransition,
-  isCooking,
-  isLate,
-  NEXT_ACTION,
-  PAYMENT_METHOD_LABEL,
-  PAYMENT_METHODS,
-} from "@/lib/order-workflow";
-import { getOrderDetail, getStoreTimezone, type OrderDetail } from "@/lib/order-queries";
+import { canComp, canTransition, isCooking, isLate, NEXT_ACTION } from "@/lib/order-workflow";
+import { orderHistory, paymentState, SOURCE_LABEL, TENDER_METHOD_LABEL, TENDER_METHODS } from "@/lib/orders";
+import { getOrderView } from "@/lib/orders-server/views";
+import { getOrderDetail, getStoreTimezone } from "@/lib/order-queries";
 import { compPresets } from "@/lib/promotion-admin";
 import type { DiscountSource } from "@/lib/promotion-schema";
 import {
@@ -43,7 +37,7 @@ import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Separator } from "@/components/ui/separator";
 import { Textarea } from "@/components/ui/textarea";
-import { describeChoice } from "@/lib/toppings";
+import { describeChoice } from "@/lib/pricing";
 
 export const dynamic = "force-dynamic";
 
@@ -55,20 +49,13 @@ const DISCOUNT_SOURCE_LABEL: Record<DiscountSource, string> = {
   loyalty: "Loyalty reward",
 };
 
-const SOURCE_LABEL: Record<OrderDetail["source"], string> = {
-  web: "Web",
-  doordash: "DoorDash",
-  ubereats: "Uber Eats",
-  grubhub: "Grubhub",
-};
-
 export default async function OrderDetailPage({ params }: PageProps<"/admin/orders/[id]">) {
   await requireOperator();
   const { id } = await params;
   if (!/^[0-9a-f-]{36}$/i.test(id)) notFound();
 
-  const [order, timeZone, presets] = await Promise.all([getOrderDetail(id), getStoreTimezone(), compPresets()]);
-  if (!order) notFound();
+  const [order, view, timeZone, presets] = await Promise.all([getOrderDetail(id), getOrderView(id), getStoreTimezone(), compPresets()]);
+  if (!order || !view) notFound();
 
   const now = new Date();
   const late = isLate(order.promisedAt, order.status, now);
@@ -97,7 +84,7 @@ export default async function OrderDetailPage({ params }: PageProps<"/admin/orde
               <Badge variant="outline" className="text-muted-foreground!">
                 {order.orderType === "delivery" ? "Delivery" : "Pickup"}
               </Badge>
-              <PaymentBadge status={order.paymentStatus} method={order.paymentMethod} />
+              <PaymentBadge order={order} />
               {late ? <LateBadge /> : null}
               {order.source !== "web" ? (
                 <Badge variant="outline">
@@ -154,7 +141,7 @@ export default async function OrderDetailPage({ params }: PageProps<"/admin/orde
                       </div>
                       {line.modifiers.length > 0 ? (
                         <p className="mt-0.5 text-xs text-muted-foreground">
-                          {line.modifiers.map((m) => `${m.groupName}: ${describeChoice(m.modifierName, m)}`).join(" · ")}
+                          {line.modifiers.map((m) => `${m.groupName}: ${describeChoice(m)}`).join(" · ")}
                         </p>
                       ) : null}
                       {line.notes ? (
@@ -174,7 +161,7 @@ export default async function OrderDetailPage({ params }: PageProps<"/admin/orde
               </CardContent>
             </Card>
 
-            <OrderTimeline order={order} timeZone={timeZone} />
+            <OrderTimeline entries={orderHistory(view)} timeZone={timeZone} />
           </div>
 
           <div className="space-y-4 max-lg:order-first">
@@ -251,11 +238,11 @@ export default async function OrderDetailPage({ params }: PageProps<"/admin/orde
                   </div>
                 ) : null}
 
-                {order.paymentStatus === "pending" ? (
+                {paymentState(order) !== "paid" && paymentState(order) !== "refunded" ? (
                   <div className="space-y-2">
                     <p className="text-sm font-medium">Record payment</p>
                     <div className="flex flex-wrap gap-1.5">
-                      {PAYMENT_METHODS.map((method) => (
+                      {TENDER_METHODS.filter((m) => m !== "marketplace").map((method) => (
                         <ActionForm key={method} action={recordPaymentAction} orderId={order.id}>
                           <input type="hidden" name="method" value={method} />
                           <SubmitButton
@@ -263,7 +250,7 @@ export default async function OrderDetailPage({ params }: PageProps<"/admin/orde
                             size="sm"
                             data-testid={`pay-${method}`}
                           >
-                            {PAYMENT_METHOD_LABEL[method]}
+                            {TENDER_METHOD_LABEL[method]}
                           </SubmitButton>
                         </ActionForm>
                       ))}

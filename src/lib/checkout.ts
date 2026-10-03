@@ -1,8 +1,10 @@
 /**
- * The checkout: pricing, promotions and the loyalty program in one quote, and
- * placing an order from it. The live preview and the order insert both come
- * through quoteCheckout, so what the customer sees is what is charged.
+ * The storefront checkout: pricing, promotions and the loyalty program in one
+ * quote, and placing an order from it through the shared order write path.
+ * The live preview and the order insert both come through quoteCheckout, so
+ * what the customer sees is what is charged.
  */
+import { randomUUID } from "node:crypto";
 import { sql } from "drizzle-orm";
 import { orders } from "@/db";
 import {
@@ -27,7 +29,9 @@ import {
   type LoyaltyMember,
   type LoyaltyReward,
 } from "@/lib/loyalty-server";
-import { getSettings, insertOrder, OrderError, priceCart, type PricedLine, type StoreSettings } from "@/lib/orders";
+import { priceLines, type PricedLine } from "@/lib/menu-server";
+import type { Fulfillment, OrderView, SubmitOrderRequest } from "@/lib/orders";
+import { DealChangedError, submitOrder } from "@/lib/orders-server/submit";
 import { normalizeCode } from "@/lib/promo-code";
 import { dealChangedMessage, type TargetNames } from "@/lib/promotion-copy";
 import {
@@ -38,7 +42,11 @@ import {
 } from "@/lib/promotion-engine";
 import { loadCandidates } from "@/lib/promotion-queries";
 import { redemptionCheck } from "@/lib/promotion-usage";
+import { getSettings, policyOf, type Settings } from "@/lib/settings-server";
 import type { CheckoutInput, PreviewInput } from "@/lib/validation";
+
+/** A refusal the customer should read: a closed store, a sold-out deal, an item gone from the menu. */
+export class OrderError extends Error {}
 
 export type CheckoutQuote = Evaluation & {
   lines: PricedLine[];
@@ -69,7 +77,7 @@ export type CheckoutQuote = Evaluation & {
 export async function quoteCheckout(
   input: PreviewInput,
   member: LoyaltyMember | null,
-  settings?: StoreSettings,
+  settings?: Settings,
 ): Promise<CheckoutQuote> {
   const rewardId = input.rewardId ?? null;
   const customerKey = customerKeyFromPhone(input.customerPhone);
@@ -80,15 +88,23 @@ export async function quoteCheckout(
     rewardId === null ? null : getReward(rewardId),
     member ? qualifyingPoints(member.id) : 0,
   ]);
-  const [cart, loaded] = await Promise.all([
-    priceCart(input.lines, input.orderType, store),
+  const [priced, loaded] = await Promise.all([
+    priceLines(
+      input.lines.map((l) => ({ ...l, lineId: randomUUID() })),
+      policyOf(store),
+    ),
     loadCandidates(input.promoCodes ?? [], customerKey),
   ]);
+  if (!Array.isArray(priced)) {
+    throw new OrderError(priced.reason === "rejected" ? priced.message : "Couldn't price your cart.");
+  }
+  const subtotalCents = priced.reduce((sum, l) => sum + l.unitPriceCents * l.quantity, 0);
+  const deliveryFeeCents = input.orderType === "delivery" ? store.deliveryFeeCents : 0;
   const evaluation = evaluatePromotions({
-    lines: cart.lines,
+    lines: priced,
     orderType: input.orderType,
-    subtotalCents: cart.subtotalCents,
-    deliveryFeeCents: cart.deliveryFeeCents,
+    subtotalCents,
+    deliveryFeeCents,
     now: new Date(),
     timezone: store.timezone,
     customerKey,
@@ -97,15 +113,15 @@ export async function quoteCheckout(
     candidates: loaded.candidates,
   });
   const itemsLeft =
-    cart.subtotalCents - evaluation.applied.filter((a) => a.target === "items").reduce((n, a) => n + a.amountCents, 0);
+    subtotalCents - evaluation.applied.filter((a) => a.target === "items").reduce((n, a) => n + a.amountCents, 0);
   const redemption = capRedemption(
-    program.enabled && rewardId !== null ? applyReward(reward, member, cart.lines) : { status: "none" },
+    program.enabled && rewardId !== null ? applyReward(reward, member, priced) : { status: "none" },
     itemsLeft,
   );
   const rewardCents = redemption.status === "applied" ? redemption.discountCents : 0;
   const totals = discountedTotals({
-    subtotalCents: cart.subtotalCents,
-    deliveryFeeCents: cart.deliveryFeeCents,
+    subtotalCents,
+    deliveryFeeCents,
     tipCents: 0,
     taxRateBps: store.taxRateBps,
     discounts: [...evaluation.applied, { amountCents: rewardCents, target: "items" }],
@@ -114,9 +130,9 @@ export async function quoteCheckout(
   return {
     ...evaluation,
     discountCents: totals.discountCents,
-    lines: cart.lines,
-    subtotalCents: cart.subtotalCents,
-    deliveryFeeCents: cart.deliveryFeeCents,
+    lines: priced,
+    subtotalCents,
+    deliveryFeeCents,
     taxCents: totals.taxCents,
     totalBeforeTipCents: totals.totalCents,
     timezone: store.timezone,
@@ -145,36 +161,34 @@ function capRedemption(r: Redemption<LoyaltyReward>, itemsLeftCents: number): Re
   return { ...r, discountCents: itemsLeftCents };
 }
 
-function assertStoreTakes(settings: StoreSettings, orderType: CheckoutInput["orderType"]) {
-  if (!settings.isPublished) {
-    throw new OrderError("This store is not accepting online orders yet.");
-  }
-  if (!settings.isAcceptingOrders) {
-    throw new OrderError("Online ordering is temporarily paused. Please call the store.");
-  }
-  if (orderType === "pickup" && !settings.pickupEnabled) {
-    throw new OrderError("Pickup is not available right now.");
-  }
-  if (orderType === "delivery" && !settings.deliveryEnabled) {
-    throw new OrderError("Delivery is not available right now.");
-  }
+function fulfillmentOf(input: CheckoutInput): Fulfillment {
+  if (input.orderType === "pickup") return { kind: "pickup" };
+  // checkoutSchema refuses a delivery without a street and ZIP.
+  return {
+    kind: "delivery",
+    address: {
+      line1: input.addressLine1 ?? "",
+      line2: input.addressLine2 || null,
+      city: input.city || null,
+      zip: input.zip ?? "",
+    },
+  };
 }
 
 /**
- * Creates an order (payment_status = 'pending').
+ * Places a web order. Store-open and fulfillment checks run in submitOrder.
  *
- * STRIPE SEAM: when payments land, create a PaymentIntent for
- * `totalCents` here (or in a wrapping action), store its id on the order,
- * and flip payment_status to 'paid' from the Stripe webhook. Everything
- * upstream (validation, pricing) and downstream (confirmation page,
- * admin inbox) already works off the persisted order.
+ * STRIPE SEAM: when payments land, create a PaymentIntent for the total here
+ * (or in a wrapping action), store its id on the order, and record the
+ * payment as a tender from the Stripe webhook. Everything upstream
+ * (validation, pricing) and downstream (confirmation page, admin inbox)
+ * already works off the persisted order.
  *
  * `signedIn` is the member from the session, never from the client; only
  * they can spend points. A guest who opts in earns on their phone number.
  */
-export async function createOrder(input: CheckoutInput, signedIn: LoyaltyMember | null = null) {
+export async function createOrder(input: CheckoutInput, signedIn: LoyaltyMember | null = null): Promise<OrderView> {
   const [settings, program] = await Promise.all([getSettings(), getLoyaltySettings()]);
-  assertStoreTakes(settings, input.orderType);
   const customerKey = customerKeyFromPhone(input.customerPhone);
   if (!customerKey) throw new OrderError("Enter a valid phone number");
   if (program.enabled && input.rewardId != null && !signedIn) {
@@ -196,56 +210,63 @@ export async function createOrder(input: CheckoutInput, signedIn: LoyaltyMember 
       const changed = quote.rejected.find((r) => r.refusal.kind !== "unknown");
       throw new OrderError(dealChangedMessage(changed, totalCents, quote));
     }
-    if (input.orderType === "delivery" && quote.subtotalCents < settings.deliveryMinimumCents) {
-      throw new OrderError(
-        `Delivery orders have a minimum subtotal of $${(settings.deliveryMinimumCents / 100).toFixed(2)}.`,
-      );
-    }
     const reward = redemption.status === "applied" ? redemption : null;
-    const order = await insertOrder(
-      {
-        input,
-        prepMinutes: input.orderType === "delivery" ? settings.deliveryPrepMinutes : settings.pickupPrepMinutes,
-        lines: quote.lines,
-        subtotalCents: quote.subtotalCents,
-        discountCents: quote.discountCents,
-        taxCents: quote.taxCents,
-        deliveryFeeCents: quote.deliveryFeeCents,
-        totalCents,
-        discounts: quote.applied,
-        loyalty: quote.loyalty && {
-          memberId: signedIn?.id ?? null,
-          reward: reward && {
-            name: reward.reward.name,
-            pointsCost: reward.reward.price.cost,
-            discountCents: reward.discountCents,
-          },
-          pointsEarned: quote.loyalty.pointsEarned,
-        },
+    const request: SubmitOrderRequest = {
+      orderId: randomUUID(),
+      source: "web",
+      fulfillment: fulfillmentOf(input),
+      customer: {
+        phone: input.customerPhone,
+        name: input.customerName,
+        email: input.customerEmail || null,
+        saveAddress: input.orderType === "delivery",
       },
-      redemptionCheck(quote.applied, customerKey),
-      (orderId) => [
-        ...(quote.loyalty && joiningPhone ? enrollStatements(orderId, joiningPhone, input.customerName) : []),
-        // Selected from the order row, so a refused order spends nothing.
-        ...(reward && signedIn
-          ? [
-              ledgerStatement({
-                kind: "redeem",
-                idemKey: ledgerKey.redeem(orderId),
-                orderId,
-                note: reward.reward.name,
-                from: sql`select ${signedIn.id}::int as member_id, ${-reward.reward.price.cost}::int as points
-                  from ${orders} where ${orders.id} = ${orderId}`,
-              }),
-            ]
-          : []),
-      ],
-    ).catch((err) => {
+      notes: input.orderNotes || null,
+      fire: { kind: "now" },
+      promisedAt: null,
+      tipCents: input.tipCents,
+      lines: quote.lines.map((l) => ({ lineId: l.lineId, itemId: l.itemId, quantity: l.quantity, selections: l.selections, notes: l.notes })),
+      tenders: [],
+    };
+    const result = await submitOrder(request, {
+      kind: "online",
+      quote: {
+        discounts: quote.applied,
+        reward: reward && {
+          name: reward.reward.name,
+          pointsCost: reward.reward.price.cost,
+          discountCents: reward.discountCents,
+        },
+        memberId: signedIn?.id ?? null,
+        pointsEarned: quote.loyalty?.pointsEarned ?? 0,
+        check: redemptionCheck(quote.applied, customerKey),
+        after: (orderId) => [
+          ...(quote.loyalty && joiningPhone ? enrollStatements(orderId, joiningPhone, input.customerName) : []),
+          // Selected from the order row, so a refused order spends nothing.
+          ...(reward && signedIn
+            ? [
+                ledgerStatement({
+                  kind: "redeem",
+                  idemKey: ledgerKey.redeem(orderId),
+                  orderId,
+                  note: reward.reward.name,
+                  from: sql`select ${signedIn.id}::int as member_id, ${-reward.reward.price.cost}::int as points
+                    from ${orders} where ${orders.id} = ${orderId}`,
+                }),
+              ]
+            : []),
+        ],
+      },
+    }).catch((err: unknown) => {
       // Another order spent these points first: the debit tripped the balance CHECK.
       if (isInsufficientPoints(err)) throw new OrderError(INSUFFICIENT_POINTS);
+      if (err instanceof DealChangedError) return null;
       throw err;
     });
-    if (order) return order;
+    if (result) {
+      if (result.ok) return result.order;
+      throw new OrderError(result.reason === "rejected" ? result.message : "We couldn't place your order. Please try again.");
+    }
     // The guard failed: a deal's limit went to another order since the quote.
     const fresh = await quoteCheckout(input, member, settings);
     const lost = quote.applied.find((a) => !fresh.applied.some((f) => f.promotionId === a.promotionId));

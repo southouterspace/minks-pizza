@@ -1,55 +1,37 @@
 /**
  * Operator-flow smoke test against a running dev server:
- * first-run setup → dashboard → menu edit → settings/publish → orders inbox
- * status transitions.
+ * first-run setup → orders inbox (channel + payment state) → menu →
+ * settings/publish → sign out and back in.
  *
  * Run: npx tsx --env-file=.env.local scripts/e2e-operator.ts
  * Precondition: no operator row exists yet (first-run state).
  */
-import { chromium } from "playwright";
+import { BASE, check, launchBrowser, run, SHOT_DIR, signIn } from "./e2e/harness";
 
-const BASE = process.env.E2E_BASE_URL ?? "http://localhost:3000";
-const SHOT_DIR = process.env.E2E_SHOT_DIR ?? "/tmp";
-const EMAIL = "owner@minks.example";
-const PASSWORD = "pizza-test-1234";
+const OWNER = { email: "owner@minks.example", password: "pizza-test-1234", name: "Mink Operator" };
 
-async function main() {
-  const browser = await chromium.launch({
-    executablePath: process.env.CHROMIUM_PATH ?? "/opt/pw-browsers/chromium",
-  });
+run(async () => {
+  const browser = await launchBrowser();
   const page = await browser.newPage({ viewport: { width: 1280, height: 900 } });
   const shot = (name: string) =>
     page.screenshot({ path: `${SHOT_DIR}/${name}.png`, fullPage: false });
 
-  // 1. First-run setup (or login if the operator already exists)
-  await page.goto(`${BASE}/admin`, { waitUntil: "networkidle" });
-  if (page.url().includes("/admin/setup")) {
-    await shot("a1-setup");
-    await page.fill('input[name="name"]', "Mink Operator");
-    await page.fill('input[name="email"]', EMAIL);
-    await page.fill('input[name="password"]', PASSWORD);
-    await page.click('button[type="submit"]');
-  } else if (page.url().includes("/admin/login")) {
-    await page.fill('input[name="email"]', EMAIL);
-    await page.fill('input[name="password"]', PASSWORD);
-    await page.click('button[type="submit"]');
-  }
-  await page.waitForURL(/\/admin$/, { timeout: 20_000 });
+  await signIn(page, OWNER);
+  check("signed in to the orders inbox", new URL(page.url()).pathname, "/admin");
   await shot("a2-orders-inbox");
 
-  // 2. Orders inbox lists orders; advance one status.
+  // 2. Orders inbox lists orders with channel and payment state. Kitchen
+  // status is driven by the KDS, so the inbox has no status buttons.
   // Match any order number rather than a fixed prefix — order numbers grow,
   // and completed/canceled ones live in a collapsed "Recent" section.
   await page
     .locator("text=/#\\d{4,}/")
     .first()
     .waitFor({ state: "attached", timeout: 30_000 });
-  const confirmBtn = page.locator('button:has-text("Confirm")').first();
-  if (await confirmBtn.count()) {
-    await confirmBtn.click();
-    await page.waitForTimeout(1500);
-    await shot("a3-after-confirm");
-  }
+  const inbox = await page.locator("main").innerText();
+  check("the inbox shows a channel badge", /\b(Online|Phone|Walk-in|Dine-in)\b/.test(inbox), true);
+  check("the inbox shows a payment state", /\b(Unpaid|Part paid|Paid|Refunded)\b/.test(inbox), true);
+  check("the removed Confirm step is gone", await page.locator('button:has-text("Confirm")').count(), 0);
 
   // 3. Menu management: toggle availability of an item, then back
   await page.click('a[href="/admin/menu"]');
@@ -82,17 +64,10 @@ async function main() {
   // 5. Sign out and log back in
   await page.click("text=Sign out");
   await page.waitForURL("**/admin/login**", { timeout: 15_000 });
-  await page.fill('input[name="email"]', EMAIL);
-  await page.fill('input[name="password"]', PASSWORD);
-  await page.click('button[type="submit"]');
-  await page.waitForURL("**/admin", { timeout: 20_000 });
+  check("signing out lands on the login page", new URL(page.url()).pathname, "/admin/login");
+  await signIn(page, OWNER);
+  check("signing back in lands on the inbox", new URL(page.url()).pathname, "/admin");
   await shot("a6-relogin");
 
   await browser.close();
-  console.log("OPERATOR E2E PASSED — screenshots in", SHOT_DIR);
-}
-
-main().catch((err) => {
-  console.error(err);
-  process.exit(1);
 });

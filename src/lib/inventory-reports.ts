@@ -14,7 +14,6 @@ import {
   orders,
   recipeLines,
   storeSettings,
-  type OrderItemModifier,
 } from "@/db";
 import type { CsvCell } from "@/lib/csv";
 import type { CountKind } from "@/lib/inventory-domain";
@@ -26,7 +25,8 @@ import {
   recipeLineFromRow,
   type RecipeContext,
 } from "@/lib/recipes";
-import { DEFAULT_PORTIONS, type ModifierGroupKind } from "@/lib/toppings";
+import { isPlaceable, type GroupRole, type LineModifier } from "@/lib/pricing";
+import { DEFAULT_PORTIONS } from "@/lib/recipes";
 import type { BaseUnit } from "@/lib/units";
 
 export type ReportParams = URLSearchParams | Record<string, string | string[] | undefined>;
@@ -85,7 +85,7 @@ export function rangeQuery(range: DateRange): string {
 }
 
 function soldIn(range: DateRange, timezone: string) {
-  return sql`${orders.status} = 'completed' and ${orders.paymentStatus} <> 'refunded'
+  return sql`${orders.status} = 'completed'
     and ${orders.placedAt} >= (${range.from}::date::timestamp at time zone ${timezone})
     and ${orders.placedAt} < ((${range.to}::date + 1)::timestamp at time zone ${timezone})`;
 }
@@ -316,23 +316,23 @@ export type ToppingMixReport = {
   sizes: { sizeId: number; size: string; pizzas: number; rows: ToppingMixRow[] }[];
 };
 
-type ModifierInfo = { name: string; kind: ModifierGroupKind; order: number };
+type ModifierInfo = { name: string; role: GroupRole; order: number };
 
 function tallyToppingMix(
-  lines: readonly { quantity: number; modifiers: readonly OrderItemModifier[] }[],
+  lines: readonly { quantity: number; modifiers: readonly LineModifier[] }[],
   info: ReadonlyMap<number, ModifierInfo>,
 ): ToppingMixReport["sizes"] {
   const sizes = new Map<number, { pizzas: number; toppings: Map<number, ToppingMixRow> }>();
   for (const line of lines) {
-    const kindOf = (m: OrderItemModifier) =>
-      m.modifierId === undefined ? undefined : info.get(m.modifierId)?.kind;
-    const sizeId = line.modifiers.find((m) => kindOf(m) === "size")?.modifierId;
-    if (sizeId === undefined) continue;
+    const roleOf = (m: LineModifier) => (m.modifierId === null ? undefined : info.get(m.modifierId)?.role);
+    const sizeId = line.modifiers.find((m) => roleOf(m) === "size")?.modifierId;
+    if (sizeId === undefined || sizeId === null) continue;
     const size = sizes.get(sizeId) ?? { pizzas: 0, toppings: new Map() };
     sizes.set(sizeId, size);
     size.pizzas += line.quantity;
     for (const m of line.modifiers) {
-      if (kindOf(m) !== "toppings" || m.modifierId === undefined) continue;
+      const role = roleOf(m);
+      if (m.kind !== "placed" || !role || !isPlaceable(role) || m.modifierId === null) continue;
       const row = size.toppings.get(m.modifierId) ?? {
         sizeId,
         size: info.get(sizeId)!.name,
@@ -346,9 +346,9 @@ function tallyToppingMix(
       };
       size.toppings.set(m.modifierId, row);
       row.withTopping += line.quantity;
-      if (m.placement && m.placement !== "whole") row.half += line.quantity;
-      if (m.portion === "light") row.light += line.quantity;
-      if (m.portion === "extra") row.extra += line.quantity;
+      if (m.placement !== "whole") row.half += line.quantity;
+      if (m.amount === "light") row.light += line.quantity;
+      if (m.amount === "extra") row.extra += line.quantity;
     }
   }
   return [...sizes]
@@ -376,7 +376,7 @@ export async function toppingMixReport(params: ReportParams): Promise<ToppingMix
       .select({
         id: modifiers.id,
         name: modifiers.name,
-        kind: modifierGroups.kind,
+        role: modifierGroups.role,
         groupOrder: modifierGroups.sortOrder,
         order: modifiers.sortOrder,
       })
@@ -384,7 +384,7 @@ export async function toppingMixReport(params: ReportParams): Promise<ToppingMix
       .innerJoin(modifierGroups, eq(modifierGroups.id, modifiers.groupId))
       .orderBy(asc(modifierGroups.sortOrder), asc(modifierGroups.id), asc(modifiers.sortOrder), asc(modifiers.id)),
   ]);
-  const info = new Map(mods.map((m, i) => [m.id, { name: m.name, kind: m.kind, order: i }]));
+  const info = new Map(mods.map((m, i) => [m.id, { name: m.name, role: m.role, order: i }]));
   return { range, sizes: tallyToppingMix(lines, info) };
 }
 
@@ -411,7 +411,7 @@ export async function marginReport(): Promise<MarginReport> {
       .innerJoin(categories, eq(categories.id, menuItems.categoryId))
       .orderBy(asc(categories.sortOrder), asc(categories.id), asc(menuItems.sortOrder), asc(menuItems.id)),
     db
-      .select({ itemId: itemModifierGroups.itemId, groupId: itemModifierGroups.groupId, kind: modifierGroups.kind })
+      .select({ itemId: itemModifierGroups.itemId, groupId: itemModifierGroups.groupId, role: modifierGroups.role })
       .from(itemModifierGroups)
       .innerJoin(modifierGroups, eq(modifierGroups.id, itemModifierGroups.groupId))
       .orderBy(asc(itemModifierGroups.sortOrder), asc(itemModifierGroups.id)),
@@ -430,7 +430,7 @@ export async function marginReport(): Promise<MarginReport> {
   ]);
   const minMarginBps = settings?.minMarginBps ?? 7000;
   const book = buildRecipeBook(recipeRows.map(recipeLineFromRow));
-  const sizeGroupIds = new Set(links.filter((l) => l.kind === "size").map((l) => l.groupId));
+  const sizeGroupIds = new Set(links.filter((l) => l.role === "size").map((l) => l.groupId));
   const ctx: RecipeContext = {
     book,
     sizeModifierIds: new Set(mods.filter((m) => sizeGroupIds.has(m.groupId)).map((m) => m.id)),
@@ -442,7 +442,7 @@ export async function marginReport(): Promise<MarginReport> {
     const groups = links.filter((l) => l.itemId === item.id);
     const inGroups = (kind: "size" | "other") =>
       groups
-        .filter((g) => (g.kind === "size") === (kind === "size"))
+        .filter((g) => (g.role === "size") === (kind === "size"))
         .flatMap((g) => mods.filter((m) => m.groupId === g.groupId));
     const defaults = inGroups("other").filter((m) => m.isDefault);
     const sizes = inGroups("size");

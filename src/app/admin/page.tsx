@@ -15,12 +15,9 @@ export const metadata: Metadata = { title: "Orders" };
 
 const LANES: { title: string; statuses: readonly OrderStatus[]; empty: string }[] = [
   { title: "New", statuses: ["new"], empty: "New orders land here." },
-  {
-    title: "In kitchen",
-    statuses: ["confirmed", "preparing"],
-    empty: "Confirmed orders move here.",
-  },
+  { title: "In kitchen", statuses: ["preparing"], empty: "Orders the kitchen has started move here." },
   { title: "Ready", statuses: ["ready"], empty: "Nothing waiting for pickup." },
+  { title: "Scheduled", statuses: ["held"], empty: "Orders held for a later fire time wait here." },
 ];
 
 export default async function OrdersBoardPage() {
@@ -78,9 +75,11 @@ export default async function OrdersBoardPage() {
         ))}
       </dl>
 
-      <div className="mt-6 grid gap-4 lg:grid-cols-3">
+      <div className="mt-6 grid gap-4 lg:grid-cols-4">
         {LANES.map((lane) => {
-          const laneOrders = active.filter((o) => lane.statuses.includes(o.status));
+          const laneOrders = active
+            .filter((o) => lane.statuses.includes(o.status))
+            .toSorted((a, b) => (a.fireAt?.getTime() ?? Infinity) - (b.fireAt?.getTime() ?? Infinity));
           return (
             <section key={lane.title} aria-label={lane.title} data-testid={`lane-${lane.title}`}>
               <h2 className="flex items-center gap-2 text-sm font-medium">

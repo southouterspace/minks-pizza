@@ -29,12 +29,13 @@ import {
 } from "@/lib/auth";
 import { cancelCourier, dispatchCourier } from "@/lib/delivery/dispatch";
 import { COURIER_PROVIDERS, CourierError } from "@/lib/delivery/types";
-import { OrderError } from "@/lib/orders";
+import { OrderError } from "@/lib/checkout";
 import { STORE_TIMEZONES } from "@/lib/hours";
-import { MODIFIER_GROUP_KINDS, type ModifierGroupKind } from "@/lib/toppings";
+import { GROUP_ROLES, isPlaceable, type GroupRole } from "@/lib/pricing";
 import { unitFor } from "@/lib/unit-entry";
 import { KITCHEN_STATIONS, type KitchenStation } from "@/lib/kds";
-import { DEFAULT_STAFF_RULES, DEFAULT_TIMEZONE, parseStaffRules } from "@/lib/timeclock";
+import { DEFAULT_STAFF_RULES, parseStaffRules } from "@/lib/timeclock";
+import { DEFAULT_TIMEZONE } from "@/lib/zoned";
 import {
   checkbox,
   dollarsToCents,
@@ -43,21 +44,20 @@ import {
   textField,
   textOrNull,
 } from "@/lib/form-data";
-import {
-  CANCEL_REASONS,
-  ORDER_STATUSES,
-  PAYMENT_METHODS,
-} from "@/lib/order-workflow";
+import { bpsOf } from "@/lib/money";
+import { CANCEL_REASONS, ORDER_STATUSES } from "@/lib/order-workflow";
 import {
   addOrderNote,
   adjustPromisedTime,
-  applyDiscount,
-  removeDiscount,
-  recordPayment,
   transitionOrder,
   type Actor,
   type OrderActionResult,
 } from "@/lib/order-writes";
+import { dueCents, TENDER_METHODS, type MutationResult, type OrderMutation } from "@/lib/orders";
+import { mutateOrder, type OperatorContext } from "@/lib/orders-server/mutate";
+import { getOrderView } from "@/lib/orders-server/views";
+import { HALF_TOPPING_RULES } from "@/lib/pricing";
+import { POS_SETTING_LIMITS } from "@/lib/settings";
 import { compSchema } from "@/lib/validation";
 
 export type AuthFormState = { error?: string };
@@ -275,7 +275,7 @@ export type OrderActionState = { error?: string };
 
 async function operatorActor(): Promise<Actor> {
   const operator = await requireOperator();
-  return { name: operator.name, operatorId: operator.id };
+  return { name: operator.name, operatorId: operator.id, employeeId: null };
 }
 
 function orderActionState(result: OrderActionResult): OrderActionState {
@@ -284,6 +284,16 @@ function orderActionState(result: OrderActionResult): OrderActionState {
 }
 
 const orderIdField = (fd: FormData) => z.uuid().parse(textField(fd, "orderId"));
+
+/** One order verb from the admin, through the same seam as the POS, with the operator as the actor. */
+async function mutateAsOperator(fd: FormData, mutation: OrderMutation): Promise<OrderActionState> {
+  const operator = await requireOperator();
+  const by: OperatorContext = { operator: { id: operator.id, name: operator.name } };
+  const result: MutationResult = await mutateOrder({ orderId: orderIdField(fd), mutation }, by);
+  revalidatePath("/admin", "layout");
+  if (result.ok) return {};
+  return { error: result.reason === "rejected" ? result.message : "That didn't go through. Refresh and try again." };
+}
 
 export async function moveOrder(formData: FormData): Promise<OrderActionState> {
   const actor = await operatorActor();
@@ -294,18 +304,10 @@ export async function moveOrder(formData: FormData): Promise<OrderActionState> {
 }
 
 export async function cancelOrder(formData: FormData): Promise<OrderActionState> {
-  const actor = await operatorActor();
   const reason = z.enum(CANCEL_REASONS).safeParse(textField(formData, "reason"));
   if (!reason.success) return { error: "Pick a reason for canceling." };
   const detail = textField(formData, "detail").slice(0, 300);
-  return orderActionState(
-    await transitionOrder({
-      orderId: orderIdField(formData),
-      to: "canceled",
-      actor,
-      cancelReason: detail ? `${reason.data}: ${detail}` : reason.data,
-    }),
-  );
+  return mutateAsOperator(formData, { kind: "cancel", reason: detail ? `${reason.data}: ${detail}` : reason.data });
 }
 
 export async function adjustPromisedTimeAction(formData: FormData): Promise<OrderActionState> {
@@ -316,12 +318,18 @@ export async function adjustPromisedTimeAction(formData: FormData): Promise<Orde
   );
 }
 
+/** The balance due, as one tender taken outside the till (no drawer). */
 export async function recordPaymentAction(formData: FormData): Promise<OrderActionState> {
-  const actor = await operatorActor();
-  const method = z.enum(PAYMENT_METHODS).parse(textField(formData, "method"));
-  return orderActionState(
-    await recordPayment({ orderId: orderIdField(formData), method, actor }),
-  );
+  await requireOperator();
+  const method = z.enum(TENDER_METHODS).exclude(["marketplace"]).parse(textField(formData, "method"));
+  const order = await getOrderView(orderIdField(formData));
+  if (!order) return { error: "Order not found." };
+  const amountCents = dueCents(order.totals);
+  if (amountCents === 0) return { error: "Payment is already recorded for this order." };
+  return mutateAsOperator(formData, {
+    kind: "tender",
+    tender: { id: crypto.randomUUID(), method, amountCents, tenderedCents: null, tipCents: 0, last4: null },
+  });
 }
 
 export async function addOrderNoteAction(formData: FormData): Promise<OrderActionState> {
@@ -333,8 +341,9 @@ export async function addOrderNoteAction(formData: FormData): Promise<OrderActio
   );
 }
 
+/** An operator comp: a fixed amount or a percent of what is left of the items. */
 export async function applyDiscountAction(formData: FormData): Promise<OrderActionState> {
-  const actor = await operatorActor();
+  await requireOperator();
   const parsed = compSchema.safeParse({
     kind: textField(formData, "kind"),
     reason: textField(formData, "reason"),
@@ -342,14 +351,30 @@ export async function applyDiscountAction(formData: FormData): Promise<OrderActi
     promotionId: textField(formData, "promotionId"),
   });
   if (!parsed.success) return { error: parsed.error.issues[0]?.message ?? "Check the discount." };
-  return orderActionState(await applyDiscount({ orderId: orderIdField(formData), ...parsed.data, actor }));
+  const order = await getOrderView(orderIdField(formData));
+  if (!order) return { error: "Order not found." };
+  const live = new Set(order.lines.filter((l) => !l.voided).map((l) => l.lineId));
+  const itemsLeft =
+    order.totals.subtotalCents -
+    order.discounts
+      .filter((d) => d.target === "items" && (d.lineId === null || live.has(d.lineId)))
+      .reduce((n, d) => n + d.amountCents, 0);
+  const { amount } = parsed.data;
+  const cents =
+    amount.cents !== undefined ? Math.min(amount.cents, itemsLeft) : Math.min(itemsLeft, bpsOf(itemsLeft, amount.percentBps));
+  if (cents <= 0) return { error: "Nothing left on the items to discount." };
+  return mutateAsOperator(formData, {
+    kind: "discount",
+    id: crypto.randomUUID(),
+    lineId: null,
+    cents,
+    reason: parsed.data.label,
+    promotionId: parsed.data.promotionId,
+  });
 }
 
 export async function removeDiscountAction(formData: FormData): Promise<OrderActionState> {
-  const actor = await operatorActor();
-  return orderActionState(
-    await removeDiscount({ orderId: orderIdField(formData), discountId: idField(formData, "discountId"), actor }),
-  );
+  return mutateAsOperator(formData, { kind: "remove_discount", discountId: idField(formData, "discountId") });
 }
 
 // ---------------------------------------------------------------------------
@@ -630,7 +655,7 @@ export async function saveItem(formData: FormData): Promise<void> {
 
 function parseGroupFields(fd: FormData): {
   name: string;
-  kind: ModifierGroupKind;
+  role: GroupRole;
   minSelect: number;
   maxSelect: number | null;
 } {
@@ -644,8 +669,8 @@ function parseGroupFields(fd: FormData): {
     maxSelect = null;
   }
   if (maxSelect !== null && maxSelect < minSelect) maxSelect = minSelect;
-  const kind = z.enum(MODIFIER_GROUP_KINDS).catch("choice").parse(textField(fd, "kind"));
-  return { name, kind, minSelect, maxSelect };
+  const role = z.enum(GROUP_ROLES).catch("option").parse(textField(fd, "role"));
+  return { name, role, minSelect, maxSelect };
 }
 
 export async function createModifierGroup(formData: FormData): Promise<void> {
@@ -685,8 +710,8 @@ export async function deleteModifierGroup(formData: FormData): Promise<void> {
 // Modifiers
 // ---------------------------------------------------------------------------
 
-function extraPriceField(fd: FormData, kind: ModifierGroupKind): number | null {
-  if (kind !== "toppings" || textField(fd, "extraPrice") === "") return null;
+function extraPriceField(fd: FormData, role: GroupRole): number | null {
+  if (!isPlaceable(role) || textField(fd, "extraPrice") === "") return null;
   return dollarsToCents(fd, "extraPrice");
 }
 
@@ -724,7 +749,7 @@ export async function createModifier(formData: FormData): Promise<void> {
   const isDefault = checkbox(formData, "isDefault");
 
   const [group] = await db
-    .select({ id: modifierGroups.id, maxSelect: modifierGroups.maxSelect, kind: modifierGroups.kind })
+    .select({ id: modifierGroups.id, maxSelect: modifierGroups.maxSelect, role: modifierGroups.role })
     .from(modifierGroups)
     .where(eq(modifierGroups.id, groupId));
   if (!group) return;
@@ -745,7 +770,7 @@ export async function createModifier(formData: FormData): Promise<void> {
     groupId,
     name,
     priceDeltaCents,
-    extraPriceDeltaCents: extraPriceField(formData, group.kind),
+    extraPriceDeltaCents: extraPriceField(formData, group.role),
     isDefault,
     sortOrder: (last?.sortOrder ?? -1) + 1,
   });
@@ -761,7 +786,7 @@ export async function updateModifier(formData: FormData): Promise<void> {
   const isDefault = checkbox(formData, "isDefault");
 
   const [modifier] = await db
-    .select({ id: modifiers.id, groupId: modifiers.groupId, kind: modifierGroups.kind })
+    .select({ id: modifiers.id, groupId: modifiers.groupId, role: modifierGroups.role })
     .from(modifiers)
     .innerJoin(modifierGroups, eq(modifierGroups.id, modifiers.groupId))
     .where(eq(modifiers.id, modifierId));
@@ -769,7 +794,7 @@ export async function updateModifier(formData: FormData): Promise<void> {
 
   await db
     .update(modifiers)
-    .set({ name, priceDeltaCents, extraPriceDeltaCents: extraPriceField(formData, modifier.kind) })
+    .set({ name, priceDeltaCents, extraPriceDeltaCents: extraPriceField(formData, modifier.role) })
     .where(eq(modifiers.id, modifierId));
   await applyDefault(modifier.groupId, modifierId, isDefault);
   revalidateModifiers();
@@ -850,7 +875,7 @@ export async function saveRecipe(formData: FormData): Promise<RecipeActionState>
       .select({ id: modifiers.id })
       .from(modifiers)
       .innerJoin(modifierGroups, eq(modifierGroups.id, modifiers.groupId))
-      .where(eq(modifierGroups.kind, "size")),
+      .where(eq(modifierGroups.role, "size")),
   ]);
   const byId = new Map(found.map((i) => [i.id, i]));
   const sizes = new Set(sizeIds.map((s) => s.id));
@@ -912,12 +937,57 @@ function logoUrlOrNull(formData: FormData): string | null {
   return /^https:\/\/\S+$/i.test(raw) ? raw : null;
 }
 
+const num = (fd: FormData, name: string) => Number(textField(fd, name) || NaN);
+
+const { extraToppingMultiplier: extra, discountApprovalDollars: discount, ovenCapacityPies: oven, makeMinutes: make, posLockSeconds: lock } =
+  POS_SETTING_LIMITS;
+
+const posSettingsSchema = z.object({
+  halfToppingRule: z.enum(HALF_TOPPING_RULES, "Pick a half-topping rule."),
+  extraToppingBps: z
+    .number("Enter the extra-topping multiplier.")
+    .int()
+    .min(extra.min * 10_000, `Extra toppings can't cost less than a regular portion (${extra.min}×).`)
+    .max(extra.max * 10_000, `Extra-topping multiplier tops out at ${extra.max}×.`),
+  discountApprovalCents: z
+    .number("Enter a discount approval threshold.")
+    .int()
+    .min(discount.min * 100, "The discount threshold can't be negative.")
+    .max(discount.max * 100, `The discount threshold tops out at $${discount.max.toLocaleString("en-US")}.`),
+  ovenCapacityPies: z
+    .number("Enter oven capacity.")
+    .int()
+    .min(oven.min, `Oven capacity is at least ${oven.min} pie.`)
+    .max(oven.max, `Oven capacity tops out at ${oven.max} pies.`),
+  makeMinutes: z
+    .number("Enter make time.")
+    .int()
+    .min(make.min, "Make time can't be negative.")
+    .max(make.max, `Make time tops out at ${make.max} minutes.`),
+  posLockSeconds: z
+    .number("Enter the auto-lock time.")
+    .int()
+    .min(lock.min, `Auto-lock is at least ${lock.min} seconds.`)
+    .max(lock.max, `Auto-lock tops out at ${lock.max} seconds (an hour).`),
+});
 function percentBps(fd: FormData, name: string, min: number, max: number): number {
   return Math.round(z.coerce.number().min(min).max(max).parse(textField(fd, name)) * 100);
 }
 
 export async function saveSettings(formData: FormData): Promise<void> {
   await requireOperator();
+
+  const pos = posSettingsSchema.safeParse({
+    halfToppingRule: textField(formData, "halfToppingRule"),
+    extraToppingBps: Math.round(num(formData, "extraToppingMultiplier") * 10_000),
+    discountApprovalCents: Math.round(num(formData, "discountApproval") * 100),
+    ovenCapacityPies: num(formData, "ovenCapacityPies"),
+    makeMinutes: num(formData, "makeMinutes"),
+    posLockSeconds: num(formData, "posLockSeconds"),
+  });
+  if (!pos.success) {
+    redirect(`/admin/settings?error=${encodeURIComponent(pos.error.issues[0]?.message ?? "Check the POS settings.")}`);
+  }
 
   const taxPercentRaw = textField(formData, "taxPercent");
   const taxPercent = taxPercentRaw === "" ? 0 : Number.parseFloat(taxPercentRaw);
@@ -968,6 +1038,7 @@ export async function saveSettings(formData: FormData): Promise<void> {
     deliveryMinimumCents: dollarsToCents(formData, "deliveryMinimum"),
     taxRateBps: Math.round(taxPercent * 100),
     timezone: timezoneField(formData),
+    ...pos.data,
     halfToppingPriceBps: percentBps(formData, "halfToppingPricePct", 0, 100),
     halfPortionBps: percentBps(formData, "halfPortionPct", 0, 100),
     lightPortionBps: percentBps(formData, "lightPortionPct", 0, 100),

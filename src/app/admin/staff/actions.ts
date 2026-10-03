@@ -18,6 +18,7 @@ import {
   type WeeklyAvailability,
 } from "@/lib/timeclock";
 import { getStaffConfig, resolveWeek } from "@/lib/staff/config";
+import { POS_ACCESS_LEVELS } from "@/lib/pos-access";
 import * as staffEmployees from "@/lib/staff/employees";
 import * as schedule from "@/lib/staff/schedule";
 import { decideTimeOff, requestTimeOff } from "@/lib/staff/time-off";
@@ -111,6 +112,7 @@ export async function saveEmployee(_prev: StaffFormState, fd: FormData): Promise
     notes: parsed.data.notes || null,
     availability,
     roles,
+    posAccess: z.enum(POS_ACCESS_LEVELS).catch("none").parse(textField(fd, "posAccess")),
     pin,
   });
   if ("error" in saved) return saved;

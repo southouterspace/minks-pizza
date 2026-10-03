@@ -1,3 +1,4 @@
+import { paymentState } from "@/lib/orders";
 import { getCurrentOperator } from "@/lib/auth";
 import { csvResponse } from "@/lib/csv";
 import { exportOrders, parseOrderFilters } from "@/lib/order-queries";
@@ -30,8 +31,9 @@ const COLUMNS: Column[] = [
   ["Delivery fee", (o) => dollars(o.deliveryFeeCents)],
   ["Tip", (o) => dollars(o.tipCents)],
   ["Total", (o) => dollars(o.totalCents)],
-  ["Payment", (o) => o.paymentStatus],
-  ["Payment method", (o) => o.paymentMethod],
+  ["Payment", (o) => paymentState(o)],
+  ["Paid", (o) => dollars(o.paidCents)],
+  ["Refunded", (o) => dollars(o.refundedCents)],
   ["Promised", (o, t) => t(o.promisedAt)],
   ["Ready", (o, t) => t(o.readyAt)],
   ["Completed", (o, t) => t(o.completedAt)],

@@ -11,7 +11,7 @@ import {
   storeSettings,
 } from "@/db";
 import { recipeLineFromRow } from "@/lib/recipes";
-import { DEFAULT_PORTIONS } from "@/lib/toppings";
+import { DEFAULT_PORTIONS } from "@/lib/recipes";
 import type {
   PlateContext,
   RecipeIngredient,
@@ -45,7 +45,7 @@ export function sizeModifiers() {
     })
     .from(modifiers)
     .innerJoin(modifierGroups, eq(modifierGroups.id, modifiers.groupId))
-    .where(eq(modifierGroups.kind, "size"))
+    .where(eq(modifierGroups.role, "size"))
     .orderBy(asc(modifierGroups.sortOrder), asc(modifiers.sortOrder), asc(modifiers.id));
 }
 
@@ -68,7 +68,7 @@ export async function itemRecipe(item: { id: number; basePriceCents: number }): 
 }> {
   const [attached, allSizes, lines, [settings]] = await Promise.all([
     db
-      .select({ groupId: modifierGroups.id, kind: modifierGroups.kind })
+      .select({ groupId: modifierGroups.id, role: modifierGroups.role })
       .from(itemModifierGroups)
       .innerJoin(modifierGroups, eq(modifierGroups.id, itemModifierGroups.groupId))
       .where(eq(itemModifierGroups.itemId, item.id))
@@ -77,9 +77,9 @@ export async function itemRecipe(item: { id: number; basePriceCents: number }): 
     db.select().from(recipeLines).where(eq(recipeLines.menuItemId, item.id)),
     db.select().from(storeSettings).where(eq(storeSettings.id, 1)),
   ]);
-  const sizeGroupId = attached.find((g) => g.kind === "size")?.groupId;
+  const sizeGroupId = attached.find((g) => g.role === "size")?.groupId;
   const sizes = allSizes.filter((s) => s.groupId === sizeGroupId);
-  const optionGroupIds = attached.filter((g) => g.kind !== "size").map((g) => g.groupId);
+  const optionGroupIds = attached.filter((g) => g.role !== "size").map((g) => g.groupId);
 
   const defaults = optionGroupIds.length
     ? await db

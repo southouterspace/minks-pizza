@@ -1,12 +1,14 @@
 /**
  * Order lifecycle rules: which status moves are legal, what each move stamps,
- * and how the admin labels them. Every writer (admin, KDS, checkout) goes
- * through these tables. Shared by server and client — no I/O.
+ * and how the admin labels them. Kitchen status is derived from line stamps by
+ * the fold in orders-server/folds.ts; `held` = nothing fired yet (scheduled or
+ * an open check). Every writer (POS, KDS, admin, checkout) logs its moves
+ * through order-writes.ts. Shared by server and client: no I/O.
  */
 
 export const ORDER_STATUSES = [
+  "held",
   "new",
-  "confirmed",
   "preparing",
   "ready",
   "completed",
@@ -14,10 +16,10 @@ export const ORDER_STATUSES = [
 ] as const;
 export type OrderStatus = (typeof ORDER_STATUSES)[number];
 
-export const ACTIVE_STATUSES = ["new", "confirmed", "preparing", "ready"] as const;
+export const ACTIVE_STATUSES = ["held", "new", "preparing", "ready"] as const;
 
 /** Food still owed: a passed promise means late, and the promise can still move. */
-export const COOKING_STATUSES = ["new", "confirmed", "preparing"] as const;
+export const COOKING_STATUSES = ["held", "new", "preparing"] as const;
 
 export function isActive(status: OrderStatus): boolean {
   return (ACTIVE_STATUSES as readonly OrderStatus[]).includes(status);
@@ -28,8 +30,8 @@ export function isCooking(status: OrderStatus): boolean {
 }
 
 export const TRANSITIONS: Record<OrderStatus, readonly OrderStatus[]> = {
-  new: ["confirmed", "canceled"],
-  confirmed: ["preparing", "canceled"],
+  held: ["new", "canceled"],
+  new: ["preparing", "ready", "canceled"],
   preparing: ["ready", "canceled"],
   ready: ["completed", "canceled"],
   completed: [],
@@ -41,16 +43,17 @@ export function canTransition(from: OrderStatus, to: OrderStatus): boolean {
 }
 
 /**
- * The kitchen's undo edge, outside the forward table on purpose: only the
- * KDS recall takes an order backwards, and it always lands on "preparing".
+ * The kitchen's undo edges, outside the forward table on purpose: the KDS
+ * recall takes an order back to "preparing", and firing a course onto a
+ * finished check takes it back to "new".
  */
 export const RECALLABLE: readonly OrderStatus[] = ["ready", "completed"];
 
-/** The one forward move the admin offers as the primary button. */
+/**
+ * The one forward move the admin offers as the primary button. Cooking
+ * stages move with the kitchen's taps, not from the office.
+ */
 export const NEXT_ACTION: Partial<Record<OrderStatus, { to: OrderStatus; label: string }>> = {
-  new: { to: "confirmed", label: "Confirm" },
-  confirmed: { to: "preparing", label: "Start preparing" },
-  preparing: { to: "ready", label: "Mark ready" },
   ready: { to: "completed", label: "Complete" },
 };
 
@@ -60,12 +63,12 @@ export const STATUS_META: Record<
   OrderStatus,
   { label: string; variant: BadgeVariant; className?: string }
 > = {
+  held: { label: "Scheduled", variant: "outline" },
   new: {
     label: "New",
     variant: "outline",
     className: "border-transparent! bg-warning/10 text-warning!",
   },
-  confirmed: { label: "Confirmed", variant: "secondary" },
   preparing: { label: "Preparing", variant: "secondary" },
   ready: {
     label: "Ready",
@@ -89,15 +92,10 @@ export const CANCEL_REASONS = [
   "Other",
 ] as const;
 
-export const PAYMENT_METHODS = ["cash", "card", "other"] as const;
-export type PaymentMethod = (typeof PAYMENT_METHODS)[number];
-
-export const PAYMENT_METHOD_LABEL: Record<PaymentMethod, string> = {
-  cash: "Cash",
-  card: "Card",
-  other: "Other",
-};
-
+/**
+ * `payment_recorded` is no longer written (tenders are the payment record);
+ * it stays so rows logged before the ledger existed still read.
+ */
 export const ORDER_EVENT_TYPES = [
   "placed",
   "status_changed",
@@ -109,11 +107,11 @@ export const ORDER_EVENT_TYPES = [
 export type OrderEventType = (typeof ORDER_EVENT_TYPES)[number];
 
 /**
- * Staff can add or remove a discount while payment is still pending and the
- * order is open. order-writes.ts repeats this in SQL for its guard.
+ * Staff can discount or comp while nothing has been paid and the order is
+ * open. Money already taken comes back through a refund, not a discount.
  */
-export function canComp(order: { status: OrderStatus; paymentStatus: string }): boolean {
-  return order.paymentStatus === "pending" && order.status !== "canceled" && order.status !== "completed";
+export function canComp(order: { status: OrderStatus; paidCents: number }): boolean {
+  return order.paidCents === 0 && order.status !== "canceled" && order.status !== "completed";
 }
 
 export function isLate(promisedAt: Date | null, status: OrderStatus, now: Date): boolean {
@@ -135,6 +133,7 @@ export function describeEvent(e: {
       if (e.toStatus === "preparing" && e.fromStatus && RECALLABLE.includes(e.fromStatus)) {
         return "Recalled to the kitchen";
       }
+      if (e.toStatus === "new") return e.fromStatus && RECALLABLE.includes(e.fromStatus) ? "More food fired" : "Sent to kitchen";
       return STATUS_META[e.toStatus].label;
     case "eta_changed":
       return "Promised time pushed";
@@ -159,14 +158,15 @@ export type StatusTimestamps = {
 };
 
 /**
- * The timestamp columns a move into `to` writes. Landing on "preparing"
- * clears readyAt/completedAt, which is what makes a KDS recall honest.
+ * The timestamp columns a move into `to` writes. Landing on "new" or
+ * "preparing" clears readyAt/completedAt, which is what makes a KDS recall
+ * (and a course fired onto a finished check) honest.
  */
 export function statusTimestamps(to: OrderStatus, now: Date): StatusTimestamps {
   switch (to) {
-    case "new":
-    case "confirmed":
+    case "held":
       return {};
+    case "new":
     case "preparing":
       return { readyAt: null, completedAt: null };
     case "ready":

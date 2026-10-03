@@ -1,10 +1,30 @@
-import {
-  DEFAULT_CHOICE,
-  selectionFactorBps,
-  type Placement,
-  type Portion,
-  type PortionSettings,
-} from "@/lib/toppings";
+import type { Amount, Placement } from "@/lib/pricing";
+
+/** How much of a regular whole-pie portion a half, light or extra one uses, in bps. */
+export type PortionSettings = {
+  halfPortionBps: number;
+  lightPortionBps: number;
+  extraPortionBps: number;
+};
+
+export const DEFAULT_PORTIONS: PortionSettings = {
+  halfPortionBps: 5000,
+  lightPortionBps: 5000,
+  extraPortionBps: 15000,
+};
+
+export function selectionFactorBps(choice: { placement: Placement; amount: Amount }, settings: PortionSettings): number {
+  const placement = choice.placement === "whole" ? 10_000 : settings.halfPortionBps;
+  const portion =
+    choice.amount === "light"
+      ? settings.lightPortionBps
+      : choice.amount === "extra"
+        ? settings.extraPortionBps
+        : choice.amount === "none"
+          ? 0
+          : 10_000;
+  return (placement * portion) / 10_000;
+}
 
 export type RecipeOwner = { kind: "item"; id: number } | { kind: "modifier"; id: number };
 
@@ -69,10 +89,16 @@ export function resolveLines(book: RecipeBook, owner: RecipeOwner, sizeId: numbe
   return usage;
 }
 
+/** The part of a line's modifier snapshot that drives usage. */
+export type UsageModifier = { modifierId: number | null } & (
+  | { kind: "option" }
+  | { kind: "placed"; placement: Placement; amount: Amount }
+);
+
 export type UsageLine = {
   menuItemId: number | null;
   quantity: number;
-  modifiers: readonly { modifierId?: number; placement?: Placement; portion?: Portion }[];
+  modifiers: readonly UsageModifier[];
 };
 
 export type RecipeContext = {
@@ -89,18 +115,15 @@ function add(into: Usage, from: Usage, factor: number) {
 
 export function orderLineUsage(line: UsageLine, ctx: RecipeContext): Usage {
   const sizeId =
-    line.modifiers.find((m) => m.modifierId !== undefined && ctx.sizeModifierIds.has(m.modifierId))
-      ?.modifierId ?? null;
+    line.modifiers.find((m) => m.modifierId !== null && ctx.sizeModifierIds.has(m.modifierId))?.modifierId ??
+    null;
   const usage: Usage = new Map();
   if (line.menuItemId !== null) {
     add(usage, resolveLines(ctx.book, { kind: "item", id: line.menuItemId }, sizeId), 1);
   }
   for (const m of line.modifiers) {
-    if (m.modifierId === undefined) continue;
-    const choice = {
-      placement: m.placement ?? DEFAULT_CHOICE.placement,
-      portion: m.portion ?? DEFAULT_CHOICE.portion,
-    };
+    if (m.modifierId === null) continue;
+    const choice = m.kind === "placed" ? m : { placement: "whole" as const, amount: "regular" as const };
     const factor = selectionFactorBps(choice, ctx.settings) / 10_000;
     add(usage, resolveLines(ctx.book, { kind: "modifier", id: m.modifierId }, sizeId), factor);
   }
@@ -141,6 +164,6 @@ export function plateCost(
 ): number {
   const modifiers = [sizeId, ...defaultModifierIds]
     .filter((id): id is number => id !== null)
-    .map((modifierId) => ({ modifierId }));
+    .map((modifierId) => ({ modifierId, kind: "option" as const }));
   return costCents(orderUsage([{ menuItemId: itemId, quantity: 1, modifiers }], ctx), unitCosts);
 }

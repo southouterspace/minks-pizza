@@ -4,7 +4,7 @@ import { checkoutSchema, previewSchema } from "@/lib/validation";
 import { createOrder, quoteCheckout } from "@/lib/checkout";
 import { getCurrentMember } from "@/lib/member-auth";
 import { rewardOptions, type RewardOption } from "@/lib/loyalty-server";
-import { OrderError } from "@/lib/orders";
+import { OrderError } from "@/lib/checkout";
 import { formatLastDay, nudgeCopy, refusalCopy } from "@/lib/promotion-copy";
 import type { DiscountTarget } from "@/lib/promotion-schema";
 

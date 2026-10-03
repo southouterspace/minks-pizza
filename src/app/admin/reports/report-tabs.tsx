@@ -10,8 +10,8 @@ export function ReportTabs({ tabs }: { tabs: { slug: string; title: string }[] }
     <nav aria-label="Reports" className="mt-3 -mx-4 overflow-x-auto border-b border-border px-4 sm:mx-0 sm:px-0">
       <div className="flex gap-4">
         {tabs.map((tab) => {
-          const href = `/admin/reports/${tab.slug}`;
-          const active = pathname === href;
+          const href = tab.slug ? `/admin/reports/${tab.slug}` : "/admin/reports";
+          const active = tab.slug ? pathname.startsWith(href) : pathname === href || pathname.startsWith("/admin/reports/day") || pathname.startsWith("/admin/reports/shift");
           return (
             <Link
               key={tab.slug}

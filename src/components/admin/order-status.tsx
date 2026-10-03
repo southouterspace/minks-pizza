@@ -1,15 +1,8 @@
-import type { orders } from "@/db";
 import { formatClock } from "@/lib/zoned";
-import {
-  minutesUntil,
-  PAYMENT_METHOD_LABEL,
-  STATUS_META,
-  type OrderStatus,
-} from "@/lib/order-workflow";
+import { minutesUntil, STATUS_META, type OrderStatus } from "@/lib/order-workflow";
+import { PAYMENT_LABEL, paymentState, type Totals } from "@/lib/orders";
 import { cn } from "@/lib/utils";
 import { Badge } from "@/components/ui/badge";
-
-type Order = typeof orders.$inferSelect;
 
 export function StatusBadge({ status }: { status: OrderStatus }) {
   const meta = STATUS_META[status];
@@ -20,30 +13,19 @@ export function StatusBadge({ status }: { status: OrderStatus }) {
   );
 }
 
-export function PaymentBadge({
-  status,
-  method,
-}: {
-  status: Order["paymentStatus"];
-  method: Order["paymentMethod"];
-}) {
-  if (status === "paid") {
-    return (
-      <Badge variant="outline" className="text-success!">
-        Paid{method ? ` · ${PAYMENT_METHOD_LABEL[method]}` : ""}
-      </Badge>
-    );
-  }
-  if (status === "refunded") {
-    return (
-      <Badge variant="outline" className="text-muted-foreground!">
-        Refunded
-      </Badge>
-    );
-  }
+const PAYMENT_TONE = {
+  paid: "text-success!",
+  partial: "text-warning!",
+  unpaid: "text-warning!",
+  refunded: "text-muted-foreground!",
+} as const;
+
+/** Derived from the tenders folded onto the order, never stored. */
+export function PaymentBadge({ order }: { order: Pick<Totals, "totalCents" | "paidCents" | "refundedCents"> }) {
+  const state = paymentState(order);
   return (
-    <Badge variant="outline" className="text-warning!">
-      Unpaid
+    <Badge variant="outline" className={PAYMENT_TONE[state]} data-testid="payment-badge">
+      {PAYMENT_LABEL[state]}
     </Badge>
   );
 }

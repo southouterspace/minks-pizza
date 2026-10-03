@@ -1,7 +1,7 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 import { Cake, Gift, Sparkles, Users } from "lucide-react";
-import { getSettings } from "@/lib/orders";
+import { getSettings } from "@/lib/settings-server";
 import { getRefreshedCurrentMember } from "@/lib/member-auth";
 import {
   LEDGER_KIND_RULES,

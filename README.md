@@ -115,19 +115,6 @@ the board numbers and history dates, the clock that promised times are
 shown in, and the day rewards promotions and birthdays fall on. Default:
 Central.
 
-##### Deploying the order-management schema
-
-Additive: two enums, an `order_events` table, five nullable `orders` columns
-and `store_settings.timezone` with a default. Migrate before deploying the
-code:
-
-```bash
-MINKS_DATABASE_URL=<production url> npm run db:push
-```
-
-Orders placed before the migration have no promised time and no audit rows;
-their timeline starts with a synthetic "Order placed".
-
 #### Operator accounts
 
 `/admin/setup` is a **first-run-only** page: it creates the very first operator
@@ -195,18 +182,9 @@ size, flagged below the minimum margin in Settings. Each exports to CSV.
 
 ##### Deploying the inventory schema
 
-Additive: new enums and tables, nullable or defaulted columns on
-`modifier_groups`, `modifiers`, `order_items` and `store_settings`. Migrate
-before deploying the code, then mark the size and topping groups:
-
-```bash
-MINKS_DATABASE_URL=<production url> npm run db:push
-```
-
-```sql
-update modifier_groups set kind = 'size'     where name ilike 'size%';
-update modifier_groups set kind = 'toppings' where name ilike '%topping%';
-```
+Part of the front-of-house POS release: see [Deploying](#deploying). The
+migration file marks every group's role (size, crust, topping…) from its
+name, which is what the recipes and the inventory depletion key on.
 
 `npx tsx --env-file=<env file> scripts/seed-inventory.ts` adds a starter set of
 ingredients and per-size recipes for the seeded menu. It is idempotent and
@@ -266,24 +244,95 @@ The display polls `GET /api/kds` every 4 seconds. Taps update the screen
 immediately and are sent to `POST /api/kds`. Each action is idempotent, so
 a double tap or a retry is harmless.
 
-#### Deploying the KDS schema
+### Front-of-house POS (`/pos`)
 
-The KDS adds columns, so **migrate the production database before deploying
-this code**. Checkout reads `categories.station`, so the old schema breaks
-ordering.
+`/pos` is a full-screen, touch-first counter screen for walk-in, phone and
+some dine-in orders, on a tablet or a 1366×768 laptop. It shares one order
+seam with the storefront and the KDS. Like `/kitchen`, the device signs in as
+an operator; staff then unlock it with their PIN (4 to 6 digits, the same PIN as the time clock), and it locks again
+after `store_settings.pos_lock_seconds` of idle time (or after each order, a
+per-device toggle in the staff menu).
 
-```bash
-MINKS_DATABASE_URL=<production url> npm run db:push   # additive: new enum + columns with defaults
-```
+- **Order entry.** Pick Walk-in, Phone, Delivery or Dine-in. Phone and
+  Delivery start on the caller's number, which brings up their name, saved
+  addresses and last orders with one-tap Reorder (re-priced today; 86'd
+  items are listed, not added). Pizzas open the builder: size, crust, then a
+  toppings grid where a tap cycles regular, extra, light and off, Whole /
+  Left ½ / Right ½ picks the half, and a long-press moves one topping
+  between halves. Totals come from `priceLine` on the device, so entry never
+  waits on the network. A walk-in 2 × half-and-half large paid with a $50 is
+  11 taps.
+- **Scheduling.** Phone and delivery orders go ASAP or Later. Later takes a
+  ready time on the store's clock and fires the order to the kitchen that
+  many quote minutes earlier; until then it is `held` and off the KDS.
+  Dine-in checks can be sent or held and fired line by line.
+- **Paying.** Cash (exact, $20, $50, $100 or any amount, with change due),
+  card on the separate terminal (amount, tip, optional last 4), several
+  tenders in a row, or pay later. A check splits 2 to 4 ways evenly, or by
+  item: tap which guests had each line, and a line nobody is tapped on (one
+  pizza for the table) is shared by everyone. Shares come from `allocate`,
+  so they are deterministic and sum to the cent. Split by item on the order
+  instead moves whole lines to a new check on the same kitchen ticket.
+- **Open orders.** Every open order across channels, searchable by name,
+  phone or number, with lanes for held, in kitchen, ready and unpaid. An
+  order opens to collect payment, add to a dine-in check, fire held lines,
+  void, comp, discount, split, refund, cancel, hand off, reprint the
+  receipt and read its activity log. `/pos?order=<id>` opens one directly.
+- **Shift.** Open with a starting bank; no sale, paid in and paid out from
+  the staff menu; close with counted cash, the card batch total and declared
+  cash tips, which shows expected vs counted and links to the Z report.
+- **Offline.** A new order is saved in the browser (IndexedDB) before it is
+  sent. If it can't reach the server it shows as NOT SENT in red, prints a
+  paper kitchen ticket, and replays automatically; a replay can't double-ring
+  because the order id is minted on the device. See
+  [Known limits](#known-limits) for what still needs the connection.
 
-Then route the existing categories (or do it in Menu → Edit):
+Receipts and fallback tickets print through the browser at 80mm width.
 
-```sql
-update categories set station = 'pizza'   where name ilike '%pizza%' or name ilike 'build your own%';
-update categories set station = 'counter' where name ilike '%drink%' or name ilike '%beverage%';
-```
+**Rules the server enforces.**
 
-Orders placed before the migration default to the Kitchen station.
+- **Staff and PINs.** A PIN switch sets a short `minks_staff` cookie. PINs
+  are stored as `HMAC-SHA256(SESSION_SECRET, "pin:" + pin)` in hex, so rotating
+  `SESSION_SECRET` means re-setting every PIN. Five wrong PINs in five
+  minutes lock the device for the rest of the window. Staff, their PINs and
+  who may use the POS are managed under **Staff → Employees** (`pos_access`:
+  none, cashier or manager; a job role is separate). `npm run db:seed` adds
+  Morgan Manager (PIN 1234) and Casey Cashier (PIN 5678).
+- **Manager approval.** Voiding a line already sent to the kitchen, comps,
+  discounts over `discount_approval_cents`, refunds, no-sale, paid-out and
+  shift close need a manager. The server checks at the moment of the action;
+  a cashier gets `needs_manager`, the terminal pops a manager PIN pad and
+  resends the same request with the manager's PIN. Who acted and who
+  approved are stored on the fact row.
+- **Money.** Tenders (cash, card on the external terminal, other, or the
+  marketplace that collected it), refunds, and the discount rows in
+  `order_discounts` (deals, rewards and staff comps) are rows. `orders.subtotal/discount/tax/total/paid/
+  refunded_cents` are folds over them, written only by the fold statement
+  that ends every write; payment state (`unpaid / partial / paid / refunded`)
+  is derived, never stored. Tax uses `orders.tax_rate_bps`, the store rate
+  snapshotted when the order was placed, so changing the store rate never
+  re-taxes an older order that is paid or edited later. A marketplace order
+  keeps the totals its platform sent; only its payments fold. Once anything
+  has been paid, discounts and comps are locked: money goes back as a refund.
+- **Halves.** Each topping on a line carries `placement` (whole, left,
+  right) and `amount` (regular, extra, light, none). Placement is allowed
+  only in sauce, cheese and topping groups (`modifier_groups.role`). The
+  half rule is `store_settings.half_topping_rule`: `average` (also what
+  "half price per half topping" works out to) or `highest`. A Large Cheese
+  ($16.99) with Pepperoni ($1.75) on the left and Mushrooms ($1.50) on the
+  right is $18.62 under `average` and $18.74 under `highest`.
+- **Scheduled and held orders.** An order with a fire time is `held` and
+  stays off the KDS until a KDS or POS board poll fires it. Kitchen status
+  is derived from the line stamps (fired, in the oven, done) by the fold
+  that ends every write, and each move it makes is logged to `order_events`
+  with who caused it: the customer, the scheduler, the kitchen display's
+  operator, or the employee at the till and the manager who approved.
+- **Replays.** Every POS write carries client-minted UUIDs and is one
+  convergent `db.batch`, so a retried submit, tender or void lands once.
+
+Wire API: `POST /api/pos/orders` (the replayable submit), `GET
+/api/pos/menu`, `GET /api/pos/customers?phone=`, `GET /api/pos/board`; the
+interactive verbs are server actions in `src/app/pos/actions.ts`.
 
 ### Promotions
 
@@ -350,27 +399,6 @@ if they ever differ. Limits hold when checkouts race: the last use goes to
 exactly one order and the other customer reads "PIZZA10 was just fully
 redeemed — your total is now $X."
 
-#### Deploying the promotions schema
-
-Additive: three enums, the `promotions`, `promotion_codes` and
-`order_discounts` tables, the generated `orders.customer_key` and a
-`discount` value on `order_event_type`. `orders.discount_cents` comes with
-the rewards schema. Checkout reads the new tables, so migrate before
-deploying the code, either with a push:
-
-```bash
-MINKS_DATABASE_URL=<production url> npm run db:push
-```
-
-or by running `migrations/2026-10-03-promotions.sql`, which also backfills
-the ledger: each earlier order with a reward discount gets a `loyalty` row in
-`order_discounts`, so `discount_cents` stays the sum of an order's rows. After
-a plain `db:push`, run the backfill statement at the end of that file once.
-
-`orders.customer_key` (the phone's last ten digits, which promotion limits
-count against) is a generated column, so Postgres fills it for existing
-orders during the same migration.
-
 #### Promotions and rewards together
 
 A member's reward stacks with deals. Deals apply first, and the reward comes
@@ -419,22 +447,6 @@ fail the whole order transaction. `npm run loyalty:audit` confirms every
 balance and lifetime total matches the ledger, and `npm run e2e:loyalty`
 runs the end-to-end scenarios against a dev server on a test database.
 
-#### Deploying the rewards schema
-
-Checkout reads the new columns, so **migrate production before deploying**:
-
-```bash
-MINKS_DATABASE_URL=<production url> npm run db:push   # additive: new tables, enum and order columns with defaults
-```
-
-Production has no loyalty rows yet, so the push needs no data migration. A
-database that ran an earlier build of this branch has `referral` ledger rows
-and restores stored as `adjust`. Convert those by idempotency-key prefix
-(`referral:referrer:` to `referrer_bonus`, `referral:referee:` to
-`referee_bonus`, `restore:` to `restore`) before pushing, then recompute
-`lifetime_points` from the lifetime-earning kinds. `npm run loyalty:audit`
-checks both the balance and the lifetime total afterwards.
-
 ### Staff: scheduling and time clock
 
 Employees are not operators. They never sign in to the admin. Each one gets
@@ -481,18 +493,6 @@ seconds after each confirmation. The tablet never holds an employee session:
 the PIN is sent with every request. A double tap or a second tablet can't
 open two punches, because the database allows one open punch per employee.
 
-#### Deploying the staff schema
-
-The staff tables and settings columns are additive, so migrate before
-deploying this code:
-
-```bash
-MINKS_DATABASE_URL=<production url> npm run db:push   # new enums and tables, settings columns with defaults
-```
-
-Then open **Settings → Staff & payroll** and set the store timezone. It
-defaults to America/Chicago, and every shift, day and payroll week uses it.
-
 ### Customer (`/`)
 
 Menu browsing with category navigation → item customization dialog (sizes,
@@ -504,6 +504,143 @@ a live status tracker.
 All pricing is authoritative server-side: the cart submits only item/modifier
 ids, and the server re-validates availability, modifier rules, delivery
 minimums, and recomputes every price at order time.
+
+## Deploying
+
+Every schema change is additive except where a dated file in `migrations/`
+says otherwise. The rule for a production release: run the SQL file named
+below for the release, then `npm run db:push` for everything additive, then
+deploy the code. `npm run db:migrate -- <file>` runs one SQL file over Neon's
+HTTP driver (`scripts/run-migration.ts`), so it works where `psql` cannot
+reach the database; each file is one idempotent `DO` block and running it
+twice is a no-op.
+
+### This release: front-of-house POS and topping inventory
+
+```bash
+MINKS_DATABASE_URL=<production url> npm run db:migrate -- migrations/2026-10-03-pos.sql
+MINKS_DATABASE_URL=<production url> npm run db:push      # additive: inventory tables, topping and portion settings
+MINKS_DATABASE_URL=<production url> npm run db:seed      # optional: adds the demo POS staff on a store with none
+npx tsx --env-file=<env file> scripts/seed-inventory.ts  # optional: starter ingredients and recipes for the seeded menu
+```
+
+The file is one idempotent `DO` block: it takes a database at the promotions
+schema, at the earlier POS schema (the same file as shipped before PR #17),
+or at PR #17's schema, to this release's schema without losing a row, and a
+second run is a no-op. What it does:
+
+- `order_status` loses `confirmed` (existing rows and audit rows become
+  `new`) and gains `held`; `order_type` gains `dine_in`; `order_source` gains
+  `walk_in` and `phone`.
+- `payment_status` and `payment_method` go away. Each order recorded as paid
+  becomes one payment tender for its total (card → `card_external`), dated
+  by its "payment recorded" event, and `orders.paid_cents` is set to match.
+  The file refuses to run while an order is `refunded`, because there is no
+  refund amount on record to convert; record that refund as a tender first.
+- `modifier_groups.role` (size, crust, sauce, cheese, topping, option) is
+  set from each group's name, or from PR #17's `kind` where that column
+  exists (size → size, toppings → topping, choice → crust or option by
+  name), and `kind` is dropped: it was a projection of role.
+- New: `tenders`, `drawer_sessions`, `drawer_events`, `customers` (backfilled
+  from every phone on an order), `customer_addresses`, `pin_attempts`;
+  `employees.pos_access` (backfilled: manager or shift lead → manager,
+  cashier → cashier, else none); `orders.tax_rate_bps` (backfilled from each
+  order's own tax); `order_items.line_uid`, `fired_at` (backfilled to the
+  placed time) and the void columns; old modifier snapshots (names only, or
+  PR #17's id + placement + portion) become `LineModifier`s with their kind,
+  role, id, placement and amount; `order_events` and `order_discounts` gain
+  the POS actor columns; the POS settings columns with their defaults.
+
+`db:push` then adds the inventory tables (`ingredients`, `ingredient_packs`,
+`recipe_lines`, `inventory_counts`, `inventory_moves`, `stock_outs`),
+`modifiers.extra_price_delta_cents`, `order_items.cost_cents` and the topping
+price, portion and margin settings, all nullable or defaulted. One known
+non-convergence: `recipe_lines_owner_size_ingredient` is an expression index
+(`coalesce(...)` over the nullable owner columns) that drizzle-kit 0.31 cannot
+read back, so every `db:push` drops and recreates it. That is the only
+statement a second push runs; it is harmless and prompts for nothing.
+
+Rehearsed on two branches of production shape (before and after the earlier
+POS file): orders, items, groups and modifier names are unchanged, order and
+line totals are unchanged, no snapshot is left unconverted, the push asks no
+question, and a second migration run changes nothing.
+
+### Earlier releases, in order
+
+Each of these is already applied to production; they are listed so a fresh
+database restored from an older backup can be brought forward.
+
+1. **Order management, KDS, rewards, staff**: additive, `npm run db:push`.
+   A database that ran an early build of the rewards branch has `referral`
+   ledger rows and restores stored as `adjust`; convert those by
+   idempotency-key prefix (`referral:referrer:` to `referrer_bonus`,
+   `referral:referee:` to `referee_bonus`, `restore:` to `restore`) before
+   pushing, recompute `lifetime_points`, and check with `npm run loyalty:audit`.
+   After the KDS push, route the categories once (or do it in Menu → Edit):
+
+   ```sql
+   update categories set station = 'pizza'   where name ilike '%pizza%' or name ilike 'build your own%';
+   update categories set station = 'counter' where name ilike '%drink%' or name ilike '%beverage%';
+   ```
+
+   Then open **Settings → Staff & payroll** and set the store timezone.
+2. **Promotions**: `migrations/2026-10-03-promotions.sql` (plain DDL plus a
+   backfill: each earlier order with a reward discount gets a `loyalty` row
+   in `order_discounts`). After a plain `db:push` instead, run that file's
+   last statement once.
+3. **Delivery integrations** (#12): additive, `npm run db:push`: three enums,
+   `orders.source`, `source_order_id` and `source_display_id`, and the
+   `courier_deliveries` and `integration_events` tables. Orders placed
+   before it read as `web`.
+
+## Tests
+
+Each script's header says what it covers and what it expects. The `e2e-*`
+scripts drive a running `npm run dev` (port 3000, or set `E2E_BASE_URL`) and
+mutate the database in `.env.local`, so point it at a test branch and run
+them one at a time. They share `scripts/e2e/harness.ts`: `check(label,
+actual, expected)` against a literal, `eventually`, operator sign-in, the
+menu fixtures, `moveOrder` (the kitchen's stamps through the fold) and the
+exit code.
+
+```bash
+npx tsc --noEmit && npm run lint && npm run build
+npm test                 # test:unit then test:domain
+npm run test:unit        # node:test suites (delivery adapters, loyalty, marketplace) + the pure scripts:
+                         # test-pos-client, test-order-workflow, test-promotions, test-timeclock
+npm run test:domain      # test-pos-domain: pricing, folds, approvals, splits, reports; uses .env.local
+npx tsx --env-file=.env.local scripts/e2e-pos.ts           # every terminal flow
+npx tsx --env-file=.env.local scripts/e2e-pos-api.ts
+npx tsx --env-file=.env.local scripts/e2e-kds.ts
+npx tsx --env-file=.env.local scripts/e2e-backoffice.ts    # settings, staff, reports, inbox
+npx tsx --env-file=.env.local scripts/e2e-orders.ts        # board, history, detail, KDS recall
+npx tsx --env-file=.env.local scripts/e2e-promotions.ts
+npx tsx --env-file=.env.local scripts/e2e-timeclock.ts
+npm run e2e:loyalty
+npx tsx --env-file=.env.local scripts/e2e-operator.ts     # also e2e-customer, e2e-team, e2e-logo
+NODE_PATH=scripts/shims npx tsx --env-file=.env.local scripts/e2e-toppings.ts        # half-and-half toppings: dialog, cart, checkout, KDS
+NODE_PATH=scripts/shims npx tsx --env-file=.env.local scripts/e2e-recipes.ts         # ingredients, recipes, 86, settings
+NODE_PATH=scripts/shims npx tsx --env-file=.env.local scripts/e2e-inventory-ops.ts   # receive, count, waste
+NODE_PATH=scripts/shims npx tsx --env-file=.env.local scripts/e2e-reports.ts         # food cost, variance, topping mix, margins
+NODE_PATH=scripts/shims npx tsx --env-file=.env.local scripts/e2e-inventory-story.ts # the inventory day, end to end
+```
+
+## Known limits
+
+- **Offline is partial.** A new POS order survives a dropped connection and
+  replays, but the KDS needs the internet, so the printed paper ticket is the
+  kitchen's copy until it returns. Payments and changes to existing orders
+  need the connection too.
+- **No offline menu cache.** The terminal keeps the menu in memory, not in
+  IndexedDB. A terminal reloaded while offline has no menu.
+- **Storefront toppings are whole only.** Halves, extra and light are rung
+  in at the counter; the online cart sends whole, regular toppings.
+- **POS orders earn no points and get no deals.** Deals and rewards apply at
+  the online checkout; a phone number on a counter order creates the CRM
+  record only. Points promised at checkout are not adjusted by a later void
+  or comp at the till.
+- **No email.** There is no end-of-day report email and no customer email;
+  reports are on screen, printed or exported as CSV.
 
 ## Stripe readiness
 
@@ -526,9 +663,7 @@ marketplaces themselves still arrive on their tablets. The schema and
 partner agreement first. See `docs/delivery-platforms-research.md` for the
 API details and the reasoning.
 
-The schema changed, so run `npm run db:push` after pulling. The migration is
-additive: three new enums, `orders.source` and two id columns, and the
-`courier_deliveries` and `integration_events` tables.
+The schema for this feature is additive (see [Deploying](#deploying)).
 
 A provider appears in the orders inbox only when all of its required variables
 are set. Each active web delivery order then gets a "Request courier" button,

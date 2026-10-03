@@ -159,7 +159,7 @@ export default async function OrderHistoryPage({ searchParams }: PageProps<"/adm
                       <StatusBadge status={o.status} />
                     </TableCell>
                     <TableCell className="hidden sm:table-cell">
-                      <PaymentBadge status={o.paymentStatus} method={o.paymentMethod} />
+                      <PaymentBadge order={o} />
                     </TableCell>
                     <TableCell className="pr-4 text-right tabular-nums">
                       {formatCents(o.totalCents)}

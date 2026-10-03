@@ -4,7 +4,7 @@ import { formatPhone, tierFor } from "@/lib/loyalty";
 import { getLoyaltySettings } from "@/lib/loyalty-server";
 import { searchMembers } from "../queries";
 import { formatDateTime } from "@/components/admin/ui";
-import { getSettings } from "@/lib/orders";
+import { getSettings } from "@/lib/settings-server";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";

@@ -19,8 +19,8 @@ export function ruleSummary(
  * "Aug 13, 2:45 PM". Pass the store's zone for order times: the server
  * renders in UTC, which is nobody's wall clock.
  */
-export function formatDateTime(d: Date, timeZone?: string): string {
-  return d.toLocaleString("en-US", {
+export function formatDateTime(d: Date | string, timeZone?: string): string {
+  return new Date(d).toLocaleString("en-US", {
     month: "short",
     day: "numeric",
     hour: "numeric",

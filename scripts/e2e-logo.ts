@@ -6,15 +6,16 @@
  * Requires a running dev server and an existing operator account.
  */
 import { execFileSync } from "node:child_process";
-import { chromium } from "playwright";
+import { BASE, check, launchBrowser, run, SHOT_DIR, signIn } from "./e2e/harness";
 
-const BASE = process.env.E2E_BASE_URL ?? "http://localhost:3000";
-const SHOT_DIR = process.env.E2E_SHOT_DIR ?? "/tmp";
-const EMAIL = process.env.E2E_EMAIL ?? "owner@minks.example";
-const PASSWORD = process.env.E2E_PASSWORD ?? "pizza-test-1234";
+const OWNER = {
+  email: process.env.E2E_EMAIL ?? "owner@minks.example",
+  password: process.env.E2E_PASSWORD ?? "pizza-test-1234",
+  name: "Mink Operator",
+};
 const LOGO = process.env.E2E_LOGO ?? "/tmp/e2e-test-logo.png";
 
-async function main() {
+run(async () => {
   // Only generate the built-in fixture; an explicit E2E_LOGO is used as-is.
   if (!process.env.E2E_LOGO) {
     execFileSync("npx", ["tsx", "scripts/make-test-logo.ts", LOGO], {
@@ -22,20 +23,9 @@ async function main() {
     });
   }
 
-  const browser = await chromium.launch({
-    executablePath: process.env.CHROMIUM_PATH ?? "/opt/pw-browsers/chromium",
-  });
+  const browser = await launchBrowser();
   const page = await browser.newPage({ viewport: { width: 1280, height: 900 } });
-
-  // Sign in.
-  await page.goto(`${BASE}/admin/settings`, { waitUntil: "networkidle" });
-  if (page.url().includes("/admin/login")) {
-    await page.fill('input[name="email"]', EMAIL);
-    await page.fill('input[name="password"]', PASSWORD);
-    await page.click('button[type="submit"]');
-    await page.waitForURL(/\/admin$/, { timeout: 20_000 });
-    await page.goto(`${BASE}/admin/settings`, { waitUntil: "networkidle" });
-  }
+  await signIn(page, OWNER, "/admin/settings");
 
   // Upload: the file input is hidden behind the "Upload image" button.
   await page.waitForSelector("text=Logo");
@@ -60,22 +50,11 @@ async function main() {
   await page.goto(BASE, { waitUntil: "networkidle" });
   const headerLogo = page.locator('header img[alt]').first();
   await headerLogo.waitFor({ timeout: 15_000 });
-  const src = await headerLogo.getAttribute("src");
-  if (!src?.startsWith("/api/logo")) {
-    throw new Error(`storefront header not showing the logo: ${src?.slice(0, 60)}`);
-  }
-  // The asset route must actually serve the image bytes.
-  const assetRes = await page.request.get(new URL(src, BASE).toString());
-  if (!assetRes.ok() || !(assetRes.headers()["content-type"] ?? "").startsWith("image/")) {
-    throw new Error(`asset route failed: ${assetRes.status()}`);
-  }
+  const src = (await headerLogo.getAttribute("src")) ?? "";
+  check("the storefront header shows the uploaded logo", new URL(src, BASE).pathname, "/api/logo");
+  const asset = await page.request.get(new URL(src, BASE).toString());
+  check("the asset route serves the image", [asset.status(), asset.headers()["content-type"]], [200, "image/png"]);
   await page.screenshot({ path: `${SHOT_DIR}/logo-3-storefront.png` });
 
   await browser.close();
-  console.log("LOGO E2E PASSED — screenshots in", SHOT_DIR);
-}
-
-main().catch((err) => {
-  console.error(err);
-  process.exit(1);
 });

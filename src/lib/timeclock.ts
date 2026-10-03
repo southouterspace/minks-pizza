@@ -76,8 +76,6 @@ export type StaffRules = {
   earlyClockInMinutes: number | null;
 };
 
-export const DEFAULT_TIMEZONE = "America/Chicago";
-
 type NumericRules = Omit<StaffRules, "weekStartsOn">;
 
 const DEFAULT_NUMERIC_RULES = {

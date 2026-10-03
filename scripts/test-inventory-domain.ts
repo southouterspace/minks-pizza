@@ -13,8 +13,10 @@ import {
   recipeLineFromRow,
   resolveLines,
   type RecipeContext,
+  type UsageModifier,
 } from "../src/lib/recipes";
-import { describeChoice, selectionFactorBps, toppingPriceCents } from "../src/lib/toppings";
+import { describeChoice, priceLine, type LineModifier, type MenuItem, type PricingPolicy } from "../src/lib/pricing";
+import { selectionFactorBps } from "../src/lib/recipes";
 import { formatQty } from "../src/lib/units";
 
 let passed = 0;
@@ -38,41 +40,77 @@ test("formatQty: US kitchen units", () => {
   assert.equal(formatQty(1500, "each"), "1.5");
 });
 
-const half = { halfToppingPriceBps: 5000 };
+const half: PricingPolicy = { halfToppingRule: "average", halfToppingPriceBps: 5000, extraToppingBps: 20_000 };
+const pie: MenuItem = {
+  id: 1,
+  name: "Pie",
+  description: null,
+  basePriceCents: 1000,
+  isAvailable: true,
+  station: "pizza",
+  groups: [
+    {
+      id: 1,
+      name: "Toppings",
+      role: "topping",
+      minSelect: 0,
+      maxSelect: null,
+      modifiers: [
+        { id: 1, name: "Pepperoni", priceDeltaCents: 200, extraPriceDeltaCents: 300, isDefault: false, isAvailable: true },
+        { id: 2, name: "Mushrooms", priceDeltaCents: 175, extraPriceDeltaCents: null, isDefault: false, isAvailable: true },
+        { id: 3, name: "Olives", priceDeltaCents: 125, extraPriceDeltaCents: null, isDefault: false, isAvailable: true },
+      ],
+    },
+  ],
+};
+const charged = (modifierId: number, placement: "whole" | "left" | "right", amount: "light" | "regular" | "extra", policy = half) =>
+  priceLine(pie, [{ modifierId, placement, amount }], policy).modifiers[0].priceDeltaCents;
 
-test("toppingPriceCents: whole, half, extra, light", () => {
-  const pep = { priceDeltaCents: 200, extraPriceDeltaCents: 300 };
-  assert.equal(toppingPriceCents(pep, { placement: "whole", portion: "regular" }, half), 200);
-  assert.equal(toppingPriceCents(pep, { placement: "left", portion: "regular" }, half), 100);
-  assert.equal(toppingPriceCents(pep, { placement: "right", portion: "extra" }, half), 150);
-  assert.equal(toppingPriceCents(pep, { placement: "whole", portion: "extra" }, half), 300);
-  assert.equal(toppingPriceCents(pep, { placement: "whole", portion: "light" }, half), 200);
-  assert.equal(toppingPriceCents(pep, { placement: "left", portion: "light" }, half), 100);
+test("topping price: whole, half, extra at the menu's extra price, light", () => {
+  assert.equal(charged(1, "whole", "regular"), 200);
+  assert.equal(charged(1, "left", "regular"), 100);
+  assert.equal(charged(1, "right", "extra"), 150);
+  assert.equal(charged(1, "whole", "extra"), 300);
+  assert.equal(charged(1, "whole", "light"), 200);
+  assert.equal(charged(1, "left", "light"), 100);
 });
 
-test("toppingPriceCents: odd cents round half up, other half shares", () => {
-  const mush = { priceDeltaCents: 175, extraPriceDeltaCents: null };
-  assert.equal(toppingPriceCents(mush, { placement: "left", portion: "regular" }, half), 88);
-  assert.equal(toppingPriceCents(mush, { placement: "left", portion: "regular" }, { halfToppingPriceBps: 6000 }), 105);
-  assert.equal(toppingPriceCents({ priceDeltaCents: 125, extraPriceDeltaCents: null }, { placement: "right", portion: "regular" }, half), 63);
-  assert.equal(toppingPriceCents(mush, { placement: "whole", portion: "extra" }, half), 175);
+test("topping price: odd cents round half up, other half shares, extra without a menu price uses the multiplier", () => {
+  assert.equal(charged(2, "left", "regular"), 88);
+  assert.equal(charged(2, "left", "regular", { ...half, halfToppingPriceBps: 6000 }), 105);
+  assert.equal(charged(3, "right", "regular"), 63);
+  assert.equal(charged(2, "whole", "extra"), 350);
+  assert.equal(priceLine(pie, [{ modifierId: 1, placement: "left", amount: "extra" }, { modifierId: 2, placement: "right", amount: "regular" }], half).unitPriceCents, 1000 + 150 + 88);
 });
 
 const portions = { halfPortionBps: 5000, lightPortionBps: 5000, extraPortionBps: 15000 };
 
 test("selectionFactorBps", () => {
-  assert.equal(selectionFactorBps({ placement: "whole", portion: "regular" }, portions), 10000);
-  assert.equal(selectionFactorBps({ placement: "left", portion: "regular" }, portions), 5000);
-  assert.equal(selectionFactorBps({ placement: "whole", portion: "extra" }, portions), 15000);
-  assert.equal(selectionFactorBps({ placement: "right", portion: "extra" }, portions), 7500);
-  assert.equal(selectionFactorBps({ placement: "left", portion: "light" }, portions), 2500);
+  assert.equal(selectionFactorBps({ placement: "whole", amount: "regular" }, portions), 10000);
+  assert.equal(selectionFactorBps({ placement: "left", amount: "regular" }, portions), 5000);
+  assert.equal(selectionFactorBps({ placement: "whole", amount: "extra" }, portions), 15000);
+  assert.equal(selectionFactorBps({ placement: "right", amount: "extra" }, portions), 7500);
+  assert.equal(selectionFactorBps({ placement: "left", amount: "light" }, portions), 2500);
+  assert.equal(selectionFactorBps({ placement: "whole", amount: "none" }, portions), 0);
+});
+
+const snap = (modifierName: string, placement: "whole" | "left" | "right", amount: "light" | "regular" | "extra" | "none"): LineModifier => ({
+  kind: "placed",
+  modifierId: 1,
+  role: "topping",
+  groupName: "Toppings",
+  modifierName,
+  priceDeltaCents: 0,
+  placement,
+  amount,
 });
 
 test("describeChoice", () => {
-  assert.equal(describeChoice("Pepperoni", {}), "Pepperoni");
-  assert.equal(describeChoice("Pepperoni", { placement: "whole", portion: "regular" }), "Pepperoni");
-  assert.equal(describeChoice("Pepperoni", { placement: "left", portion: "extra" }), "Pepperoni (left half, extra)");
-  assert.equal(describeChoice("Mushrooms", { portion: "light" }), "Mushrooms (light)");
+  assert.equal(describeChoice({ kind: "option", modifierId: 1, role: "size", groupName: "Size", modifierName: "Large", priceDeltaCents: 0 }), "Large");
+  assert.equal(describeChoice(snap("Pepperoni", "whole", "regular")), "Pepperoni");
+  assert.equal(describeChoice(snap("Pepperoni", "left", "extra")), "Pepperoni (left half, extra)");
+  assert.equal(describeChoice(snap("Mushrooms", "whole", "light")), "Mushrooms (light)");
+  assert.equal(describeChoice(snap("Onions", "whole", "none")), "No Onions");
 });
 
 const OZ = 28350;
@@ -100,6 +138,13 @@ const book = buildRecipeBook(
   ].map(recipeLineFromRow),
 );
 const ctx: RecipeContext = { book, sizeModifierIds: new Set([MEDIUM, LARGE]), settings: portions };
+const opt = (modifierId: number | null): UsageModifier => ({ kind: "option", modifierId });
+const top = (modifierId: number, placement: "whole" | "left" | "right", amount: "light" | "regular" | "extra"): UsageModifier => ({
+  kind: "placed",
+  modifierId,
+  placement,
+  amount,
+});
 
 test("resolveLines: size line beats the size-less line, and only for that size", () => {
   assert.deepEqual(
@@ -120,9 +165,9 @@ test("the issue's pizza: Large, pepperoni on the left, extra cheese", () => {
     menuItemId: CHEESE_PIZZA,
     quantity: 1,
     modifiers: [
-      { modifierId: LARGE },
-      { modifierId: PEPPERONI, placement: "left" as const, portion: "regular" as const },
-      { modifierId: EXTRA_CHEESE },
+      opt(LARGE),
+      top(PEPPERONI, "left", "regular"),
+      opt(EXTRA_CHEESE),
     ],
   };
   assert.deepEqual(
@@ -137,7 +182,7 @@ test("the issue's pizza: Large, pepperoni on the left, extra cheese", () => {
 
 test("portion and placement scale only the modifier's recipe", () => {
   const usage = orderUsage(
-    [{ menuItemId: CHEESE_PIZZA, quantity: 1, modifiers: [{ modifierId: LARGE }, { modifierId: PEPPERONI, placement: "right", portion: "extra" }] }],
+    [{ menuItemId: CHEESE_PIZZA, quantity: 1, modifiers: [opt(LARGE), top(PEPPERONI, "right", "extra")] }],
     ctx,
   );
   assert.equal(usage.get(PEP), 63788);
@@ -145,20 +190,20 @@ test("portion and placement scale only the modifier's recipe", () => {
 });
 
 test("removals clamp at zero per line and never credit another line", () => {
-  const noOnions = { menuItemId: CHEESE_PIZZA, quantity: 1, modifiers: [{ modifierId: MEDIUM }, { modifierId: NO_ONIONS }] };
+  const noOnions = { menuItemId: CHEESE_PIZZA, quantity: 1, modifiers: [opt(MEDIUM), opt(NO_ONIONS)] };
   assert.equal(orderLineUsage(noOnions, ctx).has(ONION), false);
-  const doubleRemoval = { ...noOnions, modifiers: [{ modifierId: MEDIUM }, { modifierId: NO_ONIONS }, { modifierId: NO_ONIONS }] };
+  const doubleRemoval = { ...noOnions, modifiers: [opt(MEDIUM), opt(NO_ONIONS), opt(NO_ONIONS)] };
   assert.equal(orderLineUsage(doubleRemoval, ctx).has(ONION), false);
-  const plain = { menuItemId: CHEESE_PIZZA, quantity: 1, modifiers: [{ modifierId: MEDIUM }] };
+  const plain = { menuItemId: CHEESE_PIZZA, quantity: 1, modifiers: [opt(MEDIUM)] };
   assert.equal(orderUsage([doubleRemoval, plain], ctx).get(ONION), 28350);
 });
 
 test("a line without a size uses the size-less lines only", () => {
   assert.deepEqual(
-    [...orderUsage([{ menuItemId: CHEESE_PIZZA, quantity: 1, modifiers: [{ modifierId: PEPPERONI }] }], ctx)],
+    [...orderUsage([{ menuItemId: CHEESE_PIZZA, quantity: 1, modifiers: [opt(PEPPERONI)] }], ctx)],
     [[MOZZ, 170100], [SAUCE, 113400], [ONION, 28350]],
   );
-  assert.deepEqual([...orderUsage([{ menuItemId: null, quantity: 3, modifiers: [{ groupName: "x" } as { modifierId?: number }] }], ctx)], []);
+  assert.deepEqual([...orderUsage([{ menuItemId: null, quantity: 3, modifiers: [opt(null)] }], ctx)], []);
 });
 
 test("costs: millicents per base unit, rounded once", () => {

@@ -21,14 +21,33 @@ import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { Textarea } from "@/components/ui/textarea";
 import { cn } from "@/lib/utils";
 import {
-  DEFAULT_CHOICE,
-  PORTION_LABEL,
-  toppingPriceCents,
+  AMOUNT_LABEL,
+  isPlaceable,
+  priceLine,
+  PricingError,
+  type Amount,
+  type MenuItem,
   type Placement,
-  type Portion,
-  type ToppingChoice,
-} from "@/lib/toppings";
+  type Selection,
+} from "@/lib/pricing";
 import { PizzaGlyph } from "@/components/pizza-glyph";
+
+type ToppingChoice = { placement: Placement; amount: Amount };
+const DEFAULT_CHOICE: ToppingChoice = { placement: "whole", amount: "regular" };
+const AMOUNT_OPTIONS: Amount[] = ["light", "regular", "extra"];
+
+/** The dialog prices with the same function checkout does, over the live menu. */
+function pricingItem(item: MenuItemView, relaxed: boolean): MenuItem {
+  return {
+    id: item.id,
+    name: item.name,
+    description: item.description,
+    basePriceCents: item.basePriceCents,
+    isAvailable: true,
+    station: "kitchen",
+    groups: relaxed ? item.modifierGroups.map((g) => ({ ...g, minSelect: 0, maxSelect: null })) : item.modifierGroups,
+  };
+}
 
 /** Row shell shared by the radio and checkbox variants of an option. */
 const optionRowClass = (checked: boolean) =>
@@ -39,10 +58,10 @@ const optionRowClass = (checked: boolean) =>
       : "border-border hover:border-foreground/30",
   );
 
-function selectionPrice(group: ModifierGroupView, mod: ModifierView, choice: ToppingChoice): number {
-  return group.kind === "toppings"
-    ? toppingPriceCents(mod, choice, group.pricing)
-    : mod.priceDeltaCents;
+/** What one choice adds on its own, for the row's price hint. */
+function selectionPrice(item: MenuItemView, mod: ModifierView, choice: ToppingChoice): number {
+  const priced = priceLine(pricingItem(item, true), [{ modifierId: mod.id, ...choice }], item.policy);
+  return priced.unitPriceCents - item.basePriceCents;
 }
 
 const PLACEMENT_OPTIONS: { value: Placement; label: string }[] = [
@@ -108,8 +127,6 @@ function ToppingOption({
   onToggle: () => void;
   onChoice: (patch: Partial<ToppingChoice>) => void;
 }) {
-  const portions: Portion[] =
-    mod.extraPriceDeltaCents === null ? ["light", "regular"] : ["light", "regular", "extra"];
   return (
     <div data-topping={mod.name} className={cn(optionRowClass(checked), "block p-0")}>
       <label className="flex cursor-pointer items-center justify-between gap-3 px-3.5 py-2.5">
@@ -139,9 +156,9 @@ function ToppingOption({
           />
           <Segmented
             label={`${mod.name} amount`}
-            value={choice.portion}
-            options={portions.map((p) => ({ value: p, label: PORTION_LABEL[p] }))}
-            onChange={(portion) => onChoice({ portion })}
+            value={choice.amount}
+            options={AMOUNT_OPTIONS.map((a) => ({ value: a, label: AMOUNT_LABEL[a] }))}
+            onChange={(amount) => onChoice({ amount })}
           />
         </div>
       ) : null}
@@ -215,28 +232,28 @@ export function ItemDialog({
       return current ? new Map(prev).set(modId, { ...current, ...patch }) : prev;
     });
 
-  const chosen: CartModifier[] = useMemo(
+  const selections: Selection[] = useMemo(
     () =>
       item.modifierGroups.flatMap((g) =>
         g.modifiers.flatMap((m) => {
           const choice = selected.get(m.id);
           if (!choice) return [];
-          return [
-            {
-              id: m.id,
-              groupName: g.name,
-              modifierName: m.name,
-              priceDeltaCents: selectionPrice(g, m, choice),
-              ...(g.kind === "toppings" ? choice : {}),
-            },
-          ];
+          return [{ modifierId: m.id, ...(isPlaceable(g.role) ? choice : DEFAULT_CHOICE) }];
         }),
       ),
     [item, selected],
   );
 
-  const unitPrice =
-    item.basePriceCents + chosen.reduce((n, m) => n + m.priceDeltaCents, 0);
+  const priced = useMemo(() => {
+    try {
+      return priceLine(pricingItem(item, true), selections, item.policy);
+    } catch (err) {
+      if (err instanceof PricingError) return { unitPriceCents: item.basePriceCents, modifiers: [] as CartModifier[] };
+      throw err;
+    }
+  }, [item, selections]);
+  const chosen = priced.modifiers;
+  const unitPrice = priced.unitPriceCents;
 
   const violations = item.modifierGroups.filter((g) => {
     const count = g.modifiers.filter((m) => selected.has(m.id)).length;
@@ -249,6 +266,7 @@ export function ItemDialog({
       itemName: item.name,
       unitPriceCents: unitPrice,
       quantity,
+      selections,
       modifiers: chosen,
       notes: notes.trim() || undefined,
     });
@@ -282,7 +300,7 @@ export function ItemDialog({
                 </span>
               </legend>
 
-              {group.kind === "toppings" ? (
+              {isPlaceable(group.role) ? (
                 <div className="mt-3 grid gap-2">
                   {group.modifiers.map((mod) => {
                     const choice = selected.get(mod.id);
@@ -292,7 +310,7 @@ export function ItemDialog({
                         mod={mod}
                         checked={choice !== undefined}
                         choice={choice ?? DEFAULT_CHOICE}
-                        priceCents={selectionPrice(group, mod, choice ?? DEFAULT_CHOICE)}
+                        priceCents={selectionPrice(item, mod, choice ?? DEFAULT_CHOICE)}
                         onToggle={() => toggle(group.id, mod.id)}
                         onChoice={(patch) => setChoice(mod.id, patch)}
                       />

@@ -5,6 +5,7 @@ import Link from "next/link";
 import { saveEmployee, type StaffFormState } from "@/app/admin/staff/actions";
 import { JOB_ROLES, PIN_LENGTH, PIN_PATTERN, ROLE_LABEL, type JobRole, type WeeklyAvailability } from "@/lib/timeclock";
 import { centsToDollars } from "@/lib/money";
+import { POS_ACCESS_LABEL, POS_ACCESS_LEVELS, type PosAccess } from "@/lib/pos-access";
 import { DAY_NAMES, WEEKDAYS, type Weekday } from "@/lib/zoned";
 import { Button, buttonVariants } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -29,6 +30,7 @@ export type EmployeeFormValues = {
   hiredOn: string | null;
   notes: string | null;
   hasPin: boolean;
+  posAccess: PosAccess;
   roles: { role: JobRole; hourlyRateCents: number; isPrimary: boolean }[];
   availability: WeeklyAvailability;
 };
@@ -196,8 +198,22 @@ export function EmployeeForm({ employee }: { employee: EmployeeFormValues }) {
       </FieldSet>
 
       <FieldSet>
-        <FieldLegend className={legend}>Time clock PIN</FieldLegend>
+        <FieldLegend className={legend}>PIN and point of sale</FieldLegend>
         <FieldGroup>
+          <Field className="sm:max-w-xs">
+            <FieldLabel htmlFor="e-pos-access">POS access</FieldLabel>
+            <NativeSelect id="e-pos-access" name="posAccess" defaultValue={employee.posAccess} data-testid="pos-access">
+              {POS_ACCESS_LEVELS.map((level) => (
+                <NativeSelectOption key={level} value={level}>
+                  {POS_ACCESS_LABEL[level]}
+                </NativeSelectOption>
+              ))}
+            </NativeSelect>
+            <FieldDescription>
+              Cashiers ring in orders and take payment with their PIN; managers also approve voids, comps, refunds and
+              drawer opens. This is separate from their job roles above.
+            </FieldDescription>
+          </Field>
           <Field className="sm:max-w-xs">
             <FieldLabel htmlFor="e-pin">{employee.hasPin ? "New PIN" : "PIN"}</FieldLabel>
             <Input
@@ -211,7 +227,7 @@ export function EmployeeForm({ employee }: { employee: EmployeeFormValues }) {
               className="tabular-nums"
             />
             <FieldDescription>
-              {employee.hasPin ? "A PIN is set. Enter a new one to replace it." : "Without a PIN they can't use the clock."}{" "}
+              {employee.hasPin ? "A PIN is set. Enter a new one to replace it." : "Without a PIN they can't use the clock or the POS."}{" "}
               PINs are stored hashed, so they are shown only once.
             </FieldDescription>
           </Field>

@@ -17,7 +17,7 @@ import {
   seedDefaultRewards,
 } from "@/lib/loyalty-server";
 import { parseDollars } from "@/lib/money";
-import { getSettings } from "@/lib/orders";
+import { getSettings } from "@/lib/settings-server";
 import { rejected, type LoyaltyFormState } from "./form-state";
 
 // Each form's schema is keyed by the form's own field names, so `rejected`

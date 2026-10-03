@@ -53,7 +53,9 @@ describe("externalOrderRows", () => {
         deliveryFeeCents: 0,
         tipCents: 500,
         totalCents: 5230,
-        paymentStatus: "paid",
+        status: "held",
+        taxRateBps: 874,
+        paidCents: 5230,
       },
       items: [
         {
@@ -62,7 +64,9 @@ describe("externalOrderRows", () => {
           quantity: 2,
           unitPriceCents: 1800,
           lineTotalCents: 3600,
-          modifiers: [{ groupName: "Crust", modifierName: "Thin", priceDeltaCents: 0 }],
+          modifiers: [
+            { kind: "option", modifierId: null, role: "option", groupName: "Crust", modifierName: "Thin", priceDeltaCents: 0 },
+          ],
           notes: null,
           station: "pizza",
         },
@@ -87,6 +91,13 @@ describe("externalOrderRows", () => {
           station: "kitchen",
         },
       ],
+      tender: { direction: "payment", method: "marketplace", amountCents: 5230, tipCents: 0 },
     });
+  });
+
+  it("keeps the platform's tax when it is not a whole number of basis points", () => {
+    const rows = externalOrderRows({ ...ORDER, subtotalCents: 3724, taxCents: 307 }, new Map());
+    assert.equal(rows.order.taxCents, 307);
+    assert.equal(rows.order.taxRateBps, 824);
   });
 });
