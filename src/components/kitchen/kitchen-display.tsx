@@ -2,7 +2,6 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
-import { useRouter } from "next/navigation";
 import { toast } from "sonner";
 import {
   AArrowDown,
@@ -31,7 +30,9 @@ import {
   type KdsSnapshot,
   type KdsView,
 } from "@/lib/kds";
-import { formatStoreTime } from "@/lib/store-time";
+import { formatStoreClock, formatStoreTime } from "@/lib/store-time";
+import { usePersistentPrefs } from "@/lib/use-persistent-prefs";
+import { useNow, useServerSnapshot } from "@/lib/use-server-snapshot";
 import { cn } from "@/lib/utils";
 import { SizeCrust, Ticket, TypeChip } from "./ticket";
 
@@ -56,24 +57,10 @@ type Prefs = { screen: Screen; sound: boolean; textSize: number; allDay: boolean
 const DEFAULT_PREFS: Prefs = { screen: "all", sound: true, textSize: 0, allDay: true };
 const PREFS_KEY = "minks:kds-prefs";
 
-function loadPrefs(): Prefs {
-  try {
-    const raw = window.localStorage.getItem(PREFS_KEY);
-    if (!raw) return DEFAULT_PREFS;
-    const p = { ...DEFAULT_PREFS, ...JSON.parse(raw) } as Prefs;
-    const screens: readonly string[] = [...KDS_VIEWS, "ready"];
-    return screens.includes(p.screen) ? p : { ...p, screen: "all" };
-  } catch {
-    return DEFAULT_PREFS;
-  }
-}
-
-function savePrefs(prefs: Prefs) {
-  try {
-    window.localStorage.setItem(PREFS_KEY, JSON.stringify(prefs));
-  } catch {
-    // Private mode or storage full: preferences just won't persist.
-  }
+/** A station removed since the prefs were saved falls back to All. */
+function knownScreen(p: Prefs): Prefs {
+  const screens: readonly string[] = [...KDS_VIEWS, "ready"];
+  return screens.includes(p.screen) ? p : { ...p, screen: "all" };
 }
 
 // --- sound -------------------------------------------------------------------
@@ -99,12 +86,9 @@ function chime(ctx: AudioContext) {
 // --- component ---------------------------------------------------------------
 
 export function KitchenDisplay({ initial, storeName, timeZone }: { initial: KdsSnapshot; storeName: string; timeZone: string }) {
-  const router = useRouter();
-  const [snapshot, setSnapshot] = useState(initial);
   const [offsetMs, setOffsetMs] = useState(() => Date.parse(initial.serverNow) - Date.now());
-  const [now, setNow] = useState(() => Date.now());
-  const [lastSync, setLastSync] = useState(() => Date.now());
-  const [prefs, setPrefs] = useState<Prefs>(DEFAULT_PREFS);
+  const now = useNow(1000);
+  const [prefs, updatePrefs] = usePersistentPrefs(PREFS_KEY, DEFAULT_PREFS, knownScreen);
   const [started, setStarted] = useState(false);
   const [selected, setSelected] = useState(0);
   const [recallOpen, setRecallOpen] = useState(false);
@@ -115,26 +99,9 @@ export function KitchenDisplay({ initial, storeName, timeZone }: { initial: KdsS
   const seen = useRef<Set<string>>(new Set(initial.line.map((o) => o.id)));
   const onScreen = useRef<Set<string>>(new Set(initial.line.map((o) => o.id)));
   const alerted = useRef<Set<string>>(new Set(initial.canceled.map((c) => c.id)));
-  // Optimistic-update bookkeeping: a poll that started before the latest
-  // action finished must not overwrite the action's result.
-  const version = useRef(0);
-  const inFlight = useRef(0);
 
   const view: KdsView = prefs.screen === "ready" ? "all" : prefs.screen;
   const screenNow = now + offsetMs;
-
-  useEffect(() => {
-    // eslint-disable-next-line react-hooks/set-state-in-effect -- localStorage is only readable after hydration
-    setPrefs(loadPrefs());
-  }, []);
-
-  const updatePrefs = useCallback((patch: Partial<Prefs>) => {
-    setPrefs((p) => {
-      const next = { ...p, ...patch };
-      savePrefs(next);
-      return next;
-    });
-  }, []);
 
   // High-contrast dark surface and a scalable root font while mounted.
   useEffect(() => {
@@ -149,85 +116,56 @@ export function KitchenDisplay({ initial, storeName, timeZone }: { initial: KdsS
     document.documentElement.style.fontSize = `${TEXT_SIZES[prefs.textSize] ?? 16}px`;
   }, [prefs.textSize]);
 
-  useEffect(() => {
-    const t = setInterval(() => setNow(Date.now()), 1000);
-    return () => clearInterval(t);
-  }, []);
-
-  /** Folds a fresh snapshot in: new-ticket chime, cancel alerts, clock skew. */
-  const receive = useCallback(
-    (next: KdsSnapshot) => {
-      const arrived = next.line.filter((o) => !seen.current.has(o.id));
-      for (const o of next.line) seen.current.add(o.id);
-      if (arrived.length > 0) {
-        if (prefs.sound && audio.current) chime(audio.current);
-        setFresh((f) => {
-          const m = new Map(f);
-          for (const o of arrived) m.set(o.id, Date.now());
-          return m;
-        });
-      }
-      const pulled = next.canceled.filter(
-        (c) => onScreen.current.has(c.id) && !alerted.current.has(c.id),
-      );
-      for (const c of next.canceled) alerted.current.add(c.id);
-      if (pulled.length > 0) {
-        if (prefs.sound && audio.current) chime(audio.current);
-        setCancelAlerts((a) => [...a, ...pulled.map((c) => c.number)]);
-      }
-      onScreen.current = new Set([...next.line, ...next.ready].map((o) => o.id));
-      setOffsetMs(Date.parse(next.serverNow) - Date.now());
-      setLastSync(Date.now());
-      setSnapshot(next);
-    },
-    [prefs.sound],
-  );
-
-  const poll = useCallback(async () => {
-    const startedAt = version.current;
-    try {
-      const res = await fetch("/api/kds", { cache: "no-store" });
-      if (res.status === 401) {
-        router.push("/admin/login");
-        return;
-      }
-      if (!res.ok) return;
-      const next = (await res.json()) as KdsSnapshot;
-      if (inFlight.current === 0 && version.current === startedAt) receive(next);
-    } catch {
-      // Offline: keep showing the last known tickets; the banner says so.
+  /** What a fresh snapshot sets off: new-ticket chime, cancel alerts, clock skew. */
+  const receive = (next: KdsSnapshot) => {
+    const arrived = next.line.filter((o) => !seen.current.has(o.id));
+    for (const o of next.line) seen.current.add(o.id);
+    if (arrived.length > 0) {
+      if (prefs.sound && audio.current) chime(audio.current);
+      setFresh((f) => {
+        const m = new Map(f);
+        for (const o of arrived) m.set(o.id, Date.now());
+        return m;
+      });
     }
-  }, [receive, router]);
+    const pulled = next.canceled.filter(
+      (c) => onScreen.current.has(c.id) && !alerted.current.has(c.id),
+    );
+    for (const c of next.canceled) alerted.current.add(c.id);
+    if (pulled.length > 0) {
+      if (prefs.sound && audio.current) chime(audio.current);
+      setCancelAlerts((a) => [...a, ...pulled.map((c) => c.number)]);
+    }
+    onScreen.current = new Set([...next.line, ...next.ready].map((o) => o.id));
+    setOffsetMs(Date.parse(next.serverNow) - Date.now());
+  };
 
-  useEffect(() => {
-    const t = setInterval(poll, POLL_MS);
-    return () => clearInterval(t);
-  }, [poll]);
+  // Offline, the last known tickets stay up and the banner says so.
+  const { data: snapshot, lastSync, mutate } = useServerSnapshot("/api/kds", initial, { intervalMs: POLL_MS, onSnapshot: receive });
 
   const act = useCallback(
     async (action: KdsAction) => {
-      version.current += 1;
-      inFlight.current += 1;
-      const mine = version.current;
-      setSnapshot((s) => applyLocally(s, action, new Date(Date.now() + offsetMs).toISOString()));
       try {
-        const res = await fetch("/api/kds", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(action),
-        });
-        if (!res.ok) throw new Error(String(res.status));
-        const next = (await res.json()) as KdsSnapshot;
-        if (version.current === mine) receive(next);
+        await mutate(
+          async () => {
+            const res = await fetch("/api/kds", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify(action),
+            });
+            if (!res.ok) throw new Error(String(res.status));
+            return (await res.json()) as KdsSnapshot;
+          },
+          {
+            optimistic: (s) => applyLocally(s, action, new Date(Date.now() + offsetMs).toISOString()),
+            snapshot: (next) => next,
+          },
+        );
       } catch {
         toast.error("Couldn't reach the server — that tap didn't save. Try again.");
-        version.current += 1;
-      } finally {
-        inFlight.current -= 1;
-        if (inFlight.current === 0 && version.current !== mine) void poll();
       }
     },
-    [offsetMs, poll, receive],
+    [mutate, offsetMs],
   );
 
   const recall = useCallback(
@@ -457,7 +395,7 @@ export function KitchenDisplay({ initial, storeName, timeZone }: { initial: KdsS
         <div role="alert" className="flex shrink-0 items-center gap-2 bg-red-600 px-4 py-2 font-bold">
           <WifiOff className="size-5" aria-hidden="true" />
           Connection lost — showing tickets as of{" "}
-          {new Date(lastSync + offsetMs).toLocaleTimeString("en-US", { timeZone, hour: "numeric", minute: "2-digit", second: "2-digit" })}
+          {formatStoreClock(new Date(lastSync + offsetMs), timeZone)}
           . Retrying… Check the wifi or call orders in by phone.
         </div>
       ) : null}

@@ -23,6 +23,8 @@ import { draftLine, draftReducer, draftTotals, emptyDraft, findItem, MODES, toSu
 import { formatCents } from "@/lib/money";
 import type { MenuItem, Selection } from "@/lib/pricing";
 import { formatStoreTime } from "@/lib/store-time";
+import { usePersistentPrefs } from "@/lib/use-persistent-prefs";
+import { useNow, useServerSnapshot } from "@/lib/use-server-snapshot";
 import { cn } from "@/lib/utils";
 import { OrdersBoard, orderLabel } from "./board";
 import { CallerPanel } from "./caller-panel";
@@ -41,16 +43,7 @@ const POLL_MS = 4_000;
 const MENU_POLL_MS = 60_000;
 const RENEW_MS = 20_000;
 const PREFS_KEY = "minks:pos-prefs";
-
-type Prefs = { dark: boolean; lockAfterOrder: boolean };
-
-function loadPrefs(): Prefs {
-  try {
-    return { dark: false, lockAfterOrder: false, ...JSON.parse(window.localStorage.getItem(PREFS_KEY) ?? "{}") };
-  } catch {
-    return { dark: false, lockAfterOrder: false };
-  }
-}
+const DEFAULT_PREFS = { dark: false, lockAfterOrder: false };
 
 type Pane =
   | { kind: "menu" }
@@ -98,10 +91,7 @@ export function PosTerminal({
   const [staff, setStaff] = useState<Actor | null>(initialStaff);
   const [lastName, setLastName] = useState<string | null>(initialStaff?.name ?? null);
   const [menu, setMenu] = useState(initialMenu);
-  const [board, setBoard] = useState<Board | null>(initialBoard);
-  const [online, setOnline] = useState(true);
-  const [lastSync, setLastSync] = useState(() => Date.now());
-  const [now, setNow] = useState(() => Date.now());
+  const now = useNow(POLL_MS);
   const [queue, setQueue] = useState<outbox.OutboxEntry[]>([]);
   const [draft, dispatch] = useReducer(draftReducer, undefined, () => emptyDraft());
   const [pane, setPane] = useState<Pane>({ kind: "menu" });
@@ -109,7 +99,7 @@ export function PosTerminal({
   const [checkout, setCheckout] = useState<Checkout | null>(null);
   const [approval, setApproval] = useState<PendingApproval | null>(null);
   const [dialog, setDialog] = useState<null | { kind: "open_shift" } | { kind: "close_shift"; shiftId: string } | { kind: "drawer"; drawer: DrawerEventKind } | { kind: "outbox" }>(null);
-  const [prefs, setPrefs] = useState<Prefs>({ dark: false, lockAfterOrder: false });
+  const [prefs, updatePrefs] = usePersistentPrefs(PREFS_KEY, DEFAULT_PREFS);
   const { print, portal } = usePrinter();
   const router = useRouter();
   const lastActivity = useRef(0);
@@ -118,18 +108,8 @@ export function PosTerminal({
 
 
   useEffect(() => {
-    // eslint-disable-next-line react-hooks/set-state-in-effect -- localStorage is only readable after hydration
-    setPrefs(loadPrefs());
-  }, []);
-
-  useEffect(() => {
     document.documentElement.classList.toggle("dark", prefs.dark);
-    try {
-      window.localStorage.setItem(PREFS_KEY, JSON.stringify(prefs));
-    } catch {
-      // Storage blocked: preferences just won't persist.
-    }
-  }, [prefs]);
+  }, [prefs.dark]);
 
 
   const lock = useCallback(() => {
@@ -178,44 +158,17 @@ export function PosTerminal({
   }, []);
 
 
-  const refreshBoard = useCallback(async () => {
-    try {
-      const res = await fetch("/api/pos/board", { cache: "no-store" });
-      if (res.status === 401) {
-        router.replace("/admin/login");
-        return;
-      }
-      if (!res.ok) throw new Error(String(res.status));
-      const b = (await res.json()) as Board;
-      setBoard(b);
-      setOnline(true);
-      setLastSync(Date.now());
+  const { data: board, online, lastSync, refresh: refreshBoard, mutate } = useServerSnapshot<Board>("/api/pos/board", initialBoard, {
+    intervalMs: POLL_MS,
+    onSnapshot: (b) => {
       setPane((p) => {
         if (p.kind !== "order") return p;
         const fresh = b.openOrders.find((o) => o.id === p.order.id);
         return fresh ? { ...p, order: fresh } : p;
       });
       void drain();
-    } catch {
-      setOnline(false);
-    }
-  }, [drain, router]);
-
-  useEffect(() => {
-    const t = setInterval(() => {
-      void refreshBoard();
-      setNow(Date.now());
-    }, POLL_MS);
-    const onOnline = () => void refreshBoard();
-    const onOffline = () => setOnline(false);
-    window.addEventListener("online", onOnline);
-    window.addEventListener("offline", onOffline);
-    return () => {
-      clearInterval(t);
-      window.removeEventListener("online", onOnline);
-      window.removeEventListener("offline", onOffline);
-    };
-  }, [refreshBoard]);
+    },
+  });
 
   useEffect(() => {
     const t = setInterval(async () => {
@@ -245,7 +198,7 @@ export function PosTerminal({
     async <T extends ActionResult>(label: string, call: (approval?: Approval) => Promise<T>) => {
       let r: T;
       try {
-        r = await call();
+        r = await mutate(() => call());
       } catch {
         fail({ reason: "offline" });
         return null;
@@ -260,7 +213,7 @@ export function PosTerminal({
       );
       return approved as Extract<T, { ok: true }> | null;
     },
-    [fail],
+    [fail, mutate],
   );
 
   const onManagerPin = async (pin: string) => {
@@ -269,7 +222,7 @@ export function PosTerminal({
     setApproval({ ...a, busy: true, error: null });
     let r: ActionResult;
     try {
-      r = await a.call({ managerPin: pin });
+      r = await mutate(() => a.call({ managerPin: pin }));
     } catch {
       setApproval({ ...a, busy: false, error: failureText({ reason: "offline" }) });
       return;
@@ -298,7 +251,7 @@ export function PosTerminal({
 
   const openOrder = useCallback(
     async (orderId: string) => {
-      const known = board?.openOrders.find((o) => o.id === orderId);
+      const known = board.openOrders.find((o) => o.id === orderId);
       if (known) return showOrder(known);
       const r = await act("Open order", () => readOrder(orderId));
       if (r?.order) showOrder(r.order);
@@ -314,7 +267,7 @@ export function PosTerminal({
     void openOrder(id);
   }, [staff, openOrder]);
 
-  const quoteFor = (mode: Mode) => (mode === "delivery" ? board?.quote.deliveryMinutes : board?.quote.pickupMinutes) ?? 20;
+  const quoteFor = (mode: Mode) => (MODES[mode].fulfillment === "delivery" ? board.quote.deliveryMinutes : board.quote.pickupMinutes);
 
   const finishOrder = () => {
     setPane({ kind: "menu" });
@@ -341,7 +294,7 @@ export function PosTerminal({
       case "queued":
         notify.error("NOT SENT: printing a paper ticket. It will send when the connection is back.", { duration: 10_000 });
         print(<FallbackTicket req={req} lines={slipLines(req, menu)} at={Date.now()} timeZone={store.timeZone} />);
-        setOnline(false);
+        void refreshBoard();
         return { ok: true, order: null };
       case "locked":
         notify.error("The terminal locked. The order is saved and sends after you unlock.");
@@ -376,7 +329,7 @@ export function PosTerminal({
 
   const pay = () => {
     if (draft.kind !== "new") return;
-    if (!board?.shift) {
+    if (!board.shift) {
       notify.error(failureText({ reason: "no_open_shift" }));
       setDialog({ kind: "open_shift" });
       return;
@@ -451,7 +404,7 @@ export function PosTerminal({
 
   const pending = queue.filter((e) => e.state === "pending").length;
   const rejected = queue.length - pending;
-  const openCount = board?.openOrders.length ?? 0;
+  const openCount = board.openOrders.length;
 
   const pos: Pos | null = useMemo(
     () => (staff ? { menu, board, staff, store, online, now, act, refreshBoard, openOrder: (id: string) => void openOrder(id) } : null),
@@ -469,7 +422,7 @@ export function PosTerminal({
       setLastName(r.actor.name);
       lastRenew.current = Date.now();
       void drain();
-      if (!board?.shift) setDialog({ kind: "open_shift" });
+      if (!board.shift) setDialog({ kind: "open_shift" });
       return null;
     } catch {
       return failureText({ reason: "offline" });
@@ -524,7 +477,7 @@ export function PosTerminal({
             )}
           </button>
 
-          {!board?.shift && (
+          {!board.shift && (
             <Tap variant="outline" className="border-warning text-warning" onClick={() => setDialog({ kind: "open_shift" })}>
               Open shift
             </Tap>
@@ -540,8 +493,8 @@ export function PosTerminal({
             </DropdownMenuTrigger>
             <DropdownMenuContent align="end" className="w-60">
               <DropdownMenuGroup>
-              <DropdownMenuLabel>{board?.shift ? `Shift open since ${formatStoreTime(board.shift.openedAt, store.timeZone)}` : "No open shift"}</DropdownMenuLabel>
-              {board?.shift ? (
+              <DropdownMenuLabel>{board.shift ? `Shift open since ${formatStoreTime(board.shift.openedAt, store.timeZone)}` : "No open shift"}</DropdownMenuLabel>
+              {board.shift ? (
                 <>
                   <DropdownMenuItem onClick={() => setDialog({ kind: "drawer", drawer: "no_sale" })}>Open drawer (no sale)</DropdownMenuItem>
                   <DropdownMenuItem onClick={() => setDialog({ kind: "drawer", drawer: "paid_in" })}>Paid in</DropdownMenuItem>
@@ -555,10 +508,10 @@ export function PosTerminal({
               )}
               </DropdownMenuGroup>
               <DropdownMenuSeparator />
-              <DropdownMenuCheckboxItem checked={prefs.lockAfterOrder} onCheckedChange={(v) => setPrefs({ ...prefs, lockAfterOrder: v })}>
+              <DropdownMenuCheckboxItem checked={prefs.lockAfterOrder} onCheckedChange={(v) => updatePrefs({ lockAfterOrder: v })}>
                 Lock after each order
               </DropdownMenuCheckboxItem>
-              <DropdownMenuCheckboxItem checked={prefs.dark} onCheckedChange={(v) => setPrefs({ ...prefs, dark: v })}>
+              <DropdownMenuCheckboxItem checked={prefs.dark} onCheckedChange={(v) => updatePrefs({ dark: v })}>
                 <Moon className="size-4" /> Dark screen
               </DropdownMenuCheckboxItem>
             </DropdownMenuContent>

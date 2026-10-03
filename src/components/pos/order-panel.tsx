@@ -172,10 +172,10 @@ function NewOrderFooter({ draft, dispatch }: { draft: NewOrderDraft; dispatch: D
   const { board, now, store } = usePos();
   const timeOf = (at: Date) => formatStoreTime(at, store.timeZone);
   const mode = MODES[draft.mode];
-  const quote = mode.fulfillment === "delivery" ? board?.quote.deliveryMinutes : board?.quote.pickupMinutes;
+  const quote = mode.fulfillment === "delivery" ? board.quote.deliveryMinutes : board.quote.pickupMinutes;
   return (
     <>
-      {mode.phoneFirst && quote !== undefined && (
+      {mode.phoneFirst && (
         <div className="flex items-center gap-2">
           <Segmented
             value={draft.schedule.kind === "later" ? "later" : "asap"}
@@ -209,7 +209,7 @@ function NewOrderFooter({ draft, dispatch }: { draft: NewOrderDraft; dispatch: D
           )}
         </div>
       )}
-      {draft.schedule.kind === "later" && quote !== undefined && (
+      {draft.schedule.kind === "later" && (
         <p className="-mt-1 text-sm text-muted-foreground">
           Kitchen starts it at {timeOf(new Date(Date.parse(draft.schedule.readyAt) - quote * 60_000))} ({quote} min quote). Held until then.
         </p>

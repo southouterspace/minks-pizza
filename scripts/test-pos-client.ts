@@ -9,7 +9,7 @@
 import { cyclePlacement, defaultSelections, tapTopping } from "../src/lib/pos-client/builder";
 import { draftLine, draftProblem, draftReducer, draftTotals, emptyDraft, firePlan, lineSummary, toSubmitRequest, type Draft, type NewOrderDraft } from "../src/lib/pos-client/draft";
 import type { MenuItem, PricingPolicy } from "../src/lib/pricing";
-import { formatStoreTime, nextStoreTime, storeHhmm } from "../src/lib/store-time";
+import { formatStoreClock, formatStoreTime, nextStoreTime, storeHhmm } from "../src/lib/store-time";
 
 let failures = 0;
 function check(label: string, actual: unknown, expected: unknown) {
@@ -127,6 +127,7 @@ check("Later 23:45 picked at 11:30 PM Chicago stays on the store's day, not UTC'
 check("Later 18:00 on the day DST ends uses CST", nextStoreTime("18:00", new Date("2026-11-01T12:00:00Z"), CHICAGO).toISOString(), "2026-11-02T00:00:00.000Z");
 check("the picker shows the store's wall clock", storeHhmm("2026-10-04T04:45:00Z", CHICAGO), "23:45");
 check("times read in the store's zone", formatStoreTime("2026-10-04T04:45:00Z", CHICAGO), "11:45 PM");
+check("the KDS as-of stamp keeps the seconds", formatStoreClock("2026-10-04T04:45:07Z", CHICAGO), "11:45:07 PM");
 const dineIn = draftReducer(d, { type: "mode", mode: "dine_in" });
 check("dine-in needs a table", draftProblem(dineIn), "Enter the table.");
 const held = draftReducer(dineIn, { type: "schedule", schedule: { kind: "hold" } });

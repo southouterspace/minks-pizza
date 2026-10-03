@@ -16,7 +16,7 @@ export type ActionResult = { ok: true } | { ok: false; reason: string; message?:
 
 export type Pos = {
   menu: PosMenu;
-  board: Board | null;
+  board: Board;
   staff: Actor;
   store: StoreInfo;
   online: boolean;

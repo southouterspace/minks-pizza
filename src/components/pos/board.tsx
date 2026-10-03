@@ -60,7 +60,7 @@ export function OrdersBoard() {
   const clock = (iso: string) => formatStoreTime(iso, store.timeZone);
   const [lane, setLane] = useState<Lane>("all");
   const [query, setQuery] = useState("");
-  const orders = useMemo(() => board?.openOrders ?? [], [board]);
+  const orders = board.openOrders;
 
   const shown = useMemo(() => {
     const q = query.trim().toLowerCase();

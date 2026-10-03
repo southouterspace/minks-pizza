@@ -17,6 +17,7 @@ const eslintConfig = defineConfig([
       "src/lib/pos-client/**",
       "src/lib/pos-outbox.ts",
       "src/lib/{orders,reports,pricing,kds,validation,money,store-time,hours,utils}.ts",
+      "src/lib/use-*.ts",
     ],
     rules: {
       "no-restricted-imports": [

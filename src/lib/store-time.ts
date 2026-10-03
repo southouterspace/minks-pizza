@@ -113,6 +113,11 @@ export function formatStoreTime(at: Date | string, tz: string): string {
   return new Date(at).toLocaleTimeString("en-US", { timeZone: tz, hour: "numeric", minute: "2-digit" });
 }
 
+/** "2:45:07 PM" in the store's zone: for "as of" stamps that change every poll. */
+export function formatStoreClock(at: Date | string, tz: string): string {
+  return new Date(at).toLocaleTimeString("en-US", { timeZone: tz, hour: "numeric", minute: "2-digit", second: "2-digit" });
+}
+
 /** "Saturday, October 3, 2026" for a store date. */
 export function formatStoreDate(date: StoreDate): string {
   const [y, mo, d] = date.split("-").map(Number);
