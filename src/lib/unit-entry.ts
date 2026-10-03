@@ -5,12 +5,7 @@
  */
 import { UNITS, type BaseUnit, type UnitDef } from "@/lib/units";
 
-/** The units an ingredient can be entered in: its base family, then its own packs. */
-export function unitsFor(baseUnit: BaseUnit, packs: readonly UnitDef[] = []): UnitDef[] {
-  return [...UNITS[baseUnit], ...packs];
-}
-
-/** A unit by name among the ones `unitsFor` offers; undefined for another family's unit. */
+/** A unit by name among the ones `unitsFor` in units.ts offers; undefined for another family's unit. */
 export function unitFor(
   name: string,
   baseUnit: BaseUnit,

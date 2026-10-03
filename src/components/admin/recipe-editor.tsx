@@ -16,7 +16,8 @@ import {
   type RecipeOwner,
 } from "@/lib/recipes";
 import type { PortionSettings } from "@/lib/toppings";
-import { amountIn, readableUnit, trimAmount, unitFor, unitsFor } from "@/lib/unit-entry";
+import { amountIn, readableUnit, trimAmount, unitFor } from "@/lib/unit-entry";
+import { unitsFor } from "@/lib/units";
 import type { BaseUnit, UnitDef } from "@/lib/units";
 
 export type RecipeIngredient = {

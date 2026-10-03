@@ -24,9 +24,8 @@ import {
   readableUnit,
   trimAmount,
   unitFor,
-  unitsFor,
 } from "@/lib/unit-entry";
-import { BASE_UNIT_LABEL, BASE_UNITS, UNITS, type BaseUnit, type UnitDef } from "@/lib/units";
+import { BASE_UNIT_LABEL, BASE_UNITS, UNITS, unitsFor, type BaseUnit, type UnitDef } from "@/lib/units";
 import { saveIngredient, type IngredientFormState } from "./actions";
 
 export type IngredientFormValue = {
