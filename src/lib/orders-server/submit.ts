@@ -38,10 +38,9 @@ function onlineGate(req: SubmitOrderRequest, s: Settings): string | null {
  * the counter can always ring an order in.
  */
 export async function submitOrder(req: SubmitOrderRequest, by: Submitter): Promise<MutationResult> {
-  const existing = await getOrderView(req.orderId);
+  const [existing, settings, shift] = await Promise.all([getOrderView(req.orderId), getSettings(), getOpenShift()]);
   if (existing) return { ok: true, order: existing };
 
-  const settings = await getSettings();
   if (by.kind === "online") {
     if (req.channel !== "online" || req.tenders.length > 0) return rejected("Invalid online order.");
     const closed = onlineGate(req, settings);
@@ -51,24 +50,21 @@ export async function submitOrder(req: SubmitOrderRequest, by: Submitter): Promi
   }
   if (req.lines.length === 0) return rejected("The order has no items.");
 
-  const priced = await priceLines(req.lines, policyOf(settings));
+  const [priced, quote] = await Promise.all([priceLines(req.lines, policyOf(settings)), getQuote(settings)]);
   if (!Array.isArray(priced)) return priced;
   const subtotal = priced.reduce((sum, l) => sum + l.unitPriceCents * l.quantity, 0);
   if (by.kind === "online" && req.fulfillment.kind === "delivery" && subtotal < settings.deliveryMinimumCents) {
     return rejected(`Delivery orders have a minimum subtotal of $${(settings.deliveryMinimumCents / 100).toFixed(2)}.`);
   }
 
-  let shiftId: string | null = null;
   if (req.tenders.length > 0 && by.kind === "pos") {
     const problem = req.tenders.map(tenderProblem).find((p) => p !== null);
     if (problem) return rejected(problem);
-    shiftId = (await getOpenShift())?.id ?? null;
-    if (!shiftId) return { ok: false, reason: "no_open_shift" };
+    if (!shift) return { ok: false, reason: "no_open_shift" };
   }
 
   const now = new Date();
   const { fireNow, fireAt } = firing(req.fire, now);
-  const quote = await getQuote(settings);
   const quoted = req.fulfillment.kind === "delivery" ? quote.deliveryMinutes : quote.pickupMinutes;
   const promisedAt = req.promisedAt
     ? new Date(req.promisedAt)
@@ -99,7 +95,7 @@ export async function submitOrder(req: SubmitOrderRequest, by: Submitter): Promi
       })
       .onConflictDoNothing({ target: orders.id }),
     ...insertLines(req.orderId, priced, fireNow),
-    ...(shiftId !== null && staffId !== null ? req.tenders.map((t) => tenderInsert(req.orderId, t, shiftId, staffId)) : []),
+    ...(shift && staffId !== null ? req.tenders.map((t) => tenderInsert(req.orderId, t, shift.id, staffId)) : []),
     ...folds(req.orderId),
   ]);
   const order = await getOrderView(req.orderId);
