@@ -6,6 +6,7 @@ import {
   menuItems,
   modifierGroups,
   modifiers,
+  orderEvents,
   orderItems,
   orders,
   storeSettings,
@@ -203,9 +204,15 @@ export async function createOrder(input: CheckoutInput) {
     );
   }
 
+  const placedAt = new Date();
+  const prepMinutes =
+    input.orderType === "delivery" ? settings.deliveryPrepMinutes : settings.pickupPrepMinutes;
+
   const [order] = await db
     .insert(orders)
     .values({
+      placedAt,
+      promisedAt: new Date(placedAt.getTime() + prepMinutes * 60_000),
       orderType: input.orderType,
       customerName: input.customerName,
       customerPhone: input.customerPhone,
@@ -224,19 +231,28 @@ export async function createOrder(input: CheckoutInput) {
     })
     .returning();
 
-  await db.insert(orderItems).values(
-    cart.lines.map((l) => ({
+  await db.batch([
+    db.insert(orderEvents).values({
       orderId: order.id,
-      menuItemId: l.itemId,
-      itemName: l.itemName,
-      quantity: l.quantity,
-      unitPriceCents: l.unitPriceCents,
-      lineTotalCents: l.lineTotalCents,
-      modifiers: l.modifiers,
-      notes: l.notes || null,
-      station: l.station,
-    })),
-  );
+      type: "placed",
+      toStatus: "new",
+      actor: "Customer",
+      createdAt: placedAt,
+    }),
+    db.insert(orderItems).values(
+      cart.lines.map((l) => ({
+        orderId: order.id,
+        menuItemId: l.itemId,
+        itemName: l.itemName,
+        quantity: l.quantity,
+        unitPriceCents: l.unitPriceCents,
+        lineTotalCents: l.lineTotalCents,
+        modifiers: l.modifiers,
+        notes: l.notes || null,
+        station: l.station,
+      })),
+    ),
+  ]);
 
   return order;
 }
