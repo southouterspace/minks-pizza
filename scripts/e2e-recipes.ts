@@ -118,7 +118,8 @@ async function setGroupRole(page: Page, groupId: number, role: string) {
 }
 
 async function groupRolesFlow(page: Page) {
-  await db.update(modifierGroups).set({ role: "option" });
+  // Only the two groups under test start neutral; the rest keep their roles.
+  await db.update(modifierGroups).set({ role: "option" }).where(inArray(modifierGroups.name, ["Size", "Extra Toppings"]));
   const { group } = await ids();
   await page.goto(`${BASE}/admin/modifiers`, { waitUntil: "networkidle" });
   await setGroupRole(page, group("Size"), "size");
@@ -127,10 +128,10 @@ async function groupRolesFlow(page: Page) {
   const kinds = async () =>
     Object.fromEntries((await db.select().from(modifierGroups)).map((g) => [g.name, g.role]));
   check(
-    "group roles saved: Size = size, Extra Toppings = topping, Crust = option",
+    "group roles saved: Size = size, Extra Toppings = topping, Crust untouched",
     await eventually(async () => {
       const k = await kinds();
-      return k["Size"] === "size" && k["Extra Toppings"] === "topping" && k["Crust"] === "option";
+      return k["Size"] === "size" && k["Extra Toppings"] === "topping" && k["Crust"] === "crust";
     }),
     JSON.stringify(await kinds()),
   );
