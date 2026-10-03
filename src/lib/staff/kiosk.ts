@@ -219,13 +219,10 @@ export async function applyKioskAction(
   if (action.type === "request_time_off") {
     const problem = timeOffProblem(action.startDate, action.endDate, localDateOf(now, cfg.timezone));
     if (problem) return respond(problem, "error");
-    await requestTimeOff({
-      employeeId: employee.id,
-      startDate: action.startDate,
-      endDate: action.endDate,
-      reason: action.reason || null,
-      decidedBy: null,
-    });
+    await requestTimeOff(
+      { employeeId: employee.id, startDate: action.startDate, endDate: action.endDate, reason: action.reason || null },
+      { kind: "employee" },
+    );
     return respond(`Time off requested for ${formatDayRange(action.startDate, action.endDate)}. A manager will review it.`, "success");
   }
 

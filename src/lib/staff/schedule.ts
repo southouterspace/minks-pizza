@@ -1,12 +1,14 @@
 import "server-only";
 import { and, asc, eq, gte, isNull, lt, ne } from "drizzle-orm";
-import { db, employees, shifts, timeOffRequests } from "@/db";
+import { db, employeeRoles, employees, shifts, timeOffRequests } from "@/db";
 import { salesByDate } from "@/lib/orders";
 import {
   availabilityFromStored,
   shiftConflicts,
   shiftCostCents,
   shiftPaidMinutes,
+  shiftProblem,
+  ROLE_LABEL,
   type EmployeeRole,
   type JobRole,
   type ShiftConflict,
@@ -181,4 +183,42 @@ export async function publishWeek(weekStart: LocalDate, cfg: StaffConfig): Promi
     .where(and(gte(shifts.startsAt, from), lt(shifts.startsAt, to), isNull(shifts.publishedAt)))
     .returning({ id: shifts.id });
   return published.length;
+}
+
+export type ShiftInput = {
+  shiftId: number | null;
+  /** Null is an open shift. */
+  employeeId: number | null;
+  role: JobRole;
+  date: LocalDate;
+  start: string;
+  end: string;
+  unpaidBreakMinutes: number;
+  notes: string | null;
+};
+
+/**
+ * Creates or edits a shift. New shifts are drafts until the week is
+ * published; an edit keeps the shift's published state, so staff see the
+ * change at once.
+ */
+export async function saveShift(input: ShiftInput, cfg: StaffConfig): Promise<{ error?: string }> {
+  const { shiftId, date, start, end, ...rest } = input;
+  if (input.employeeId !== null) {
+    const [has] = await db
+      .select({ id: employeeRoles.id })
+      .from(employeeRoles)
+      .where(and(eq(employeeRoles.employeeId, input.employeeId), eq(employeeRoles.role, input.role)));
+    if (!has) return { error: `They don't work as ${ROLE_LABEL[input.role]}. Add the role on their profile first.` };
+  }
+  const values = { ...rest, ...shiftInstants(date, start, end, cfg.timezone), updatedAt: new Date() };
+  const problem = shiftProblem(values);
+  if (problem) return { error: problem };
+  if (shiftId === null) await db.insert(shifts).values(values);
+  else await db.update(shifts).set(values).where(eq(shifts.id, shiftId));
+  return {};
+}
+
+export async function deleteShift(id: number): Promise<void> {
+  await db.delete(shifts).where(eq(shifts.id, id));
 }

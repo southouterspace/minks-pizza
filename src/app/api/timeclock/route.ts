@@ -1,29 +1,9 @@
-import { z } from "zod";
 import { getCurrentOperator } from "@/lib/auth";
-import { JOB_ROLES, type KioskRequest } from "@/lib/timeclock";
+import { kioskRequestSchema } from "@/lib/timeclock";
 import { getStaffConfig } from "@/lib/staff/config";
 import { applyKioskAction, employeeByPin, getKioskBoard, getKioskView } from "@/lib/staff/kiosk";
-import { localDateSchema } from "@/lib/zoned";
 
 export const dynamic = "force-dynamic";
-
-const requestSchema: z.ZodType<KioskRequest> = z.object({
-  pin: z.string().regex(/^\d{4,6}$/),
-  action: z
-    .discriminatedUnion("type", [
-      z.object({ type: z.literal("clock_in"), role: z.enum(JOB_ROLES) }),
-      z.object({ type: z.literal("start_break"), paid: z.boolean() }),
-      z.object({ type: z.literal("end_break") }),
-      z.object({ type: z.literal("clock_out"), declaredTipsCents: z.number().int().min(0).max(1_000_000) }),
-      z.object({
-        type: z.literal("request_time_off"),
-        startDate: localDateSchema,
-        endDate: localDateSchema,
-        reason: z.string().trim().max(500),
-      }),
-    ])
-    .optional(),
-});
 
 const noStore = { "Cache-Control": "no-store" };
 // Both are 401s; `code` tells the tablet whether to shake or to sign in again.
@@ -41,13 +21,12 @@ export async function GET(): Promise<Response> {
  */
 export async function POST(request: Request): Promise<Response> {
   if (!(await getCurrentOperator())) return unauthorized();
-  const parsed = requestSchema.safeParse(await request.json().catch(() => null));
+  const parsed = kioskRequestSchema.safeParse(await request.json().catch(() => null));
   if (!parsed.success) return Response.json({ error: "Invalid request." }, { status: 400 });
 
-  const employee = await employeeByPin(parsed.data.pin);
+  const [employee, cfg] = await Promise.all([employeeByPin(parsed.data.pin), getStaffConfig()]);
   if (!employee) return Response.json({ error: "PIN not recognized.", code: "bad_pin" }, { status: 401, headers: noStore });
 
-  const cfg = await getStaffConfig();
   const body = parsed.data.action
     ? await applyKioskAction(employee, parsed.data.action, cfg)
     : { view: await getKioskView(employee, cfg), message: null, tone: "info" as const, summary: null };

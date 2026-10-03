@@ -2,19 +2,27 @@
 
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
-import { and, eq, gte, isNull, notInArray } from "drizzle-orm";
 import { z } from "zod";
-import { db, employeeRoles, employees, shifts, timeEntries } from "@/db";
 import { requireOperator } from "@/lib/auth";
-import { checkbox, dollarsToCents, idField, textField, textOrNull } from "@/lib/form-data";
-import { ANY_TIME, availabilityToStored, JOB_ROLES, ROLE_LABEL, type JobRole, type StoredAvailability, type WeeklyAvailability } from "@/lib/timeclock";
-import { isUniqueViolation } from "@/db/errors";
+import { centsField, checkbox, idField, optionalIdField, textField, textOrNull } from "@/lib/form-data";
+import {
+  ANY_TIME,
+  availabilityToStored,
+  JOB_ROLES,
+  pinSchema,
+  REASON_MAX,
+  timeOffProblem,
+  type EmployeeRole,
+  type JobRole,
+  type StoredAvailability,
+  type WeeklyAvailability,
+} from "@/lib/timeclock";
 import { getStaffConfig, resolveWeek } from "@/lib/staff/config";
-import { generatePin, pinDigest } from "@/lib/staff/employees";
-import { copyPreviousWeek, publishWeek } from "@/lib/staff/schedule";
+import * as staffEmployees from "@/lib/staff/employees";
+import * as schedule from "@/lib/staff/schedule";
 import { decideTimeOff, requestTimeOff } from "@/lib/staff/time-off";
 import { approveWeek, deleteManagerPunch, managerClockOut, saveManagerPunch } from "@/lib/staff/timesheets";
-import { DAY_NAMES, hhmmSchema, localDateSchema, shiftInstants, WEEKDAYS, zonedInstant } from "@/lib/zoned";
+import { DAY_NAMES, fromLocalInput, hhmmSchema, localDateSchema, WEEKDAYS } from "@/lib/zoned";
 
 export type StaffFormState = { error?: string; savedId?: number; pin?: string; notice?: string };
 
@@ -38,18 +46,18 @@ const employeeSchema = z.object({
   notes: z.string().trim().max(1000),
 });
 
-type RoleInput = { role: JobRole; hourlyRateCents: number; isPrimary: boolean };
-
-function rolesFrom(fd: FormData): RoleInput[] | string {
+function rolesFrom(fd: FormData): [EmployeeRole, ...EmployeeRole[]] | string {
   const chosen = JOB_ROLES.filter((r) => checkbox(fd, `role-${r}`));
-  if (chosen.length === 0) return "Give them at least one role.";
   const primaryField = textField(fd, "primaryRole");
   const primary = chosen.includes(primaryField as JobRole) ? primaryField : chosen[0];
-  try {
-    return chosen.map((role) => ({ role, hourlyRateCents: dollarsToCents(fd, `rate-${role}`), isPrimary: role === primary }));
-  } catch {
-    return "Enter each hourly rate in dollars, like 15.50.";
+  const roles: EmployeeRole[] = [];
+  for (const role of chosen) {
+    const hourlyRateCents = centsField(fd, `rate-${role}`);
+    if (hourlyRateCents === null) return "Enter each hourly rate in dollars, like 15.50.";
+    roles.push({ role, hourlyRateCents, isPrimary: role === primary });
   }
+  const [first, ...rest] = roles;
+  return first ? [first, ...rest] : "Give them at least one role.";
 }
 
 function availabilityFrom(fd: FormData): StoredAvailability | null | string {
@@ -69,10 +77,11 @@ function availabilityFrom(fd: FormData): StoredAvailability | null | string {
 
 /** undefined = leave the PIN alone. */
 async function pinFrom(fd: FormData): Promise<string | undefined | { error: string }> {
-  if (textField(fd, "pinAction") === "generate") return generatePin();
+  if (textField(fd, "pinAction") === "generate") return staffEmployees.generatePin();
   const pin = textField(fd, "pin");
   if (pin === "") return undefined;
-  return /^\d{4,6}$/.test(pin) ? pin : { error: "A PIN is 4 to 6 digits." };
+  const parsed = pinSchema.safeParse(pin);
+  return parsed.success ? parsed.data : { error: firstIssue(parsed.error) };
 }
 
 /** Creates (no `employeeId`) or updates an employee with roles, availability and PIN. */
@@ -93,80 +102,34 @@ export async function saveEmployee(_prev: StaffFormState, fd: FormData): Promise
   const pin = await pinFrom(fd);
   if (typeof pin === "object") return pin;
 
-  const values = {
+  const existingId = optionalIdField(fd, "employeeId");
+  const saved = await staffEmployees.saveEmployee(existingId, {
     name: parsed.data.name,
     phone: parsed.data.phone || null,
     email: parsed.data.email || null,
     hiredOn: parsed.data.hiredOn || null,
     notes: parsed.data.notes || null,
     availability,
-    ...(pin === undefined ? {} : { pinDigest: pinDigest(pin) }),
-    updatedAt: new Date(),
-  };
-  const existingId = textField(fd, "employeeId") === "" ? null : idField(fd, "employeeId");
-
-  try {
-    if (existingId === null) {
-      const [created] = await db.insert(employees).values(values).returning({ id: employees.id });
-      await db.insert(employeeRoles).values(roles.map((r) => ({ ...r, employeeId: created.id })));
-      revalidateStaff();
-      return { savedId: created.id, pin, notice: `${values.name} was added.` };
-    }
-    const kept = roles.map((r) => r.role);
-    await db.batch([
-      db.update(employees).set(values).where(eq(employees.id, existingId)),
-      db.delete(employeeRoles).where(and(eq(employeeRoles.employeeId, existingId), notInArray(employeeRoles.role, kept))),
-      ...roles.map((r) =>
-        db
-          .insert(employeeRoles)
-          .values({ ...r, employeeId: existingId })
-          .onConflictDoUpdate({
-            target: [employeeRoles.employeeId, employeeRoles.role],
-            set: { hourlyRateCents: r.hourlyRateCents, isPrimary: r.isPrimary },
-          }),
-      ),
-    ]);
-  } catch (error) {
-    // pin_digest is the only unique column a save can collide on.
-    if (isUniqueViolation(error)) return { error: "Someone else already has that PIN. Pick another." };
-    throw error;
-  }
+    roles,
+    pin,
+  });
+  if ("error" in saved) return saved;
   revalidateStaff();
-  return { savedId: existingId, pin, notice: "Saved." };
+  return { savedId: saved.id, pin, notice: existingId === null ? `${parsed.data.name} was added.` : "Saved." };
 }
 
-/**
- * Archiving takes someone off the clock and the schedule but keeps every
- * punch for payroll. Their upcoming shifts become open shifts to fill.
- */
 export async function setEmployeeActive(fd: FormData): Promise<void> {
   await requireOperator();
   const id = idField(fd, "employeeId");
-  const active = textField(fd, "active") === "true";
-  if (!active) {
-    const [open] = await db
-      .select({ id: timeEntries.id })
-      .from(timeEntries)
-      .where(and(eq(timeEntries.employeeId, id), isNull(timeEntries.clockOutAt)));
-    if (open) redirect(`/admin/staff/employees/${id}?notice=on-clock`);
-    await db.batch([
-      db.update(employees).set({ isActive: false, updatedAt: new Date() }).where(eq(employees.id, id)),
-      db
-        .update(shifts)
-        .set({ employeeId: null, updatedAt: new Date() })
-        .where(and(eq(shifts.employeeId, id), gte(shifts.startsAt, new Date()))),
-    ]);
-  } else {
-    await db.update(employees).set({ isActive: true, updatedAt: new Date() }).where(eq(employees.id, id));
-  }
+  const notice = await staffEmployees.setEmployeeActive(id, textField(fd, "active") === "true");
   revalidateStaff();
-  redirect(`/admin/staff/employees/${id}?notice=${active ? "restored" : "archived"}`);
+  redirect(`/admin/staff/employees/${id}?notice=${notice}`);
 }
 
 export async function removeEmployeePin(fd: FormData): Promise<void> {
   await requireOperator();
   const id = idField(fd, "employeeId");
-  await db.update(employees).set({ pinDigest: null, updatedAt: new Date() }).where(eq(employees.id, id));
+  await staffEmployees.removeEmployeePin(id);
   revalidateStaff();
   redirect(`/admin/staff/employees/${id}?notice=pin-removed`);
 }
@@ -175,22 +138,15 @@ export async function removeEmployeePin(fd: FormData): Promise<void> {
 // Schedule
 // ---------------------------------------------------------------------------
 
-const MAX_SHIFT_MINUTES = 16 * 60;
-
 const shiftSchema = z.object({
   role: z.enum(JOB_ROLES, "Pick a role."),
   date: localDateSchema,
   start: hhmmSchema,
   end: hhmmSchema,
   unpaidBreakMinutes: z.coerce.number().int().min(0).max(240),
-  notes: z.string().trim().max(500),
+  notes: z.string().trim().max(REASON_MAX),
 });
 
-/**
- * Creates or edits a shift. New shifts are drafts until the week is
- * published; an edit keeps the shift's published state, so staff see the
- * change at once.
- */
 export async function saveShift(_prev: StaffFormState, fd: FormData): Promise<StaffFormState> {
   await requireOperator();
   const parsed = shiftSchema.safeParse({
@@ -202,32 +158,19 @@ export async function saveShift(_prev: StaffFormState, fd: FormData): Promise<St
     notes: textField(fd, "notes"),
   });
   if (!parsed.success) return { error: "Check the date, times and break." };
-  const { role, date, start, end, unpaidBreakMinutes, notes } = parsed.data;
-  const employeeId = textField(fd, "employeeId") === "" ? null : idField(fd, "employeeId");
-  if (employeeId !== null) {
-    const [has] = await db
-      .select({ id: employeeRoles.id })
-      .from(employeeRoles)
-      .where(and(eq(employeeRoles.employeeId, employeeId), eq(employeeRoles.role, role)));
-    if (!has) return { error: `They don't work as ${ROLE_LABEL[role]}. Add the role on their profile first.` };
-  }
-  const { timezone } = await getStaffConfig();
-  const { startsAt, endsAt } = shiftInstants(date, start, end, timezone);
-  const minutes = (endsAt.getTime() - startsAt.getTime()) / 60_000;
-  if (minutes > MAX_SHIFT_MINUTES) return { error: "A shift can be at most 16 hours." };
-  if (unpaidBreakMinutes >= minutes) return { error: "The break is longer than the shift." };
-
-  const values = { employeeId, role, startsAt, endsAt, unpaidBreakMinutes, notes: notes || null, updatedAt: new Date() };
-  const shiftId = textField(fd, "shiftId") === "" ? null : idField(fd, "shiftId");
-  if (shiftId === null) await db.insert(shifts).values(values);
-  else await db.update(shifts).set(values).where(eq(shifts.id, shiftId));
+  const shiftId = optionalIdField(fd, "shiftId");
+  const result = await schedule.saveShift(
+    { ...parsed.data, notes: parsed.data.notes || null, shiftId, employeeId: optionalIdField(fd, "employeeId") },
+    await getStaffConfig(),
+  );
+  if (result.error) return result;
   revalidateStaff();
   return { notice: "Saved.", savedId: shiftId ?? undefined };
 }
 
 export async function deleteShift(fd: FormData): Promise<void> {
   await requireOperator();
-  await db.delete(shifts).where(eq(shifts.id, idField(fd, "shiftId")));
+  await schedule.deleteShift(idField(fd, "shiftId"));
   revalidateStaff();
 }
 
@@ -235,7 +178,7 @@ export async function copyLastWeek(fd: FormData): Promise<void> {
   await requireOperator();
   const cfg = await getStaffConfig();
   const week = resolveWeek(textField(fd, "week"), cfg);
-  const copied = await copyPreviousWeek(week, cfg);
+  const copied = await schedule.copyPreviousWeek(week, cfg);
   revalidateStaff();
   redirect(`/admin/staff/schedule?week=${week}&copied=${copied}`);
 }
@@ -244,7 +187,7 @@ export async function publishSchedule(fd: FormData): Promise<void> {
   await requireOperator();
   const cfg = await getStaffConfig();
   const week = resolveWeek(textField(fd, "week"), cfg);
-  const published = await publishWeek(week, cfg);
+  const published = await schedule.publishWeek(week, cfg);
   revalidateStaff();
   redirect(`/admin/staff/schedule?week=${week}&published=${published}`);
 }
@@ -253,16 +196,7 @@ export async function publishSchedule(fd: FormData): Promise<void> {
 // Timesheets (every change to time carries a reason)
 // ---------------------------------------------------------------------------
 
-const reasonSchema = z.string().trim().min(1, "Give a reason for the change.").max(500);
-
-/** A `datetime-local` value ("2026-10-05T16:00") on the store's wall clock. */
-function wallClockField(fd: FormData, name: string, tz: string): Date | null | "invalid" {
-  const raw = textField(fd, name);
-  if (raw === "") return null;
-  const match = /^(\d{4}-\d{2}-\d{2})T(\d{2}:\d{2})$/.exec(raw);
-  if (!match || !localDateSchema.safeParse(match[1]).success) return "invalid";
-  return zonedInstant(match[1], match[2], tz);
-}
+const reasonSchema = z.string().trim().min(1, "Give a reason for the change.").max(REASON_MAX);
 
 export async function savePunch(_prev: StaffFormState, fd: FormData): Promise<StaffFormState> {
   const operator = await requireOperator();
@@ -271,29 +205,26 @@ export async function savePunch(_prev: StaffFormState, fd: FormData): Promise<St
   const role = z.enum(JOB_ROLES).safeParse(textField(fd, "role"));
   if (!role.success) return { error: "Pick a role." };
   const { timezone } = await getStaffConfig();
+  const wallClock = (name: string) => fromLocalInput(textField(fd, name), timezone);
 
-  const clockInAt = wallClockField(fd, "clockIn", timezone);
-  const clockOutAt = wallClockField(fd, "clockOut", timezone);
+  const clockInAt = wallClock("clockIn");
+  const clockOutAt = wallClock("clockOut");
   if (clockInAt === null || clockInAt === "invalid" || clockOutAt === "invalid") return { error: "Check the clock-in and clock-out times." };
   const breaks = [];
   const count = Math.min(10, Number.parseInt(textField(fd, "breakCount"), 10) || 0);
   for (let i = 0; i < count; i++) {
-    const startedAt = wallClockField(fd, `break-start-${i}`, timezone);
-    const endedAt = wallClockField(fd, `break-end-${i}`, timezone);
+    const startedAt = wallClock(`break-start-${i}`);
+    const endedAt = wallClock(`break-end-${i}`);
     if (startedAt === null) continue;
     if (startedAt === "invalid" || endedAt === "invalid") return { error: "Check the break times." };
     breaks.push({ startedAt, endedAt, paid: checkbox(fd, `break-paid-${i}`) });
   }
-  let declaredTipsCents: number;
-  try {
-    declaredTipsCents = dollarsToCents(fd, "tips");
-  } catch {
-    return { error: "Enter tips in dollars, like 12.50." };
-  }
+  const declaredTipsCents = centsField(fd, "tips");
+  if (declaredTipsCents === null) return { error: "Enter tips in dollars, like 12.50." };
 
   const result = await saveManagerPunch(
     {
-      entryId: textField(fd, "entryId") === "" ? null : idField(fd, "entryId"),
+      entryId: optionalIdField(fd, "entryId"),
       employeeId: idField(fd, "employeeId"),
       role: role.data,
       clockInAt,
@@ -328,8 +259,7 @@ export async function approveTimesheet(fd: FormData): Promise<void> {
   const operator = await requireOperator();
   const cfg = await getStaffConfig();
   const week = resolveWeek(textField(fd, "week"), cfg);
-  const employeeId = textField(fd, "employeeId") === "" ? null : idField(fd, "employeeId");
-  const approved = await approveWeek(week, employeeId, operator.id, cfg);
+  const approved = await approveWeek(week, optionalIdField(fd, "employeeId"), operator.id, cfg);
   revalidateStaff();
   redirect(`/admin/staff/timesheets?week=${week}&approved=${approved}`);
 }
@@ -351,14 +281,12 @@ export async function addTimeOff(_prev: StaffFormState, fd: FormData): Promise<S
   const start = localDateSchema.safeParse(textField(fd, "startDate"));
   const end = localDateSchema.safeParse(textField(fd, "endDate") || textField(fd, "startDate"));
   if (!start.success || !end.success) return { error: "Pick the first and last day." };
-  if (end.data < start.data) return { error: "The last day can't be before the first." };
-  await requestTimeOff({
-    employeeId: idField(fd, "employeeId"),
-    startDate: start.data,
-    endDate: end.data,
-    reason: textOrNull(fd, "reason"),
-    decidedBy: operator.id,
-  });
+  const problem = timeOffProblem(start.data, end.data, null);
+  if (problem) return { error: problem };
+  await requestTimeOff(
+    { employeeId: idField(fd, "employeeId"), startDate: start.data, endDate: end.data, reason: textOrNull(fd, "reason") },
+    { kind: "manager", operatorId: operator.id },
+  );
   revalidateStaff();
   return { notice: "Time off added." };
 }
