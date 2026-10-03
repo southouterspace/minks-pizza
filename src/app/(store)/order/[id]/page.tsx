@@ -1,8 +1,8 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { eq } from "drizzle-orm";
-import { db, orderItems, orders } from "@/db";
+import { asc, eq } from "drizzle-orm";
+import { db, orderDiscounts, orderItems, orders } from "@/db";
 import { formatClock } from "@/lib/hours";
 import { formatCents } from "@/lib/money";
 import { isActive, isCooking } from "@/lib/order-workflow";
@@ -62,11 +62,15 @@ export default async function OrderPage({
   const [order] = await db.select().from(orders).where(eq(orders.id, id));
   if (!order) notFound();
 
-  const items = await db
-    .select()
-    .from(orderItems)
-    .where(eq(orderItems.orderId, order.id));
-  const settings = await getSettings();
+  const [items, discounts, settings] = await Promise.all([
+    db.select().from(orderItems).where(eq(orderItems.orderId, order.id)),
+    db
+      .select()
+      .from(orderDiscounts)
+      .where(eq(orderDiscounts.orderId, order.id))
+      .orderBy(asc(orderDiscounts.id)),
+    getSettings(),
+  ]);
 
   const stepIndex = STATUS_STEPS.indexOf(
     order.status as (typeof STATUS_STEPS)[number],
@@ -168,6 +172,12 @@ export default async function OrderPage({
               <dt className="text-muted-foreground">Subtotal</dt>
               <dd className="tabular-nums">{formatCents(order.subtotalCents)}</dd>
             </div>
+            {discounts.map((d) => (
+              <div key={d.id} className="flex justify-between gap-3 text-success" data-testid="order-discount">
+                <dt>{d.label}</dt>
+                <dd className="tabular-nums">−{formatCents(d.amountCents)}</dd>
+              </div>
+            ))}
             {order.taxCents > 0 ? (
               <div className="flex justify-between">
                 <dt className="text-muted-foreground">Tax</dt>
@@ -192,6 +202,11 @@ export default async function OrderPage({
               <dt>Total</dt>
               <dd className="tabular-nums">{formatCents(order.totalCents)}</dd>
             </div>
+            {order.discountCents > 0 ? (
+              <p className="text-right text-sm font-medium text-success" data-testid="you-saved">
+                You saved {formatCents(order.discountCents)}
+              </p>
+            ) : null}
             <div className="flex justify-between pt-1">
               <dt className="text-muted-foreground">Payment</dt>
               <dd className="text-muted-foreground">

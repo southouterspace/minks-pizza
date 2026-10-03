@@ -8,6 +8,7 @@
 import { z } from "zod";
 import { DAY_NAMES, formatTime, zonedParts } from "./hours";
 import { formatCents } from "./money";
+import { normalizeCode } from "./promo-code";
 
 export const PROMOTION_TRIGGERS = ["automatic", "code"] as const;
 export type PromotionTrigger = (typeof PROMOTION_TRIGGERS)[number];
@@ -174,10 +175,7 @@ export type Evaluation = {
 // Identity
 // ---------------------------------------------------------------------------
 
-/** Case-, space- and dash-insensitive matching form: " pizza-10 " → "PIZZA10". */
-export function normalizeCode(code: string): string {
-  return code.trim().toUpperCase().replace(/[\s-]+/g, "");
-}
+export { normalizeCode };
 
 /** The customer identity limits are counted against: the phone's last 10 digits. */
 export function customerKeyFromPhone(phone: string | null | undefined): string | null {

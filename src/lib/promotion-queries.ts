@@ -10,6 +10,8 @@ import {
   promotions,
 } from "@/db";
 import {
+  describeOffer,
+  formatLastDay,
   normalizeCode,
   promotionRewardSchema,
   type PromotionCandidate,
@@ -121,4 +123,54 @@ export async function loadCandidates(enteredCodes: string[], customerKey: string
     })),
   ];
   return { candidates, enteredCodes: normalized, customerHasOrdered, names };
+}
+
+export type AdvertisedDeal = {
+  id: number;
+  name: string;
+  terms: string;
+  /** A shared code to show and copy; null for automatic deals and private batches. */
+  code: string | null;
+  ends: string | null;
+};
+
+/** Advertised promotions running now and not used up, for the storefront strip. */
+export async function getAdvertisedDeals(now: Date, timezone: string): Promise<AdvertisedDeal[]> {
+  const rows = await db
+    .select()
+    .from(promotions)
+    .where(
+      and(
+        eq(promotions.advertised, true),
+        eq(promotions.isActive, true),
+        isNull(promotions.archivedAt),
+        sql`(${promotions.startsAt} is null or ${promotions.startsAt} <= ${now.toISOString()}::timestamptz)`,
+        sql`(${promotions.endsAt} is null or ${promotions.endsAt} > ${now.toISOString()}::timestamptz)`,
+      ),
+    )
+    .orderBy(promotions.id);
+  if (rows.length === 0) return [];
+  const ids = rows.map((r) => r.id);
+  const [usage, shared, names] = await Promise.all([
+    promotionUsage(ids, null),
+    db
+      .select({ promotionId: promotionCodes.promotionId, display: promotionCodes.display })
+      .from(promotionCodes)
+      .where(and(inArray(promotionCodes.promotionId, ids), isNull(promotionCodes.maxUses)))
+      .orderBy(promotionCodes.id),
+    targetNames(),
+  ]);
+  return rows
+    .filter((r) => r.totalLimit === null || (usage.get(r.id)?.uses ?? 0) < r.totalLimit)
+    .map((r) => {
+      const terms = toTerms(r);
+      const code = shared.find((c) => c.promotionId === r.id)?.display ?? null;
+      return {
+        id: r.id,
+        name: r.name,
+        terms: r.description?.trim() || describeOffer({ ...terms, endsAt: null }, { timezone, code, names }),
+        code,
+        ends: r.endsAt ? `Ends ${formatLastDay(r.endsAt, timezone)}` : null,
+      };
+    });
 }
