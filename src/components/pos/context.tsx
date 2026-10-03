@@ -1,7 +1,7 @@
 "use client";
 
 import { createContext, useContext } from "react";
-import type { Actor, Approval, Board, PosMenu } from "@/lib/orders";
+import type { ActionFailure, Actor, Approval, Board, PosMenu } from "@/lib/orders";
 
 export type StoreInfo = {
   name: string;
@@ -10,9 +10,6 @@ export type StoreInfo = {
   /** IANA zone every time on the terminal, its tickets and its receipts is shown in. */
   timeZone: string;
 };
-
-/** What every action result looks like on the wire, after `act` catches network errors. */
-export type ActionResult = { ok: true } | { ok: false; reason: string; message?: string };
 
 export type Pos = {
   menu: PosMenu;
@@ -28,7 +25,7 @@ export type Pos = {
    * approval), back to the lock screen on `locked`, and a toast for any other
    * failure or a dropped connection. Resolves to the success or null.
    */
-  act: <T extends ActionResult>(label: string, call: (approval?: Approval) => Promise<T>) => Promise<Extract<T, { ok: true }> | null>;
+  act: <S extends { ok: true }>(label: string, call: (approval?: Approval) => Promise<S | ActionFailure>) => Promise<S | null>;
   refreshBoard: () => Promise<void>;
   openOrder: (orderId: string) => void;
 };
@@ -41,7 +38,7 @@ export function usePos(): Pos {
   return pos;
 }
 
-const FAILURE_TEXT: Record<string, string> = {
+const FAILURE_TEXT: Record<Exclude<ActionFailure["reason"], "rejected">, string> = {
   needs_manager: "A manager has to approve this.",
   bad_pin: "That PIN didn't match anyone.",
   locked_out: "Too many wrong PINs. This terminal is locked for 5 minutes.",
@@ -52,6 +49,6 @@ const FAILURE_TEXT: Record<string, string> = {
   offline: "Can't reach the server. This needs an internet connection.",
 };
 
-export function failureText(r: { reason: string; message?: string }): string {
-  return r.message ?? FAILURE_TEXT[r.reason] ?? `Failed: ${r.reason}`;
+export function failureText(r: ActionFailure): string {
+  return r.reason === "rejected" ? r.message : FAILURE_TEXT[r.reason];
 }

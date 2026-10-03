@@ -9,6 +9,7 @@ import {
   rejected,
   type Actor,
   type Failure,
+  type Locked,
   type MutationResult,
   type OrderView,
   type Rejected,
@@ -24,7 +25,6 @@ import {
   pinSchema,
 } from "@/lib/validation";
 
-export type Locked = { ok: false; reason: "locked" };
 function invalid(error: z.ZodError): Rejected {
   return rejected(error.issues[0]?.message ?? "Invalid input.");
 }

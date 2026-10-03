@@ -191,7 +191,7 @@ export function CloseShiftDialog({ shiftId, names, onClose }: { shiftId: string;
         if (r.ok) setRunning(r.report);
         else notify.error(failureText(r));
       })
-      .catch(() => notify.error(failureText({ reason: "offline" })));
+      .catch(() => notify.error(failureText({ ok: false, reason: "offline" })));
     return () => {
       live = false;
     };

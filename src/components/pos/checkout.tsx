@@ -91,7 +91,7 @@ export function useCheckout({
       mutateOrderAction({ orderId: target.orderId, mutation: { kind: "add_lines", lines: lines.map(toSubmitLine), fire: true }, approval }),
     );
     setSending(false);
-    if (r && "order" in r) {
+    if (r) {
       notify.success(`Added to #${target.number}`);
       dispatch({ type: "next" });
       onAppended(r.order);
@@ -107,7 +107,7 @@ export function useCheckout({
   const pay = () => {
     if (draft.kind !== "new") return;
     if (!board.shift) {
-      notify.error(failureText({ reason: "no_open_shift" }));
+      notify.error(failureText({ ok: false, reason: "no_open_shift" }));
       onNoShift();
       return;
     }
@@ -135,7 +135,7 @@ export function useCheckout({
       }
     }
     const r = await act("Payment", (approval) => mutateOrderAction({ orderId, mutation: { kind: "tender", tender }, approval }));
-    if (!r || !("order" in r)) return null;
+    if (!r) return null;
     setCheckout({ ...c, placed: { orderId, order: r.order } });
     return { dueCents: dueCents(r.order.totals) };
   };

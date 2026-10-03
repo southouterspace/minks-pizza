@@ -54,7 +54,7 @@ export function OrderDetail({
 
   const mutate = async (label: string, mutation: OrderMutation): Promise<OrderView | null> => {
     const r = await act(label, (approval) => mutateOrderAction({ orderId: order.id, mutation, approval }));
-    if (r && "order" in r) {
+    if (r) {
       onChange(r.order);
       return r.order;
     }

@@ -316,6 +316,15 @@ export type Failure =
 
 export type FailureReason = Failure["reason"];
 
+/** The terminal's unlock has lapsed: show the PIN pad. */
+export type Locked = { ok: false; reason: "locked" };
+
+/**
+ * Every way a POS action can fail, as the terminal sees it: the seam's
+ * refusals, the lock, and the two the client finds out for itself.
+ */
+export type ActionFailure = Failure | Locked | { ok: false; reason: "signed_out" | "offline" };
+
 export const rejected = (message: string): Rejected => ({ ok: false, reason: "rejected", message });
 
 export type MutationResult = { ok: true; order: OrderView } | Failure;

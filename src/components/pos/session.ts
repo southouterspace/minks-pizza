@@ -70,7 +70,7 @@ export function usePosSession(initialStaff: Actor | null, lockSeconds: number, o
       lastRenew.current = Date.now();
       return null;
     } catch {
-      return failureText({ reason: "offline" });
+      return failureText({ ok: false, reason: "offline" });
     }
   };
 

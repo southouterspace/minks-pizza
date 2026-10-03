@@ -8,7 +8,7 @@
  * Client only. Falls back to memory where IndexedDB is unavailable (private
  * windows), which keeps the retry loop but not the crash safety.
  */
-import type { MutationResult, OrderView, SubmitOrderRequest } from "@/lib/orders";
+import type { FailureReason, MutationResult, OrderView, SubmitOrderRequest } from "@/lib/orders";
 
 export type OutboxEntry = {
   orderId: string;
@@ -116,17 +116,24 @@ async function post(request: SubmitOrderRequest): Promise<Response> {
     });
     if (res.status === 401) return { kind: "locked" };
     if (res.status >= 500) return { kind: "unreachable", error: `Server error ${res.status}` };
-    const body = (await res.json()) as MutationResult | { ok: false; reason: "rejected"; message: string };
+    const body = (await res.json()) as MutationResult;
     if (body.ok) return { kind: "ok", order: body.order };
-    if (body.reason === "rejected") return { kind: "refused", message: body.message };
-    if (body.reason === "no_open_shift") return { kind: "refused", message: "No shift is open, so payment can't be recorded." };
-    return { kind: "refused", message: `Refused: ${body.reason}` };
+    return { kind: "refused", message: body.reason === "rejected" ? body.message : REFUSED[body.reason] };
   } catch (err) {
     return { kind: "unreachable", error: ctrl.signal.aborted ? "Timed out" : String((err as Error).message ?? err) };
   } finally {
     clearTimeout(timer);
   }
 }
+
+/** Why the server turned a new order down; `rejected` carries its own message. */
+const REFUSED: Record<Exclude<FailureReason, "rejected">, string> = {
+  no_open_shift: "No shift is open, so payment can't be recorded.",
+  needs_manager: "Refused: needs_manager",
+  bad_pin: "Refused: bad_pin",
+  locked_out: "Refused: locked_out",
+  not_found: "Refused: not_found",
+};
 
 /** Entries with a POST on the wire; the replay loop leaves them alone. */
 const inFlight = new Set<string>();

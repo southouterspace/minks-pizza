@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useState, type Dispatch, type ReactNode, type SetStateAction } from "react";
 import { readOrder } from "@/app/pos/actions";
-import type { Actor, Board, OrderView, PosMenu } from "@/lib/orders";
+import type { ActionFailure, Actor, Board, OrderView, PosMenu } from "@/lib/orders";
 import type { OutboxEntry } from "@/lib/pos-outbox";
 import { defaultSelections, needsBuilder } from "@/lib/pos-client/builder";
 import { draftLine, findItem, MODES, type Draft, type DraftAction, type DraftLine } from "@/lib/pos-client/draft";
@@ -78,7 +78,7 @@ export function UnlockedTerminal({
   const [dialog, setDialog] = useState<TerminalDialog | null>(askForShift ? { kind: "open_shift" } : null);
 
   const fail = useCallback(
-    (r: { reason: string; message?: string }) => {
+    (r: ActionFailure) => {
       if (r.reason === "locked") lock();
       if (r.reason === "no_open_shift") setDialog({ kind: "open_shift" });
       notify.error(failureText(r));
