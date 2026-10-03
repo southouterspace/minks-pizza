@@ -4,6 +4,7 @@
  * modifier layout, all-day counts). Shared by server and client — no I/O.
  */
 import type { OrderItemModifier, orders } from "@/db/schema";
+import { PLACEMENTS, PORTION_LABEL, type Placement, type Portion } from "@/lib/toppings";
 
 export const KITCHEN_STATIONS = ["pizza", "kitchen", "counter"] as const;
 export type KitchenStation = (typeof KITCHEN_STATIONS)[number];
@@ -180,16 +181,27 @@ export function formatElapsed(ms: number): string {
 // Pizza-aware ticket layout
 // ---------------------------------------------------------------------------
 
+export type TicketMod = { label: string; kind: "add" | "remove" | "amount" | "option" };
+
+/** Toppings on one part of the pie. */
+export type ToppingSection = { placement: Placement; mods: TicketMod[] };
+
 export type TicketLine = {
   /** Size and crust lead the ticket: they decide which dough ball to grab. */
   size: string | null;
   crust: string | null;
   /**
-   * Everything else, in order. Removals and amount changes (extra, light,
-   * on the side) are flagged so the display can make them impossible to miss.
+   * Everything that is not a structured topping, in order: options, and every
+   * modifier of a legacy order line. Removals and amount changes (extra,
+   * light, on the side) are flagged so the display can make them impossible
+   * to miss.
    */
-  mods: { label: string; kind: "add" | "remove" | "amount" | "option" }[];
+  mods: TicketMod[];
+  /** Structured toppings by placement, whole then left then right; empty sections are dropped. */
+  toppings: ToppingSection[];
 };
+
+export const SECTION_LABEL: Record<Placement, string> = { whole: "Whole", left: "L", right: "R" };
 
 const SIZE_GROUP = /\bsize\b/i;
 const CRUST_GROUP = /\bcrust\b|\bdough\b/i;
@@ -197,26 +209,40 @@ const TOPPING_GROUP = /topping/i;
 const REMOVAL = /^(no|hold|without)\b/i;
 const AMOUNT = /^(extra|light|easy|double|side of|on the side)\b/i;
 
+function namedMod(m: OrderItemModifier): TicketMod {
+  if (REMOVAL.test(m.modifierName)) return { label: m.modifierName, kind: "remove" };
+  if (AMOUNT.test(m.modifierName)) return { label: m.modifierName, kind: "amount" };
+  if (TOPPING_GROUP.test(m.groupName)) return { label: m.modifierName, kind: "add" };
+  return { label: `${m.groupName}: ${m.modifierName}`, kind: "option" };
+}
+
+function toppingMod(name: string, portion: Portion): TicketMod {
+  if (REMOVAL.test(name)) return { label: name, kind: "remove" };
+  return portion === "regular"
+    ? { label: name, kind: "add" }
+    : { label: `${PORTION_LABEL[portion]} ${name}`, kind: "amount" };
+}
+
 export function ticketLine(modifiers: OrderItemModifier[]): TicketLine {
   let size: string | null = null;
   let crust: string | null = null;
-  const mods: TicketLine["mods"] = [];
+  const mods: TicketMod[] = [];
+  const byPlacement: Record<Placement, TicketMod[]> = { whole: [], left: [], right: [] };
   for (const m of modifiers) {
     if (size === null && SIZE_GROUP.test(m.groupName)) {
       size = m.modifierName;
     } else if (crust === null && CRUST_GROUP.test(m.groupName)) {
       crust = m.modifierName;
-    } else if (REMOVAL.test(m.modifierName)) {
-      mods.push({ label: m.modifierName, kind: "remove" });
-    } else if (AMOUNT.test(m.modifierName)) {
-      mods.push({ label: m.modifierName, kind: "amount" });
-    } else if (TOPPING_GROUP.test(m.groupName)) {
-      mods.push({ label: m.modifierName, kind: "add" });
+    } else if (m.modifierId !== undefined && m.placement !== undefined) {
+      byPlacement[m.placement].push(toppingMod(m.modifierName, m.portion ?? "regular"));
     } else {
-      mods.push({ label: `${m.groupName}: ${m.modifierName}`, kind: "option" });
+      mods.push(namedMod(m));
     }
   }
-  return { size, crust, mods };
+  const toppings = PLACEMENTS.map((placement) => ({ placement, mods: byPlacement[placement] })).filter(
+    (s) => s.mods.length > 0,
+  );
+  return { size, crust, mods, toppings };
 }
 
 // ---------------------------------------------------------------------------
