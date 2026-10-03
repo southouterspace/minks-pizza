@@ -8,7 +8,7 @@ import {
   pgTable,
   text,
   timestamp,
-  unique,
+  uniqueIndex,
   uuid,
 } from "drizzle-orm/pg-core";
 import { relations, sql } from "drizzle-orm";
@@ -384,9 +384,16 @@ export const recipeLines = pgTable(
   },
   (t) => [
     check("recipe_lines_one_owner", sql`num_nonnulls(${t.menuItemId}, ${t.modifierId}) = 1`),
-    unique("recipe_lines_owner_size_ingredient")
-      .on(t.menuItemId, t.modifierId, t.sizeModifierId, t.ingredientId)
-      .nullsNotDistinct(),
+    // Not UNIQUE NULLS NOT DISTINCT: drizzle-kit 0.31 can't read that back, so
+    // every push offered to truncate recipe_lines to re-add it. It can't
+    // compare expressions either, so it rebuilds this index on each push,
+    // which is harmless.
+    uniqueIndex("recipe_lines_owner_size_ingredient").on(
+      sql`coalesce(${t.menuItemId}, 0)`,
+      sql`coalesce(${t.modifierId}, 0)`,
+      sql`coalesce(${t.sizeModifierId}, 0)`,
+      t.ingredientId,
+    ),
   ],
 );
 
