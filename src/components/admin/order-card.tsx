@@ -117,7 +117,7 @@ export function OrderCard({ order }: { order: AdminOrder }) {
   const isDelivery = order.orderType === "delivery";
 
   return (
-    <Card>
+    <Card data-testid={`order-card-${order.orderNumber}`}>
       <CardHeader className="border-b">
         <CardTitle className="flex flex-wrap items-center gap-2">
           <span className="text-sm font-semibold tabular-nums">
@@ -194,6 +194,12 @@ export function OrderCard({ order }: { order: AdminOrder }) {
       <CardFooter className="flex-wrap items-end justify-between gap-4">
         <dl className="space-y-0.5 text-xs">
           <TotalRow label="Subtotal" value={formatCents(order.subtotalCents)} />
+          {order.discountCents > 0 ? (
+            <TotalRow
+              label={order.loyaltyRewardName ?? "Reward"}
+              value={`−${formatCents(order.discountCents)}`}
+            />
+          ) : null}
           <TotalRow label="Tax" value={formatCents(order.taxCents)} />
           {isDelivery || order.deliveryFeeCents > 0 ? (
             <TotalRow

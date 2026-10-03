@@ -184,7 +184,7 @@ export async function seedDefaultRewards(): Promise<void> {
   }
 
   const values = defaults.map(
-    (d, i) => sql`(${d.name}, ${d.description}, ${d.pointsCost}, ${JSON.stringify(d.effect)}::jsonb, ${i})`,
+    (d, i) => sql`(${d.name}, ${d.description}, ${d.pointsCost}::int, ${JSON.stringify(d.effect)}::jsonb, ${i}::int)`,
   );
   await db.execute(sql`
     insert into loyalty_rewards (name, description, points_cost, effect, sort_order)
@@ -412,4 +412,91 @@ export function memberLedger(memberId: number, limit = 50) {
     .where(eq(loyaltyLedger.memberId, memberId))
     .orderBy(desc(loyaltyLedger.createdAt), desc(loyaltyLedger.id))
     .limit(limit);
+}
+
+// ---------------------------------------------------------------------------
+// Operator reporting
+// ---------------------------------------------------------------------------
+
+/** What one point is worth, judged by the cheapest reward to reach. */
+export function centsPerPoint(rewards: LoyaltyReward[]): number | null {
+  const cheapest = rewards
+    .filter((r) => r.isActive)
+    .toSorted((a, b) => a.pointsCost - b.pointsCost)[0];
+  if (!cheapest) return null;
+  const value =
+    cheapest.effect.kind === "amount_off" ? cheapest.effect.amountOffCents : cheapest.effect.maxValueCents;
+  return value / cheapest.pointsCost;
+}
+
+export async function programStats() {
+  const { rows } = await db.execute<{
+    members: string;
+    active_members: string;
+    outstanding: string | null;
+    redemptions: string;
+    discount_cents: string | null;
+    orders: string;
+    member_orders: string;
+  }>(sql`
+    select
+      (select count(*) from loyalty_members) as members,
+      (select count(distinct loyalty_member_id) from orders
+        where loyalty_member_id is not null and status <> 'canceled'
+          and placed_at > now() - interval '90 days') as active_members,
+      (select sum(points_balance) from loyalty_members) as outstanding,
+      count(*) filter (where loyalty_points_redeemed > 0) as redemptions,
+      sum(discount_cents) as discount_cents,
+      count(*) as orders,
+      count(*) filter (where loyalty_member_id is not null) as member_orders
+    from orders
+    where status <> 'canceled' and placed_at > now() - interval '30 days'
+  `);
+  const r = rows[0];
+  return {
+    members: Number(r.members),
+    activeMembers: Number(r.active_members),
+    pointsOutstanding: Number(r.outstanding ?? 0),
+    redemptions30d: Number(r.redemptions),
+    discountCents30d: Number(r.discount_cents ?? 0),
+    memberOrderShare30d: Number(r.orders) === 0 ? null : Number(r.member_orders) / Number(r.orders),
+  };
+}
+
+export async function searchMembers(query: string, limit = 50) {
+  const q = query.trim();
+  const digits = q.replace(/\D/g, "");
+  const filter =
+    q === ""
+      ? sql`true`
+      : digits.length >= 3 && digits.length === q.replace(/[\s()+.-]/g, "").length
+        ? sql`m.phone like ${`%${digits}%`}`
+        : sql`m.name ilike ${`%${q}%`}`;
+  const { rows } = await db.execute<{
+    id: number;
+    name: string | null;
+    phone: string;
+    points_balance: number;
+    lifetime_points: number;
+    last_activity_at: string;
+    qualifying: string;
+  }>(sql`
+    select m.id, m.name, m.phone, m.points_balance, m.lifetime_points, m.last_activity_at,
+      coalesce((select sum(l.points) from loyalty_ledger l
+                where l.member_id = m.id and l.kind = 'earn'
+                  and l.created_at > now() - interval '365 days'), 0) as qualifying
+    from loyalty_members m
+    where ${filter}
+    order by m.last_activity_at desc
+    limit ${limit}
+  `);
+  return rows.map((r) => ({
+    id: r.id,
+    name: r.name,
+    phone: r.phone,
+    pointsBalance: r.points_balance,
+    lifetimePoints: r.lifetime_points,
+    lastActivityAt: new Date(r.last_activity_at),
+    qualifyingPoints: Number(r.qualifying),
+  }));
 }

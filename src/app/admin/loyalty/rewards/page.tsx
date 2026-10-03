@@ -1,0 +1,58 @@
+import { asc } from "drizzle-orm";
+import { categories, db } from "@/db";
+import { requireOperator } from "@/lib/auth";
+import { listRewards } from "@/lib/loyalty-server";
+import { deleteReward } from "../actions";
+import { ConfirmButton } from "@/components/admin/confirm-button";
+import { FormNotice } from "@/components/admin/form-notice";
+import { RewardForm } from "@/components/admin/reward-form";
+import { Badge } from "@/components/ui/badge";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+
+export const dynamic = "force-dynamic";
+
+export default async function LoyaltyRewardsPage({ searchParams }: PageProps<"/admin/loyalty/rewards">) {
+  await requireOperator();
+  const sp = await searchParams;
+  const [rewards, cats] = await Promise.all([
+    listRewards({ activeOnly: false }),
+    db.select({ id: categories.id, name: categories.name }).from(categories).orderBy(asc(categories.sortOrder)),
+  ]);
+
+  return (
+    <div className="space-y-6">
+      <p className="text-sm text-muted-foreground">
+        Customers pick one reward per order at checkout. Orders keep the reward&apos;s name, so editing or deleting
+        one never changes past receipts.
+      </p>
+      <FormNotice saved={sp.saved ? "Reward saved." : null} error={typeof sp.error === "string" ? sp.error : null} />
+
+      {rewards.map((r) => (
+        <Card key={r.id}>
+          <CardHeader className="flex flex-row items-center justify-between gap-3">
+            <CardTitle className="flex items-center gap-2 text-sm">
+              {r.name}
+              {r.isActive ? null : <Badge variant="outline">Inactive</Badge>}
+            </CardTitle>
+            <form action={deleteReward}>
+              <input type="hidden" name="id" value={r.id} />
+              <ConfirmButton label="Delete" confirmLabel="Delete reward" size="xs" variant="ghost" />
+            </form>
+          </CardHeader>
+          <CardContent>
+            <RewardForm reward={r} categories={cats} submitLabel="Save" />
+          </CardContent>
+        </Card>
+      ))}
+
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-sm">Add a reward</CardTitle>
+        </CardHeader>
+        <CardContent>
+          <RewardForm reward={null} categories={cats} submitLabel="Add reward" />
+        </CardContent>
+      </Card>
+    </div>
+  );
+}

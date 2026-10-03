@@ -4,6 +4,7 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import {
   ClipboardList,
+  Gift,
   Settings,
   SlidersHorizontal,
   Users,
@@ -20,6 +21,7 @@ const LINKS = [
     exact: false,
     icon: SlidersHorizontal,
   },
+  { href: "/admin/loyalty", label: "Loyalty", exact: false, icon: Gift },
   { href: "/admin/settings", label: "Settings", exact: false, icon: Settings },
   { href: "/admin/team", label: "Team", exact: false, icon: Users },
 ];
