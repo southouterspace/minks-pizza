@@ -17,11 +17,10 @@
 import { chromium, type Locator, type Page } from "playwright";
 import { and, eq, gte, isNull, type SQL } from "drizzle-orm";
 import { randomUUID } from "node:crypto";
-import { adjustments, customers, db, drawerEvents, menuItems, modifierGroups, modifiers, orderItems, orders, pinAttempts, shifts, storeSettings, tenders } from "../src/db";
+import { adjustments, customers, db, drawerEvents, employees, menuItems, modifierGroups, modifiers, orderItems, orders, pinAttempts, shifts, storeSettings, tenders } from "../src/db";
 import type { KdsSnapshot } from "../src/lib/kds";
 import { normalizePhone } from "../src/lib/orders";
 import { submitOrder } from "../src/lib/orders-server/submit";
-import { formatStoreDateTime, formatStoreTime } from "../src/lib/store-time";
 
 const BASE = process.env.E2E_BASE_URL ?? "http://localhost:3000";
 const SHOT_DIR = process.env.E2E_SHOT_DIR ?? "/tmp";
@@ -34,6 +33,10 @@ function check(label: string, ok: boolean, detail = "") {
   console.log(`${ok ? "PASS" : "FAIL"}  ${label}${detail ? ` — ${detail}` : ""}`);
   if (!ok) failures++;
 }
+
+/** True once `locator` is on screen, false if it never shows. */
+const shows = (locator: Locator, timeout = 5_000) => locator.waitFor({ timeout }).then(() => true, () => false);
+const gone = (locator: Locator, timeout = 10_000) => locator.waitFor({ state: "detached", timeout }).then(() => true, () => false);
 
 async function eventually(fn: () => Promise<boolean>, ms = 10_000): Promise<boolean> {
   const until = Date.now() + ms;
@@ -89,7 +92,15 @@ async function setup() {
   if (settings.taxRateBps !== 825 || settings.discountApprovalCents !== 500) {
     throw new Error("expects the seeded 8.25% tax rate and $5.00 discount threshold");
   }
-  await db.update(shifts).set({ closedAt: new Date(), closedBy: 1 }).where(isNull(shifts.closedAt));
+  const staff = await db.select({ id: employees.id, name: employees.name }).from(employees);
+  const staffId = (name: string) => {
+    const e = staff.find((x) => x.name === name);
+    if (!e) throw new Error(`expects the demo employee ${name}`);
+    return e.id;
+  };
+  const manager = staffId("Morgan Manager");
+  const cashier = staffId("Casey Cashier");
+  await db.update(shifts).set({ closedAt: new Date(), closedBy: manager }).where(isNull(shifts.closedAt));
   await db.delete(pinAttempts);
   // Clear the board so new orders are easy to find on screen.
   for (const status of ["held", "new", "preparing", "ready"] as const) {
@@ -156,11 +167,14 @@ async function setup() {
     { kind: "online" },
   );
   if (!online.ok) throw new Error(`online order rejected: ${JSON.stringify(online)}`);
-  return { online: online.order, tz: settings.timezone };
+  return { online: online.order, tz: settings.timezone, manager, cashier };
 }
 
 async function main() {
-  const { online, tz } = await setup();
+  const { online, tz, manager, cashier } = await setup();
+  // The expected wall clocks come from Intl in the store's zone, not from the app's formatters.
+  const storeClock = (at: Date, options: Intl.DateTimeFormatOptions) => new Intl.DateTimeFormat("en-US", { timeZone: tz, ...options }).format(at);
+  const clock12 = (minutes: number) => `${((Math.floor(minutes / 60) + 11) % 12) + 1}:${String(minutes % 60).padStart(2, "0")} ${minutes >= 720 ? "PM" : "AM"}`;
 
   const browser = await chromium.launch({ executablePath: process.env.CHROMIUM_PATH ?? "/opt/pw-browsers/chromium" });
   // A browser zone that is neither the server's (UTC) nor the store's, so a
@@ -181,6 +195,17 @@ async function main() {
     await page.waitForTimeout(400);
     await page.screenshot({ path: `${SHOT_DIR}/pos-${name}.png` });
   };
+  const outboxKeys = () =>
+    page.evaluate(
+      () =>
+        new Promise<string[]>((resolve) => {
+          const req = indexedDB.open("minks-pos", 1);
+          req.onsuccess = () => {
+            const all = req.result.transaction("outbox").objectStore("outbox").getAllKeys();
+            all.onsuccess = () => resolve(all.result as string[]);
+          };
+        }),
+    );
   const prints = () => page.evaluate(() => (window as unknown as { __prints: number }).__prints);
   let taps = 0;
   const tap = async (locator: ReturnType<Page["locator"]>) => {
@@ -299,8 +324,8 @@ async function main() {
     JSON.stringify({ status: delivery.status, fireAt: delivery.fireAt, type: delivery.orderType }),
   );
   check(
-    "Later 23:45 means 11:45 PM on the store's clock, within the next day",
-    delivery.promisedAt !== null && formatStoreTime(delivery.promisedAt, tz) === "11:45 PM" && delivery.promisedAt.getTime() - Date.now() < 86_400_000,
+    "Later 23:45 means 23:45 on the store's clock, within the next day",
+    delivery.promisedAt !== null && storeClock(delivery.promisedAt, { hour: "2-digit", minute: "2-digit", hourCycle: "h23" }) === "23:45" && delivery.promisedAt.getTime() - Date.now() < 86_400_000,
     `${delivery.promisedAt?.toISOString()} in ${tz}`,
   );
   const kds = (await (await context.request.get(`${BASE}/api/kds`)).json()) as KdsSnapshot;
@@ -313,7 +338,8 @@ async function main() {
   await page.locator(`[data-order="${delivery.orderNumber}"]`).waitFor();
   const heldRow = await page.locator(`[data-order="${delivery.orderNumber}"]`).innerText();
   check("board shows the held delivery in the scheduled lane", heldRow.includes("HELD"));
-  check("board shows the fire time in the store's zone", heldRow.includes(`fires ${formatStoreTime(delivery.fireAt!, tz)}`), heldRow.replace(/\n/g, " | "));
+  const quoteMinutes = delivery.promisedAt && delivery.fireAt ? (delivery.promisedAt.getTime() - delivery.fireAt.getTime()) / 60_000 : NaN;
+  check("board shows the fire time, 23:45 less the quote, in the store's zone", heldRow.includes(`fires ${clock12(23 * 60 + 45 - quoteMinutes)}`), `${quoteMinutes} min quote: ${heldRow.replace(/\n/g, " | ")}`);
   await page.locator(`[data-order="${online.number}"]`).waitFor();
   await shot("08-board");
   await page.getByLabel("Search open orders").fill("Olive");
@@ -373,16 +399,16 @@ async function main() {
   const knots = (await linesOf(dine.id)).find((l) => l.itemName === "Garlic Knots (6)")!;
   await page.getByRole("button", { name: "Void Garlic Knots (6)" }).click();
   await page.getByRole("button", { name: "Customer changed mind" }).click();
+  check("the void prompt says a sent line needs a manager", (await page.getByTestId("prompt-dialog").innerText()).includes("Already sent to the kitchen: a manager must approve."));
   await page.getByTestId("prompt-confirm").click();
-  await page.getByTestId("manager-pin").waitFor();
-  check("voiding a sent line asks for a manager", true);
+  check("voiding a sent line asks for a manager", await shows(page.getByTestId("manager-pin").getByText("Void Garlic Knots (6)")));
   await pin("5678");
   check("a cashier PIN can't approve", await page.getByTestId("manager-pin").getByText("That PIN isn't a manager's.").waitFor().then(() => true, () => false));
   await shot("10-manager-pin");
   await pin("1234");
   await page.getByTestId("manager-pin").waitFor({ state: "detached" });
   const voided = (await db.select().from(orderItems).where(eq(orderItems.id, knots.id)))[0];
-  check("void stored with the cashier as actor and the manager as approver", voided.voidedAt !== null && voided.voidedBy === 2 && voided.voidApprovedBy === 1);
+  check("void stored with the cashier as actor and the manager as approver", voided.voidedAt !== null && voided.voidedBy === cashier && voided.voidApprovedBy === manager);
   const kitchen = await context.newPage();
   await kitchen.goto(`${BASE}/kitchen`, { waitUntil: "networkidle" });
   const kdsRow = kitchen.getByTestId(`kds-item-${knots.id}`);
@@ -399,17 +425,16 @@ async function main() {
   await page.getByLabel("Amount").fill("6.00");
   await page.getByRole("button", { name: "Manager special" }).click();
   await page.getByTestId("prompt-confirm").click();
-  await page.getByTestId("manager-pin").waitFor();
-  check("a $6 discount pops the manager PIN pad", true);
+  check("a $6 discount pops the manager PIN pad", await shows(page.getByTestId("manager-pin").getByText("Discount $6.00")));
   await pin("1234");
   await page.getByTestId("manager-pin").waitFor({ state: "detached" });
   const discounts = await db.select().from(adjustments).where(and(eq(adjustments.orderId, dine.id), eq(adjustments.cents, 600)));
-  check("$6 discount stored with the manager's approval", discounts.length === 1 && discounts[0].approvedBy === 1);
+  check("$6 discount stored with the manager's approval", discounts.length === 1 && discounts[0].approvedBy === manager);
   await page.getByRole("button", { name: "Log" }).click();
   const log = await page.getByTestId("activity-log").innerText();
   check(
     "activity log reads placed as dine-in, at the store's time",
-    log.startsWith(`${formatStoreTime(dine.placedAt, tz)} Placed (Dine-in, table 4)`),
+    log.startsWith(`${storeClock(dine.placedAt, { hour: "numeric", minute: "2-digit" })} Placed (Dine-in, table 4)`),
     log.split("\n")[0],
   );
   check("activity log names who voided and who approved", /Voided 2 × Garlic Knots.*Casey Cashier · approved by Morgan Manager/.test(log.replace(/\n/g, " ")), log.replace(/\n/g, " | "));
@@ -432,23 +457,13 @@ async function main() {
   await page.getByTestId("tab-board").click();
   await page.getByTestId("not-sent").waitFor();
   await shot("12-not-sent");
-  const queued = await page.evaluate(
-    () =>
-      new Promise<string[]>((resolve) => {
-        const req = indexedDB.open("minks-pos", 1);
-        req.onsuccess = () => {
-          const all = req.result.transaction("outbox").objectStore("outbox").getAllKeys();
-          all.onsuccess = () => resolve(all.result as string[]);
-        };
-      }),
-  );
+  const queued = await outboxKeys();
   check("the order is saved in IndexedDB", queued.length === 1, JSON.stringify(queued));
   check("nothing reached the database while offline", !(await orderRow(queued[0])));
   await page.unroute("**/api/pos/orders");
   check("replay lands the order once the connection is back", await eventually(async () => !!(await orderRow(queued[0])), 15_000));
-  await page.getByTestId("not-sent").waitFor({ state: "detached", timeout: 10_000 });
-  check("NOT SENT clears after replay", true);
-  await page.waitForTimeout(5_000);
+  check("NOT SENT clears after replay", await gone(page.getByTestId("not-sent")));
+  check("the replayed order leaves the device's queue, so nothing can send it again", await eventually(async () => (await outboxKeys()).length === 0));
   const replayedLines = await linesOf(queued[0]);
   const replayedTenders = await tendersOf(queued[0]);
   check("one paper ticket for one failed order", (await prints()) === printsBefore + 1);
@@ -459,11 +474,10 @@ async function main() {
   await page.locator(`[data-order="${dine.orderNumber}"]`).click();
   const beforeReceipt = await prints();
   await page.getByRole("button", { name: "Receipt" }).click();
-  await page.waitForTimeout(300);
-  check("reprint sends a receipt to the printer", (await prints()) === beforeReceipt + 1);
+  check("reprint sends a receipt to the printer", await eventually(async () => (await prints()) === beforeReceipt + 1, 3_000));
   const receiptText = await page.locator("#pos-print").innerText();
   check("receipt shows the order and the discount", /Order #\d+[\s\S]*Discounts/.test(receiptText));
-  check("receipt prints the store's date and time", receiptText.includes(formatStoreDateTime(dine.placedAt, tz)), receiptText.split("\n").slice(0, 8).join(" | "));
+  check("receipt prints the store's date and time", receiptText.includes(storeClock(dine.placedAt, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })), receiptText.split("\n").slice(0, 8).join(" | "));
 
   // --- Dine-in hold → fire → split by item; a note on a plain line ------------------------
   await page.getByRole("button", { name: "New order" }).click();
@@ -551,16 +565,19 @@ async function main() {
   await pin("1234");
   await page.getByTestId("manager-pin").waitFor({ state: "detached" });
   const paidOut = await eventually(async () => (await db.select().from(drawerEvents).where(and(eq(drawerEvents.shiftId, openShift.id), eq(drawerEvents.kind, "paid_out")))).length === 1);
-  check("paid out of the drawer needs and records a manager", paidOut && (await db.select().from(drawerEvents).where(eq(drawerEvents.shiftId, openShift.id)))[0].approvedBy === 1);
+  check("paid out of the drawer needs and records a manager", paidOut && (await db.select().from(drawerEvents).where(eq(drawerEvents.shiftId, openShift.id)))[0].approvedBy === manager);
 
   // --- Shift close: counted vs expected ---------------------------------------------------
   await page.getByTestId("staff-menu").click();
   await page.getByTestId("menu-close-shift").click();
   await page.getByTestId("shift-report").waitFor();
   const expectedText = await page.getByTestId("shift-report").innerText();
-  const expectedCash = 15000 - 500 + (await db.select().from(tenders).where(and(eq(tenders.shiftId, openShift.id), eq(tenders.method, "cash")))).reduce((s, t) => s + t.amountCents, 0);
-  check(`expected cash is bank + cash taken − paid out (${(expectedCash / 100).toFixed(2)})`, expectedText.includes(`$${(expectedCash / 100).toFixed(2)}`), expectedText.split("\n").slice(0, 2).join(" "));
-  await page.getByLabel("Counted cash").fill(((expectedCash - 150) / 100).toFixed(2));
+  check(
+    "expected cash: $150 bank + $40.31 + $31.36 + $4.32 + $25.41 cash − $5 paid out = $246.40",
+    expectedText.startsWith("Expected cash\n$246.40"),
+    expectedText.split("\n").slice(0, 2).join(" "),
+  );
+  await page.getByLabel("Counted cash").fill("244.90");
   await page.getByLabel("Card batch total").fill("15.00");
   check("short by $1.50 shows before closing", (await page.getByTestId("shift-report").innerText()).includes("-$1.50"));
   await page.getByTestId("close-shift-confirm").click();
@@ -570,15 +587,14 @@ async function main() {
   await page.getByTestId("manager-pin").waitFor({ state: "detached" });
   await shot("13-shift-closed");
   const [closedShift] = await db.select().from(shifts).where(eq(shifts.id, openShift.id));
-  check("shift closed with counted cash and the manager as closer", closedShift.closedAt !== null && closedShift.countedCashCents === expectedCash - 150 && closedShift.closedBy === 1);
+  check("shift closed with counted cash and the manager as closer", closedShift.closedAt !== null && closedShift.countedCashCents === 24490 && closedShift.closedBy === manager);
   check("Z report links to the printable page", (await page.getByTestId("z-report").getAttribute("href")) === `/admin/reports/shift/${openShift.id}`);
 
   // --- Lock ---------------------------------------------------------------------------------
   await page.getByTestId("tender-done").click().catch(() => undefined);
   await page.keyboard.press("Escape");
   await page.getByTestId("lock").click();
-  await page.getByTestId("lock-screen").waitFor();
-  check("one tap locks the terminal", true);
+  check("one tap locks the terminal", await shows(page.getByTestId("lock-screen")));
 
   // --- 1366 × 768 layout -----------------------------------------------------------------------
   await page.setViewportSize({ width: 1366, height: 768 });
