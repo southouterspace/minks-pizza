@@ -4,6 +4,7 @@ import { useMemo, useState, useTransition } from "react";
 import { Plus, X } from "lucide-react";
 import { savePromotion } from "@/app/admin/promotions/actions";
 import type { MenuCatalog } from "@/lib/promotion-admin";
+import { EMPTY_DRAFT, type PromotionDraft } from "@/lib/promotion-draft";
 import {
   ANY_ITEM,
   describeOffer,
@@ -25,69 +26,6 @@ import { Input } from "@/components/ui/input";
 import { NativeSelect, NativeSelectOption } from "@/components/ui/native-select";
 import { Textarea } from "@/components/ui/textarea";
 import { cn } from "@/lib/utils";
-
-/** Strings for every number field, so a half-typed "1." doesn't fight the input. */
-export type PromotionDraft = {
-  name: string;
-  description: string;
-  trigger: "automatic" | "code";
-  rewardType: RewardType;
-  percent: string;
-  amount: string;
-  maxDiscount: string;
-  price: string;
-  maxUnits: string;
-  target: Target;
-  buyQty: string;
-  getQty: string;
-  getSameAsBuy: boolean;
-  getTarget: Target;
-  getPercent: string;
-  maxApplications: string;
-  minSubtotal: string;
-  pickup: boolean;
-  delivery: boolean;
-  startsOn: string;
-  endsOn: string;
-  schedule: WeeklyWindow[];
-  newCustomersOnly: boolean;
-  perCustomerLimit: string;
-  totalLimit: string;
-  stackable: boolean;
-  advertised: boolean;
-  code: string;
-};
-
-export const EMPTY_DRAFT: PromotionDraft = {
-  name: "",
-  description: "",
-  trigger: "code",
-  rewardType: "order_percent",
-  percent: "10",
-  amount: "5",
-  maxDiscount: "",
-  price: "12",
-  maxUnits: "",
-  target: ANY_ITEM,
-  buyQty: "1",
-  getQty: "1",
-  getSameAsBuy: true,
-  getTarget: ANY_ITEM,
-  getPercent: "100",
-  maxApplications: "",
-  minSubtotal: "",
-  pickup: true,
-  delivery: true,
-  startsOn: "",
-  endsOn: "",
-  schedule: [],
-  newCustomersOnly: false,
-  perCustomerLimit: "",
-  totalLimit: "",
-  stackable: false,
-  advertised: true,
-  code: "",
-};
 
 const REWARD_LABEL: Record<RewardType, string> = {
   order_percent: "Percent off the order",

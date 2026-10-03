@@ -16,7 +16,7 @@ export async function GET(_request: Request, ctx: RouteContext<"/api/admin/promo
       display: promotionCodes.display,
       maxUses: promotionCodes.maxUses,
       uses: sql<number>`(select count(*) from ${orderDiscounts} d join ${orders} o on o.id = d.order_id
-        where d.code_id = ${promotionCodes.id} and o.status <> 'canceled')`.mapWith(Number),
+        where d.code_id = promotion_codes.id and o.status <> 'canceled')`.mapWith(Number),
     })
     .from(promotionCodes)
     .where(eq(promotionCodes.promotionId, id))

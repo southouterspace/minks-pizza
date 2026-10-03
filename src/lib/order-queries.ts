@@ -143,7 +143,7 @@ export async function exportOrders(f: OrderFilters) {
   const rows = await db
     .select({
       ...getTableColumns(orders),
-      discountLabels: sql<string | null>`(select string_agg(${orderDiscounts.label}, '; ' order by ${orderDiscounts.id}) from ${orderDiscounts} where ${orderDiscounts.orderId} = ${orders.id})`,
+      discountLabels: sql<string | null>`(select string_agg(d.label, '; ' order by d.id) from ${orderDiscounts} d where d.order_id = orders.id)`,
     })
     .from(orders)
     .where(filterWhere(f, timezone))
@@ -183,7 +183,9 @@ export type DashboardStats = {
 async function getDashboardStats(now: Date, timezone: string): Promise<DashboardStats> {
   const today = sql`(${orders.placedAt} at time zone ${timezone})::date = (${now.toISOString()}::timestamptz at time zone ${timezone})::date`;
   const kept = sql`${today} and ${orders.status} <> 'canceled'`;
-  const netSales = sql`${orders.subtotalCents} - coalesce((select sum(d.amount_cents) from ${orderDiscounts} d where d.order_id = ${orders.id} and d.target = 'items'), 0)`;
+  // Spelled "orders.id": in a select list Drizzle renders ${orders.id} bare,
+  // and a bare "id" inside the subquery would bind to d.id.
+  const netSales = sql`${orders.subtotalCents} - coalesce((select sum(d.amount_cents) from ${orderDiscounts} d where d.order_id = orders.id and d.target = 'items'), 0)`;
   const [[day], active] = await Promise.all([
     db
       .select({

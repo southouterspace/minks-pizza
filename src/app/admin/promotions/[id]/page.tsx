@@ -3,12 +3,12 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import { ArrowLeft } from "lucide-react";
 import { requireOperator } from "@/lib/auth";
-import { zonedParts } from "@/lib/hours";
 import { formatCents } from "@/lib/money";
 import { getSettings } from "@/lib/orders";
 import { catalogNames, everUsed, getMenuCatalog, getPromotion } from "@/lib/promotion-admin";
-import { promotionStatus, type PromotionTerms } from "@/lib/promotions";
-import { EMPTY_DRAFT, PromotionForm, type PromotionDraft } from "@/components/admin/promotion-form";
+import { toDraft } from "@/lib/promotion-draft";
+import { promotionStatus } from "@/lib/promotions";
+import { PromotionForm } from "@/components/admin/promotion-form";
 import {
   ArchiveButtons,
   CodesPanel,
@@ -20,57 +20,6 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 export const dynamic = "force-dynamic";
 
 export const metadata: Metadata = { title: "Deal" };
-
-const dollars = (c: number) => (c / 100).toFixed(2).replace(/\.00$/, "");
-const optional = (n: number | null) => (n === null ? "" : String(n));
-
-/** The stored deal back into the form's strings; days on the store's calendar. */
-function toDraft(p: PromotionTerms & { description: string | null; advertised: boolean }, tz: string): PromotionDraft {
-  const r = p.reward;
-  const d: PromotionDraft = {
-    ...EMPTY_DRAFT,
-    name: p.name,
-    description: p.description ?? "",
-    trigger: p.trigger,
-    rewardType: r.type,
-    minSubtotal: p.minSubtotalCents ? dollars(p.minSubtotalCents) : "",
-    pickup: p.orderTypes.includes("pickup"),
-    delivery: p.orderTypes.includes("delivery"),
-    startsOn: p.startsAt ? zonedParts(p.startsAt, tz).date : "",
-    endsOn: p.endsAt ? zonedParts(new Date(p.endsAt.getTime() - 1), tz).date : "",
-    schedule: p.schedule ?? [],
-    newCustomersOnly: p.newCustomersOnly,
-    perCustomerLimit: optional(p.perCustomerLimit),
-    totalLimit: optional(p.totalLimit),
-    stackable: p.stackable,
-    advertised: p.advertised,
-  };
-  switch (r.type) {
-    case "order_percent":
-      return { ...d, percent: String(r.percentBps / 100), maxDiscount: r.maxDiscountCents ? dollars(r.maxDiscountCents) : "" };
-    case "order_amount":
-      return { ...d, amount: dollars(r.amountCents) };
-    case "item_percent":
-      return { ...d, target: r.target, percent: String(r.percentBps / 100), maxUnits: optional(r.maxUnits) };
-    case "item_amount":
-      return { ...d, target: r.target, amount: dollars(r.amountCents), maxUnits: optional(r.maxUnits) };
-    case "item_price":
-      return { ...d, target: r.target, price: dollars(r.priceCents), maxUnits: optional(r.maxUnits) };
-    case "bogo":
-      return {
-        ...d,
-        target: r.buy.target,
-        buyQty: String(r.buy.quantity),
-        getQty: String(r.get.quantity),
-        getSameAsBuy: JSON.stringify(r.buy.target) === JSON.stringify(r.get.target),
-        getTarget: r.get.target,
-        getPercent: String(r.get.percentBps / 100),
-        maxApplications: optional(r.maxApplications),
-      };
-    case "free_delivery":
-      return d;
-  }
-}
 
 export default async function PromotionPage({ params, searchParams }: PageProps<"/admin/promotions/[id]">) {
   await requireOperator();
