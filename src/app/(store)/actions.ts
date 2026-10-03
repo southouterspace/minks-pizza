@@ -2,7 +2,8 @@
 
 import { checkoutSchema, previewSchema } from "@/lib/validation";
 import { createOrder, OrderError, quoteCheckout } from "@/lib/orders";
-import { formatLastDay, type DiscountTarget, type Nudge, type Rejection } from "@/lib/promotions";
+import { nudgeCopy, refusalCopy } from "@/lib/promotion-copy";
+import { formatLastDay, type DiscountTarget } from "@/lib/promotions";
 
 export type QuoteView = {
   subtotalCents: number;
@@ -15,8 +16,9 @@ export type QuoteView = {
     /** "Ends Oct 31" when the offer has an end date. */
     ends: string | null;
   }[];
-  rejected: Rejection[];
-  nudges: Nudge[];
+  /** Each refused code (normalized) with the sentence shown under the field. */
+  rejected: { code: string; reason: string }[];
+  nudges: { promotionId: number; message: string }[];
   discountCents: number;
   taxCents: number;
   deliveryFeeCents: number;
@@ -58,8 +60,11 @@ export async function previewCheckout(input: unknown): Promise<PreviewResult> {
           target: a.target,
           ends: a.endsAt ? `Ends ${formatLastDay(a.endsAt, q.timezone)}` : null,
         })),
-        rejected: q.rejected,
-        nudges: q.nudges,
+        rejected: q.rejected.map((r) => ({
+          code: r.code,
+          reason: refusalCopy(r.refusal, { display: r.display, timezone: q.timezone, names: q.names }),
+        })),
+        nudges: q.nudges.map((n) => ({ promotionId: n.promotionId, message: nudgeCopy(n) })),
         discountCents: q.discountCents,
         taxCents: q.taxCents,
         deliveryFeeCents: q.deliveryFeeCents,

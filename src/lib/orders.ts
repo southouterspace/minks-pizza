@@ -16,15 +16,16 @@ import {
 import type { KitchenStation } from "@/lib/kds";
 import { formatCents, taxFromBps } from "@/lib/money";
 import { loadCandidates, phoneKeySql } from "@/lib/promotion-queries";
+import { lostDealCopy, refusalCopy } from "@/lib/promotion-copy";
 import {
   customerKeyFromPhone,
   discountedTotals,
   evaluatePromotions,
   normalizeCode,
-  REASONS,
   type AppliedDiscount,
   type Evaluation,
   type PromotionCandidate,
+  type TargetNames,
 } from "@/lib/promotions";
 import type { CheckoutInput } from "@/lib/validation";
 
@@ -189,6 +190,8 @@ export type CheckoutQuote = Evaluation & {
   /** Everything but the tip, which the customer picks. */
   totalBeforeTipCents: number;
   timezone: string;
+  /** For the words of a refusal. */
+  names: TargetNames;
   /** The candidates the evaluation used, for the redemption guard. */
   candidates: PromotionCandidate[];
   customerKey: string | null;
@@ -224,7 +227,6 @@ export async function quoteCheckout(
     customerHasOrdered: loaded.customerHasOrdered,
     enteredCodes: loaded.enteredCodes,
     candidates: loaded.candidates,
-    names: loaded.names,
   });
   const totals = discountedTotals({
     subtotalCents: cart.subtotalCents,
@@ -241,6 +243,7 @@ export async function quoteCheckout(
     taxCents: totals.taxCents,
     totalBeforeTipCents: totals.totalCents,
     timezone: settings.timezone,
+    names: loaded.names,
     candidates: loaded.candidates,
     customerKey,
   };
@@ -284,15 +287,9 @@ function isLimitRace(err: unknown): boolean {
   return false;
 }
 
-/** "PIZZA10 was just fully redeemed", from why the fresh quote turned the deal down. */
 function lostDealMessage(lost: AppliedDiscount, fresh: CheckoutQuote): string {
-  if (!lost.code) return `"${lost.label}" just ran out`;
-  const code = normalizeCode(lost.code);
-  const reason = fresh.rejected.find((r) => r.code === code)?.reason;
-  if (reason === REASONS.perCustomer) return `${lost.code} was already used with this phone number`;
-  if (reason === REASONS.newCustomers) return `${lost.code} is for new customers only`;
-  if (reason === REASONS.soldOut) return `${lost.code} was just fully redeemed`;
-  return `${lost.code} is no longer available`;
+  const code = lost.code && normalizeCode(lost.code);
+  return lostDealCopy(lost, fresh.rejected.find((r) => r.code === code)?.refusal);
 }
 
 /**
@@ -328,7 +325,9 @@ export async function createOrder(input: CheckoutInput) {
     if (input.expectedTotalCents !== undefined && input.expectedTotalCents !== totalCents) {
       const rejected = quote.rejected[0];
       const typed = rejected && (input.promoCodes ?? []).find((c) => normalizeCode(c) === rejected.code);
-      const why = rejected ? `${(typed ?? rejected.code).toUpperCase()}: ${rejected.reason.replace(/\.$/, "")}. ` : "";
+      const why = rejected
+        ? `${(typed ?? rejected.code).toUpperCase()}: ${refusalCopy(rejected.refusal, { display: rejected.display, timezone: quote.timezone, names: quote.names })}. `
+        : "";
       throw new OrderError(`${why}Your total is now ${formatCents(totalCents)}. Check it and place your order again.`);
     }
     try {

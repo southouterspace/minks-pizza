@@ -21,6 +21,7 @@ import {
   type PromotionTerms,
   type Target,
 } from "../src/lib/promotions";
+import { lostDealCopy, nudgeCopy, refusalCopy } from "../src/lib/promotion-copy";
 
 let passed = 0;
 function test(name: string, fn: () => void) {
@@ -87,14 +88,14 @@ function auto(p: PromotionTerms, uses = 0, customerUses = 0): PromotionCandidate
 function coded(
   p: PromotionTerms,
   display: string,
-  over: { uses?: number; customerUses?: number; maxUses?: number | null; codeUses?: number } = {},
+  over: { uses?: number; customerUses?: number; maxUses?: number | null; codeUses?: number; codeId?: number } = {},
 ): PromotionCandidate {
   return {
     promotion: { ...p, trigger: "code" },
     uses: over.uses ?? 0,
     customerUses: over.customerUses ?? 0,
     code: {
-      id: p.id * 100,
+      id: over.codeId ?? p.id * 100,
       code: normalizeCode(display),
       display,
       maxUses: over.maxUses ?? null,
@@ -115,14 +116,15 @@ function run(candidates: PromotionCandidate[], over: Partial<EvaluateInput> = {}
     customerHasOrdered: false,
     enteredCodes: candidates.filter((c) => c.code).map((c) => c.code!.code),
     candidates,
-    names,
     ...over,
   });
 }
 
 const amounts = (e: ReturnType<typeof run>) => e.applied.map((a) => a.amountCents);
-const reasonFor = (e: ReturnType<typeof run>, code: string) =>
-  e.rejected.find((r) => r.code === normalizeCode(code))?.reason;
+function reasonFor(e: ReturnType<typeof run>, code: string): string | undefined {
+  const r = e.rejected.find((x) => x.code === normalizeCode(code));
+  return r && refusalCopy(r.refusal, { display: r.display, timezone: TZ, names });
+}
 
 // --- Reward types ------------------------------------------------------------
 
@@ -277,20 +279,28 @@ test("every rejection reason, word for word", () => {
       'Add 2 × Large 14" item to use this',
     ],
     [coded(promo(base, { newCustomersOnly: true }), "HELLO"), { customerKey: "5552468135", customerHasOrdered: true }, "New customers only"],
-    [coded(promo(base, { perCustomerLimit: 1 }), "ONCE"), { customerKey: "5552468135" }, "Already used with this phone number"],
+    [coded(promo(base, { perCustomerLimit: 1 }), "ONCE", { customerUses: 1 }), { customerKey: "5552468135" }, "Already used with this phone number"],
     [coded(promo(base, { totalLimit: 50 }), "FIFTY", { uses: 50 }), {}, "This code has been fully redeemed"],
     [coded(promo(base), "MINK-7KQ2-X9", { maxUses: 1, codeUses: 1 }), {}, "This code has been fully redeemed"],
-    [coded(promo(base, { isActive: false }), "PAUSED"), {}, "This offer has ended."],
-    [coded(promo(base, { archivedAt: NOW }), "GONE"), {}, "This offer has ended."],
+    [coded(promo(base, { isActive: false }), "PAUSED"), {}, "This offer has ended"],
+    [coded(promo(base, { archivedAt: NOW }), "GONE"), {}, "This offer has ended"],
     [coded(promo({ type: "free_delivery" }), "SHIPIT"), {}, "Delivery orders only"],
   ];
-  for (const [candidate, over, reason] of cases) {
-    const c = candidate.code!.display === "ONCE" ? { ...candidate, customerUses: 1 } : candidate;
+  for (const [c, over, reason] of cases) {
     const e = run([c], over);
     assert.equal(reasonFor(e, c.code!.display), reason, c.code!.display);
     assert.deepEqual(e.applied, []);
   }
-  assert.equal(reasonFor(run([], { enteredCodes: ["NOPE"] }), "NOPE"), "We don't recognize that code.");
+  assert.equal(reasonFor(run([], { enteredCodes: ["NOPE"] }), "NOPE"), "We don't recognize that code");
+});
+
+test("a deal lost to a race says what took it", () => {
+  const p = promo({ type: "order_amount", amountCents: 500 }, { totalLimit: 1, perCustomerLimit: 1 });
+  const lostTo = (e: ReturnType<typeof run>) => lostDealCopy({ code: "E2E-RACE", label: p.name }, e.rejected[0]?.refusal);
+  assert.equal(lostTo(run([coded(p, "E2E-RACE", { uses: 1 })])), "E2E-RACE was just fully redeemed");
+  assert.equal(lostTo(run([coded(p, "E2E-RACE", { customerUses: 1 })], { customerKey: "5552468135" })), "E2E-RACE was already used with this phone number");
+  assert.equal(lostTo(run([coded({ ...p, isActive: false }, "E2E-RACE")])), "E2E-RACE is no longer available");
+  assert.equal(lostDealCopy({ code: null, label: "Free knots" }, undefined), '"Free knots" just ran out');
 });
 
 test("hard stops win over fixable reasons", () => {
@@ -306,9 +316,7 @@ test("phone-based limits wait until there is a phone", () => {
 
 test("two codes for one offer apply it once", () => {
   const p = promo({ type: "order_amount", amountCents: 500 });
-  const a = coded(p, "ONE");
-  const b = { ...coded(p, "TWO"), code: { ...coded(p, "TWO").code!, id: 999 } };
-  const e = run([a, b]);
+  const e = run([coded(p, "ONE"), coded(p, "TWO", { codeId: 999 })]);
   assert.deepEqual(amounts(e), [500]);
   assert.equal(reasonFor(e, "TWO"), "This offer is already applied");
 });
@@ -340,7 +348,7 @@ test("nudges: an automatic deal short only of its minimum, and a code under its 
     orderType: "delivery",
     deliveryFeeCents: 499,
   });
-  assert.deepEqual(e.nudges.map((n) => n.message), ["Add $3.21 more for free delivery", "Add $8.21 more to use PIZZA10"]);
+  assert.deepEqual(e.nudges.map(nudgeCopy), ["Add $3.21 more for free delivery", "Add $8.21 more to use PIZZA10"]);
   assert.equal(reasonFor(e, "PIZZA10"), "Add $8.21 more to use PIZZA10");
 });
 

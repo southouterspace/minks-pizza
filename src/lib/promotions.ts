@@ -197,7 +197,6 @@ export type EvaluateInput = {
   /** Normalized, in the order the customer entered them. */
   enteredCodes: string[];
   candidates: PromotionCandidate[];
-  names?: TargetNames;
 };
 
 export type AppliedDiscount = {
@@ -211,8 +210,40 @@ export type AppliedDiscount = {
   endsAt: Date | null;
 };
 
-export type Rejection = { code: string; reason: string };
-export type Nudge = { promotionId: number; message: string };
+/** Why a candidate can't apply, as data; promotion-copy.ts owns the words. */
+export type Refusal =
+  | { kind: "unknown" }
+  | { kind: "duplicate" }
+  | { kind: "ended" }
+  | { kind: "notStarted"; startsAt: Date }
+  | { kind: "expired"; endsAt: Date }
+  | { kind: "soldOut" }
+  | { kind: "perCustomer" }
+  | { kind: "newCustomers" }
+  | { kind: "schedule"; schedule: WeeklyWindow[] }
+  | { kind: "orderType"; only: OrderType }
+  | { kind: "deliveryFree" }
+  | { kind: "short"; shortCents: number }
+  | { kind: "noQualifying"; reward: PromotionReward }
+  | { kind: "betterDeal"; winners: string[] };
+
+export type Rejection = {
+  /** Normalized. */
+  code: string;
+  /** The code as the operator wrote it, or the normalized code when nothing matched. */
+  display: string;
+  refusal: Refusal;
+};
+
+/** A deal the customer is only `shortCents` of item subtotal away from. */
+export type Nudge = {
+  promotionId: number;
+  shortCents: number;
+  /** The code's display form, or null for an automatic deal. */
+  code: string | null;
+  name: string;
+  rewardType: RewardType;
+};
 
 export type Evaluation = {
   applied: AppliedDiscount[];
@@ -438,37 +469,12 @@ export function describeTarget(t: Target, names?: TargetNames): string {
   return mods ? `${mods} ${noun}` : noun;
 }
 
-function countOf(n: number, phrase: string): string {
-  return n === 1 ? `a ${phrase}` : `${n} × ${phrase}`;
-}
-
-function sameTarget(a: Target, b: Target): boolean {
+export function sameTarget(a: Target, b: Target): boolean {
   return JSON.stringify(a) === JSON.stringify(b);
 }
 
 function percentText(bps: number): string {
   return `${Number((bps / 100).toFixed(2))}%`;
-}
-
-/** "Add a Large 14" Cheese Pizza to use this" for a reward with nothing to discount. */
-function noQualifyingItemReason(reward: PromotionReward, names?: TargetNames): string {
-  switch (reward.type) {
-    case "item_percent":
-    case "item_amount":
-    case "item_price":
-      return `Add ${countOf(1, describeTarget(reward.target, names))} to use this`;
-    case "bogo": {
-      const { buy, get } = reward;
-      const what = sameTarget(buy.target, get.target)
-        ? countOf(buy.quantity + get.quantity, describeTarget(buy.target, names))
-        : `${countOf(buy.quantity, describeTarget(buy.target, names))} and ${countOf(get.quantity, describeTarget(get.target, names))}`;
-      return `Add ${what} to use this`;
-    }
-    case "order_percent":
-    case "order_amount":
-    case "free_delivery":
-      return "Add an item to use this";
-  }
 }
 
 /** The reward in a few words: "20% off (up to $10)", "Buy 1 Large 14" item, get 1 free". */
@@ -557,70 +563,47 @@ export function inSchedule(schedule: WeeklyWindow[] | null, now: Date, timeZone:
   });
 }
 
-export const REASONS = {
-  unknown: "We don't recognize that code.",
-  ended: "This offer has ended.",
-  soldOut: "This code has been fully redeemed",
-  perCustomer: "Already used with this phone number",
-  newCustomers: "New customers only",
-  pickupOnly: "Pickup orders only",
-  deliveryOnly: "Delivery orders only",
-  deliveryFree: "Delivery is already free",
-  duplicate: "This offer is already applied",
-  betterDeal: (names: string) => `A better deal is already applied: ${names}`,
-} as const;
-
-type Failure = { reason: string; shortCents?: number };
-
 /**
  * The first reason this candidate can't apply, or null. Hard stops come
  * first (ended, used up, already used) so a customer is never told to add
  * $4 for an offer that still wouldn't work; the fixable ones follow.
  */
-function firstFailure(c: PromotionCandidate, input: EvaluateInput): Failure | null {
+function firstRefusal(c: PromotionCandidate, input: EvaluateInput): Refusal | null {
   const p = c.promotion;
   const { now, timezone } = input;
-  if (!p.isActive || p.archivedAt) return { reason: REASONS.ended };
-  if (p.startsAt && p.startsAt > now) return { reason: `Starts ${formatDay(p.startsAt, timezone)}` };
-  if (p.endsAt && p.endsAt <= now) return { reason: `Ended ${formatLastDay(p.endsAt, timezone)}` };
+  if (!p.isActive || p.archivedAt) return { kind: "ended" };
+  if (p.startsAt && p.startsAt > now) return { kind: "notStarted", startsAt: p.startsAt };
+  if (p.endsAt && p.endsAt <= now) return { kind: "expired", endsAt: p.endsAt };
   if ((p.totalLimit !== null && c.uses >= p.totalLimit) || (c.code?.maxUses != null && c.code.uses >= c.code.maxUses)) {
-    return { reason: REASONS.soldOut };
+    return { kind: "soldOut" };
   }
   if (input.customerKey) {
-    if (p.perCustomerLimit !== null && c.customerUses >= p.perCustomerLimit) return { reason: REASONS.perCustomer };
-    if (p.newCustomersOnly && input.customerHasOrdered) return { reason: REASONS.newCustomers };
+    if (p.perCustomerLimit !== null && c.customerUses >= p.perCustomerLimit) return { kind: "perCustomer" };
+    if (p.newCustomersOnly && input.customerHasOrdered) return { kind: "newCustomers" };
   }
-  if (!inSchedule(p.schedule, now, timezone)) return { reason: `Valid ${describeSchedule(p.schedule ?? [])}` };
-  if (!p.orderTypes.includes(input.orderType)) {
-    return { reason: input.orderType === "pickup" ? REASONS.deliveryOnly : REASONS.pickupOnly };
-  }
+  if (!inSchedule(p.schedule, now, timezone)) return { kind: "schedule", schedule: p.schedule ?? [] };
+  if (!p.orderTypes.includes(input.orderType)) return { kind: "orderType", only: input.orderType === "pickup" ? "delivery" : "pickup" };
   if (p.reward.type === "free_delivery") {
-    if (input.orderType === "pickup") return { reason: REASONS.deliveryOnly };
-    if (input.deliveryFeeCents === 0) return { reason: REASONS.deliveryFree };
+    if (input.orderType === "pickup") return { kind: "orderType", only: "delivery" };
+    if (input.deliveryFeeCents === 0) return { kind: "deliveryFree" };
   }
   const short = p.minSubtotalCents - input.subtotalCents;
-  if (short > 0) {
-    return { reason: `Add ${formatCents(short)} more to use ${c.code?.display ?? p.name}`, shortCents: short };
-  }
-  if (applyReward(p.reward, freshState(input), input.lines) === 0) {
-    return { reason: noQualifyingItemReason(p.reward, input.names) };
-  }
+  if (short > 0) return { kind: "short", shortCents: short };
+  if (applyReward(p.reward, freshState(input), input.lines) === 0) return { kind: "noQualifying", reward: p.reward };
   return null;
 }
 
-/** True when the only thing missing is the minimum subtotal. */
-function onlyShortOfMinimum(c: PromotionCandidate, input: EvaluateInput): number | null {
-  const failure = firstFailure(c, input);
-  if (!failure?.shortCents) return null;
-  const topUp = { ...input, subtotalCents: c.promotion.minSubtotalCents };
-  return firstFailure(c, topUp) === null ? failure.shortCents : null;
-}
-
-function nudgeMessage(c: PromotionCandidate, shortCents: number): string {
-  const short = formatCents(shortCents);
-  if (c.code) return `Add ${short} more to use ${c.code.display}`;
-  if (c.promotion.reward.type === "free_delivery") return `Add ${short} more for free delivery`;
-  return `Add ${short} more to get ${c.promotion.name}`;
+/** A nudge when the minimum subtotal is the only thing between the customer and the deal. */
+function nudgeFor(c: PromotionCandidate, refusal: Refusal, input: EvaluateInput): Nudge | null {
+  if (refusal.kind !== "short") return null;
+  if (firstRefusal(c, { ...input, subtotalCents: c.promotion.minSubtotalCents }) !== null) return null;
+  return {
+    promotionId: c.promotion.id,
+    shortCents: refusal.shortCents,
+    code: c.code?.display ?? null,
+    name: c.promotion.name,
+    rewardType: c.promotion.reward.type,
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -656,42 +639,32 @@ export function evaluatePromotions(input: EvaluateInput): Evaluation {
   const rejected: Rejection[] = [];
   const nudges: Nudge[] = [];
   const eligible: PromotionCandidate[] = [];
-  const seenPromotions = new Set<number>();
+  const seen = new Set<number>();
 
-  const automatic = input.candidates.filter((c) => c.code === null && c.promotion.trigger === "automatic");
   const byCode = new Map(
-    input.candidates.filter((c) => c.code !== null).map((c) => [c.code!.code, c] as const),
+    input.candidates.flatMap((c) => (c.code ? [[c.code.code, c] as const] : [])),
   );
+  const entries = [
+    ...input.candidates
+      .filter((c) => c.code === null && c.promotion.trigger === "automatic")
+      .map((candidate) => ({ code: null, candidate })),
+    ...[...new Set(input.enteredCodes)].map((code) => ({ code, candidate: byCode.get(code) })),
+  ];
 
-  for (const c of automatic) {
-    if (seenPromotions.has(c.promotion.id)) continue;
-    seenPromotions.add(c.promotion.id);
-    if (firstFailure(c, input) === null) eligible.push(c);
-    else {
-      const short = onlyShortOfMinimum(c, input);
-      if (short !== null) nudges.push({ promotionId: c.promotion.id, message: nudgeMessage(c, short) });
-    }
-  }
-
-  for (const code of new Set(input.enteredCodes)) {
-    const c = byCode.get(code);
-    if (!c) {
-      rejected.push({ code, reason: REASONS.unknown });
+  for (const { code, candidate: c } of entries) {
+    const refusal: Refusal | null = !c
+      ? { kind: "unknown" }
+      : seen.has(c.promotion.id)
+        ? { kind: "duplicate" }
+        : firstRefusal(c, input);
+    if (c) seen.add(c.promotion.id);
+    if (!refusal) {
+      eligible.push(c!);
       continue;
     }
-    if (seenPromotions.has(c.promotion.id)) {
-      rejected.push({ code, reason: REASONS.duplicate });
-      continue;
-    }
-    seenPromotions.add(c.promotion.id);
-    const failure = firstFailure(c, input);
-    if (failure === null) {
-      eligible.push(c);
-      continue;
-    }
-    rejected.push({ code, reason: failure.reason });
-    const short = onlyShortOfMinimum(c, input);
-    if (short !== null) nudges.push({ promotionId: c.promotion.id, message: nudgeMessage(c, short) });
+    if (code !== null) rejected.push({ code, display: c?.code?.display ?? code, refusal });
+    const nudge = c && nudgeFor(c, refusal, input);
+    if (nudge) nudges.push(nudge);
   }
 
   const stackable = eligible.filter((c) => c.promotion.stackable);
@@ -708,11 +681,10 @@ export function evaluatePromotions(input: EvaluateInput): Evaluation {
     null,
   );
   const applied = best?.applied ?? [];
-  const winners = new Set(applied.map((a) => a.promotionId));
-  const names = applied.map((a) => a.label).join(" + ");
+  const winners = applied.map((a) => a.label);
   for (const c of eligible) {
-    if (c.code && !winners.has(c.promotion.id)) {
-      rejected.push({ code: c.code.code, reason: REASONS.betterDeal(names) });
+    if (c.code && !applied.some((a) => a.promotionId === c.promotion.id)) {
+      rejected.push({ code: c.code.code, display: c.code.display, refusal: { kind: "betterDeal", winners } });
     }
   }
 
