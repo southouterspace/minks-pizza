@@ -4,6 +4,8 @@ Research date: 2026-10-03. Scope: Toast (with xtraCHEF), Square for Restaurants,
 
 **Method and limits.** Vendor help centers were the main source for features. Complaints come from Capterra (readable), G2 (search snippets only, because pages returned 403), TrustRadius, BBB, Toast Community and trade press. Reddit is blocked from this environment, so Reddit claims are second-hand through blogs that quote it. Several complaint sources sell competing products; their quotes match the review sites, but their framing is biased. A "?" in a matrix means the vendor's public docs don't say. It does not mean the feature is missing. Pricing comes from third-party sites and is approximate.
 
+**Status.** Sections 1 and 5 describe the app before #17. That PR implemented the pizza-focused set from issue #11: toppings by half and portion, per-size recipes, the stock ledger, counts, waste, deliveries, food-cost reports and auto-86.
+
 ---
 
 ## 1. Where Mink's stands today
