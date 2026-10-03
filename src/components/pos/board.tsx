@@ -1,16 +1,17 @@
 "use client";
 
+import type { OrderStatus } from "@/lib/order-workflow";
 import { useMemo, useState } from "react";
 import { Search } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
-import { channelLabel, digitsOf, dueCents, PAYMENT_LABEL, paymentState, type KitchenStatus, type OrderView } from "@/lib/orders";
+import { channelLabel, digitsOf, dueCents, PAYMENT_LABEL, paymentState, type OrderView } from "@/lib/orders";
 import { formatCents } from "@/lib/money";
-import { formatStoreTime } from "@/lib/store-time";
+import { formatClock } from "@/lib/zoned";
 import { cn } from "@/lib/utils";
 import { usePos } from "./context";
 import { Segmented } from "./touch";
 
-export const STATUS_LABEL: Record<KitchenStatus, string> = {
+export const STATUS_LABEL: Record<OrderStatus, string> = {
   held: "Held",
   new: "Sent",
   preparing: "Making",
@@ -19,7 +20,7 @@ export const STATUS_LABEL: Record<KitchenStatus, string> = {
   canceled: "Canceled",
 };
 
-const STATUS_TONE: Record<KitchenStatus, string> = {
+const STATUS_TONE: Record<OrderStatus, string> = {
   held: "bg-muted text-muted-foreground",
   new: "bg-primary/10 text-foreground",
   preparing: "bg-warning/15 text-warning",
@@ -38,7 +39,7 @@ const LANES: { value: Lane; label: string; test: (o: OrderView) => boolean }[] =
   { value: "unpaid", label: "Unpaid", test: (o) => dueCents(o.totals) > 0 },
 ];
 
-export function StatusChip({ status }: { status: KitchenStatus }) {
+export function StatusChip({ status }: { status: OrderStatus }) {
   return <span className={cn("rounded-md px-2 py-0.5 text-xs font-semibold uppercase", STATUS_TONE[status])}>{STATUS_LABEL[status]}</span>;
 }
 
@@ -57,7 +58,7 @@ export function orderLabel(o: OrderView): string {
 
 export function OrdersBoard() {
   const { board, openOrder, store } = usePos();
-  const clock = (iso: string) => formatStoreTime(iso, store.timeZone);
+  const clock = (iso: string) => formatClock(iso, store.timeZone);
   const [lane, setLane] = useState<Lane>("all");
   const [query, setQuery] = useState("");
   const orders = board.openOrders;
@@ -106,7 +107,7 @@ export function OrdersBoard() {
                 <span className="text-xl font-bold tabular-nums">#{o.number}</span>
                 <span className="min-w-0">
                   <span className="flex items-center gap-2">
-                    <Badge variant="outline">{channelLabel(o.channel, o.fulfillment.kind)}</Badge>
+                    <Badge variant="outline">{channelLabel(o.source, o.fulfillment.kind)}</Badge>
                     {o.fulfillment.kind === "delivery" && <Badge variant="outline">Delivery</Badge>}
                     <span className="truncate font-semibold">{orderLabel(o)}</span>
                   </span>

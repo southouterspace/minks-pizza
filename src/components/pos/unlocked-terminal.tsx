@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useState, type Dispatch, type ReactNode, type SetStateAction } from "react";
 import { readOrder } from "@/app/pos/actions";
-import type { ActionFailure, Actor, Board, OrderView, PosMenu } from "@/lib/orders";
+import type { ActionFailure, StaffActor, Board, OrderView, PosMenu } from "@/lib/orders";
 import type { OutboxEntry } from "@/lib/pos-outbox";
 import { defaultSelections, needsBuilder } from "@/lib/pos-client/builder";
 import { draftLine, findItem, MODES, type Draft, type DraftAction, type DraftLine } from "@/lib/pos-client/draft";
@@ -63,7 +63,7 @@ export function UnlockedTerminal({
   deepLink,
   onDeepLinkOpened,
 }: {
-  staff: Actor;
+  staff: StaffActor;
   lock: () => void;
   kept: KeptState;
   store: StoreInfo;

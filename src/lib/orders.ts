@@ -4,15 +4,28 @@
  * and storefront share with the server. No I/O; the server seam that reads
  * and writes these lives in orders-server/.
  */
+import type { OrderSource } from "@/lib/delivery/types";
 import type { KitchenStation } from "@/lib/kds";
+import { describeEvent, type OrderEventType, type OrderStatus } from "@/lib/order-workflow";
+import { type PosAccess, roleSatisfies } from "@/lib/pos-access";
 import type { LineModifier, MenuItem, PricingPolicy, Selection } from "@/lib/pricing";
+import type { DiscountSource, DiscountTarget } from "@/lib/promotion-schema";
 
-export type KitchenStatus = "held" | "new" | "preparing" | "ready" | "completed" | "canceled";
-export type Channel = "online" | "walk_in" | "phone";
-export const EMPLOYEE_ROLES = ["cashier", "manager", "owner"] as const;
-export type EmployeeRole = (typeof EMPLOYEE_ROLES)[number];
-export const ROLE_LABEL: Record<EmployeeRole, string> = { cashier: "Cashier", manager: "Manager", owner: "Owner" };
-export type TenderMethod = "cash" | "card_external";
+export type { OrderSource };
+
+/** Where the store's own orders come from; marketplace orders arrive through ingestion. */
+export type StoreSource = Extract<OrderSource, "web" | "walk_in" | "phone">;
+
+export const MARKETPLACE_SOURCES: readonly OrderSource[] = ["doordash", "ubereats", "grubhub"];
+
+export const TENDER_METHODS = ["cash", "card_external", "other", "marketplace"] as const;
+export type TenderMethod = (typeof TENDER_METHODS)[number];
+export const TENDER_METHOD_LABEL: Record<TenderMethod, string> = {
+  cash: "Cash",
+  card_external: "Card",
+  other: "Other",
+  marketplace: "Marketplace",
+};
 export type DrawerEventKind = "no_sale" | "paid_in" | "paid_out";
 
 export type Address = {
@@ -28,7 +41,8 @@ export type Fulfillment =
   | { kind: "delivery"; address: Address }
   | { kind: "dine_in"; table: string };
 
-export type Actor = { employeeId: number; name: string; role: EmployeeRole };
+/** The employee at the terminal, as the role policy and the audit trail see them. */
+export type StaffActor = { employeeId: number; name: string; access: PosAccess };
 
 export type LineView = {
   /** The line_uid: what the POS addresses a line by. */
@@ -61,15 +75,33 @@ export type Tender = {
   at: string;
 };
 
-export type Adjustment = {
-  id: string;
-  /** Null = the whole check. */
+/** One order_discounts row: a promotion, a loyalty reward, or a staff comp or discount. */
+export type Discount = {
+  id: number;
+  /** Client-minted at the POS; null for promotion and loyalty rows. */
+  uid: string | null;
+  /** Set on a comp of one line; null = the check. */
   lineId: string | null;
-  kind: "discount" | "comp";
-  cents: number;
-  reason: string;
-  employeeId: number;
+  label: string;
+  amountCents: number;
+  target: DiscountTarget;
+  source: DiscountSource;
+  employeeId: number | null;
   approvedBy: number | null;
+  operatorId: number | null;
+  at: string;
+};
+
+/** One order_events row: a status move, an ETA push, an operator note. */
+export type OrderEvent = {
+  id: number;
+  type: OrderEventType;
+  fromStatus: OrderStatus | null;
+  toStatus: OrderStatus | null;
+  actor: string;
+  employeeId: number | null;
+  approvedBy: number | null;
+  note: string | null;
   at: string;
 };
 
@@ -89,8 +121,8 @@ export type OrderView = {
   number: number;
   /** The KDS ticket this order rides on: its own id unless split off another. */
   ticketOrderId: string;
-  status: KitchenStatus;
-  channel: Channel;
+  status: OrderStatus;
+  source: OrderSource;
   fulfillment: Fulfillment;
   customer: { id: string | null; name: string; phone: string; email: string | null };
   notes: string | null;
@@ -101,7 +133,8 @@ export type OrderView = {
   createdBy: number | null;
   lines: LineView[];
   tenders: Tender[];
-  adjustments: Adjustment[];
+  discounts: Discount[];
+  events: OrderEvent[];
   totals: Totals;
   /** Names for every employee id above, for the activity log. */
   staff: Record<number, string>;
@@ -133,24 +166,38 @@ export const PAYMENT_LABEL: Record<PaymentState, string> = {
   refunded: "Refunded",
 };
 
-/** Dine-in is its own channel whatever rang it in: on badges, in the activity log and in reports. */
-export type SalesChannel = Channel | "dine_in";
+/**
+ * Dine-in is its own channel whatever rang it in, and the three marketplaces
+ * are one: on badges, in the activity log and in reports.
+ */
+export type SalesChannel = StoreSource | "dine_in" | "marketplace";
 
-export const SALES_CHANNELS: readonly SalesChannel[] = ["walk_in", "phone", "dine_in", "online"];
+export const SALES_CHANNELS: readonly SalesChannel[] = ["walk_in", "phone", "dine_in", "web", "marketplace"];
 
 export const SALES_CHANNEL_LABEL: Record<SalesChannel, string> = {
   walk_in: "Walk-in",
   phone: "Phone",
   dine_in: "Dine-in",
-  online: "Online",
+  web: "Online",
+  marketplace: "Marketplace",
 };
 
-export function salesChannel(channel: Channel, kind: Fulfillment["kind"]): SalesChannel {
-  return kind === "dine_in" ? "dine_in" : channel;
+export const SOURCE_LABEL: Record<OrderSource, string> = {
+  web: "Online",
+  walk_in: "Walk-in",
+  phone: "Phone",
+  doordash: "DoorDash",
+  ubereats: "Uber Eats",
+  grubhub: "Grubhub",
+};
+
+export function salesChannel(source: OrderSource, kind: Fulfillment["kind"]): SalesChannel {
+  if (kind === "dine_in") return "dine_in";
+  return MARKETPLACE_SOURCES.includes(source) ? "marketplace" : (source as StoreSource);
 }
 
-export function channelLabel(channel: Channel, kind: Fulfillment["kind"]): string {
-  return SALES_CHANNEL_LABEL[salesChannel(channel, kind)];
+export function channelLabel(source: OrderSource, kind: Fulfillment["kind"]): string {
+  return kind === "dine_in" ? SALES_CHANNEL_LABEL.dine_in : SOURCE_LABEL[source];
 }
 
 /** "1 Main St, Apt 2, The Woodlands, 77354". */
@@ -169,10 +216,10 @@ export function fulfillmentLabel(f: Fulfillment): string {
   return f.kind === "dine_in" ? `${FULFILLMENT_LABEL.dine_in} · Table ${f.table}` : FULFILLMENT_LABEL[f.kind];
 }
 
-/** "Dine-in, table 4", "Phone, delivery", "Walk-in": where an order came from and how it leaves. */
-export function sourceLabel(channel: Channel, f: Fulfillment): string {
+/** "Dine-in, table 4", "Phone, delivery", "Walk-in", "DoorDash, pickup": where an order came from and how it leaves. */
+export function sourceLabel(source: OrderSource, f: Fulfillment): string {
   if (f.kind === "dine_in") return `Dine-in, table ${f.table}`;
-  return channel === "walk_in" && f.kind === "pickup" ? "Walk-in" : `${SALES_CHANNEL_LABEL[channel]}, ${f.kind}`;
+  return source === "walk_in" && f.kind === "pickup" ? "Walk-in" : `${SOURCE_LABEL[source]}, ${f.kind}`;
 }
 
 /** "Pepperoni (left half)", "extra Onions", "Size: Large 14\"". */
@@ -219,8 +266,9 @@ export type OrderMutation =
   | { kind: "add_lines"; lines: SubmitLine[]; fire: boolean }
   | { kind: "fire"; lineIds: string[] | "all" }
   | { kind: "void_line"; lineId: string; reason: string }
-  | { kind: "discount"; id: string; lineId: string | null; cents: number; reason: string }
+  | { kind: "discount"; id: string; lineId: string | null; cents: number; reason: string; promotionId?: number | null }
   | { kind: "comp"; id: string; lineId: string; reason: string }
+  | { kind: "remove_discount"; discountId: number }
   | { kind: "tender"; tender: TenderInput }
   | { kind: "refund"; id: string; method: TenderMethod; amountCents: number; reason: string }
   | { kind: "set_customer"; customer: CustomerInput }
@@ -247,6 +295,7 @@ export function factId(m: OrderMutation): string | null {
     case "add_lines":
     case "fire":
     case "void_line":
+    case "remove_discount":
     case "set_customer":
     case "set_fulfillment":
     case "set_schedule":
@@ -257,7 +306,7 @@ export function factId(m: OrderMutation): string | null {
 }
 
 export function hasFact(o: OrderView, id: string): boolean {
-  return o.adjustments.some((a) => a.id === id) || o.tenders.some((t) => t.id === id);
+  return o.discounts.some((d) => d.uid === id) || o.tenders.some((t) => t.id === id);
 }
 
 export type Approval = { managerPin: string };
@@ -284,6 +333,7 @@ export function requiredRole(m: OrderMutation, ctx: PolicyContext): RequiredRole
     case "discount":
       return m.cents > ctx.discountApprovalCents ? "manager" : "cashier";
     case "comp":
+    case "remove_discount":
     case "refund":
       return "manager";
     case "add_lines":
@@ -304,9 +354,7 @@ export const DRAWER_ROLE: Record<DrawerEventKind, RequiredRole> = {
   paid_out: "manager",
 };
 
-export function roleSatisfies(role: EmployeeRole, required: RequiredRole): boolean {
-  return required === "cashier" || role === "manager" || role === "owner";
-}
+export { roleSatisfies };
 
 // ---------------------------------------------------------------------------
 // The wire contract: what the POS, the storefront and the server seam exchange
@@ -314,7 +362,7 @@ export function roleSatisfies(role: EmployeeRole, required: RequiredRole): boole
 
 export type SubmitOrderRequest = {
   orderId: string;
-  channel: Channel;
+  source: StoreSource;
   fulfillment: Fulfillment;
   customer: CustomerInput | null;
   notes: string | null;
@@ -394,14 +442,26 @@ export type HistoryEntry = {
   text: string;
 };
 
+/**
+ * The activity log: status moves, ETA pushes and notes come from order_events;
+ * fires, voids, discounts and tenders are read off their own rows.
+ */
 export function orderHistory(o: OrderView): HistoryEntry[] {
   const name = (id: number | null) => (id === null ? null : (o.staff[id] ?? `#${id}`));
   const lineName = (lineId: string | null) => {
     const line = o.lines.find((l) => l.lineId === lineId);
     return line ? `${line.quantity} × ${line.name}` : "the check";
   };
-  const placed: HistoryEntry = { at: o.placedAt, who: name(o.createdBy), approvedBy: null, text: `Placed (${sourceLabel(o.channel, o.fulfillment)})` };
+  const placedText = `Placed (${sourceLabel(o.source, o.fulfillment)})`;
   const entries: HistoryEntry[] = [];
+  for (const e of o.events) {
+    const text = e.type === "placed" ? placedText : e.note ? `${describeEvent(e)}: ${e.note}` : describeEvent(e);
+    entries.push({ at: e.at, who: e.actor, approvedBy: name(e.approvedBy), text });
+  }
+  // Orders inserted before the placed event existed get one from their row.
+  const placed: HistoryEntry[] = o.events.some((e) => e.type === "placed")
+    ? []
+    : [{ at: o.placedAt, who: name(o.createdBy), approvedBy: null, text: placedText }];
   const firedAt = [...new Set(o.lines.flatMap((l) => (l.firedAt ? [l.firedAt] : [])))];
   for (const at of firedAt) {
     const fired = o.lines.filter((l) => l.firedAt === at);
@@ -416,17 +476,15 @@ export function orderHistory(o: OrderView): HistoryEntry[] {
       text: `Voided ${l.quantity} × ${l.name} (${l.voided.reason})`,
     });
   }
-  for (const a of o.adjustments) {
-    const verb = a.kind === "comp" ? "Comped" : "Discounted";
-    entries.push({
-      at: a.at,
-      who: name(a.employeeId),
-      approvedBy: name(a.approvedBy),
-      text: `${verb} ${lineName(a.lineId)} by ${(a.cents / 100).toFixed(2)} (${a.reason})`,
-    });
+  for (const d of o.discounts) {
+    const text =
+      d.source === "comp"
+        ? `${d.lineId ? "Comped" : "Discounted"} ${lineName(d.lineId)} by ${(d.amountCents / 100).toFixed(2)} (${d.label})`
+        : `${d.source === "loyalty" ? "Reward" : "Deal"}: ${d.label} (−${(d.amountCents / 100).toFixed(2)})`;
+    entries.push({ at: d.at, who: name(d.employeeId), approvedBy: name(d.approvedBy), text });
   }
   for (const t of o.tenders) {
-    const method = t.method === "cash" ? "cash" : "card";
+    const method = TENDER_METHOD_LABEL[t.method].toLowerCase();
     const amount = (t.amountCents / 100).toFixed(2);
     entries.push({
       at: t.at,
@@ -440,5 +498,7 @@ export function orderHistory(o: OrderView): HistoryEntry[] {
   }
   // Placed leads even though lines fired with the order share its placed_at
   // stamp (both are the database's now() for the submit batch).
-  return [placed, ...entries.sort((a, b) => a.at.localeCompare(b.at))];
+  const sorted = entries.sort((a, b) => a.at.localeCompare(b.at));
+  const first = sorted.findIndex((e) => e.text === placedText);
+  return first > 0 ? [sorted[first], ...sorted.filter((_, i) => i !== first)] : [...placed, ...sorted];
 }

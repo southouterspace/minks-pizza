@@ -13,10 +13,10 @@ import { randomUUID } from "node:crypto";
 import { db, employees, operators, orderItems, orders, storeSettings } from "../src/db";
 import { submitOrder } from "../src/lib/orders-server/submit";
 import { mutateOrder } from "../src/lib/orders-server/mutate";
-import { placeOrder } from "../src/app/(store)/actions";
-import { check, eventually, launchBrowser, menuLookup, run, SHOT_DIR, signIn } from "./harness";
+import { createOrder as checkoutOrder } from "../src/lib/checkout";
+import { check, eventually, launchBrowser, menuLookup, run, SHOT_DIR, signIn } from "./e2e/harness";
 
-/** Places an online order through the storefront's checkout action. */
+/** Places an online order through the storefront's checkout path. */
 async function createOrder(o: {
   customerName: string;
   customerPhone: string;
@@ -24,17 +24,21 @@ async function createOrder(o: {
   notes?: string;
   lines: { itemId: number; quantity: number; modifierIds: number[]; notes?: string }[];
 }) {
-  const result = await placeOrder({
+  const placed = await checkoutOrder({
     orderType: o.delivery ? "delivery" : "pickup",
     customerName: o.customerName,
     customerPhone: o.customerPhone,
     ...o.delivery,
     orderNotes: o.notes,
     tipCents: 0,
-    lines: o.lines,
+    lines: o.lines.map((l) => ({
+      itemId: l.itemId,
+      quantity: l.quantity,
+      notes: l.notes ?? null,
+      selections: l.modifierIds.map((modifierId) => ({ modifierId, placement: "whole" as const, amount: "regular" as const })),
+    })),
   });
-  if (!result.ok) throw new Error(`order rejected: ${result.error}`);
-  return { id: result.orderId, orderNumber: (await orderRow(result.orderId)).orderNumber };
+  return { id: placed.id, orderNumber: placed.number };
 }
 
 const KITCHEN = { email: "kitchen@minks.example", password: "pizza-test-1234", name: "Kitchen" };
@@ -217,10 +221,10 @@ run(async () => {
   await shot("kds-4-cancel-alert");
 
   const [operator] = await db.select().from(operators).limit(1);
-  const [manager] = await db.select().from(employees).where(eq(employees.role, "manager")).limit(1);
+  const [manager] = await db.select().from(employees).where(eq(employees.posAccess, "manager")).limit(1);
   const staff = {
     operatorId: operator.id,
-    actor: { employeeId: manager.id, name: manager.name, role: manager.role },
+    actor: { employeeId: manager.id, name: manager.name, access: manager.posAccess },
   };
   const counterLine = (itemId: number, selections: { modifierId: number; placement: "whole" | "left" | "right" }[]) => ({
     lineId: randomUUID(),
@@ -240,7 +244,7 @@ run(async () => {
     submitOrder(
       {
         orderId: randomUUID(),
-        channel: "phone",
+        source: "phone",
         fulfillment: { kind: "pickup" },
         customer: { name: "Dana Phone", phone: "(555) 010-4444", email: null, saveAddress: false },
         notes: null,
@@ -284,7 +288,7 @@ run(async () => {
   const table = await submitOrder(
     {
       orderId: randomUUID(),
-      channel: "walk_in",
+      source: "walk_in",
       fulfillment: { kind: "dine_in", table: "12" },
       customer: null,
       notes: null,

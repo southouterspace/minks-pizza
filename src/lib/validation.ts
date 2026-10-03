@@ -10,6 +10,7 @@ import type {
   TenderInput,
 } from "@/lib/orders";
 import { AMOUNTS, PLACEMENTS, type Selection } from "@/lib/pricing";
+import { pinSchema } from "@/lib/timeclock";
 
 const id = z.number().int().positive();
 const cents = z.number().int().min(0).max(10_000_000);
@@ -47,16 +48,39 @@ export const cartLineSchema = z.union([
     })),
 ]);
 
+export type CartLineInput = z.infer<typeof cartLineSchema>;
+
+/** Codes as the customer typed them; matching normalizes. */
+const promoCodesSchema = z.array(z.string().trim().min(1).max(40)).max(5).optional();
+
+const phoneSchema = z
+  .string()
+  .trim()
+  .min(7, "Enter a valid phone number")
+  .max(25)
+  .regex(/^[\d\s()+.-]+$/, "Enter a valid phone number")
+  .refine((s) => s.replace(/\D/g, "").length >= 7, "Enter a valid phone number");
+
+const rewardIdSchema = z.number().int().positive().nullable().optional();
+
+/** What the cart and checkout send for a live quote; the phone may be half-typed. */
+export const previewSchema = z.object({
+  orderType: z.enum(["pickup", "delivery"]),
+  customerPhone: z.string().max(25).optional(),
+  promoCodes: promoCodesSchema,
+  rewardId: rewardIdSchema,
+  /** Also list the signed-in member's rewards and whether each fits the cart. */
+  withRewards: z.boolean().optional(),
+  lines: z.array(cartLineSchema).max(50),
+});
+
+export type PreviewInput = z.infer<typeof previewSchema>;
+
 export const checkoutSchema = z
   .object({
     orderType: z.enum(["pickup", "delivery"]),
     customerName: z.string().trim().min(1, "Name is required").max(120),
-    customerPhone: z
-      .string()
-      .trim()
-      .min(7, "Enter a valid phone number")
-      .max(25)
-      .regex(/^[\d\s()+.-]+$/, "Enter a valid phone number"),
+    customerPhone: phoneSchema,
     customerEmail: z
       .string()
       .trim()
@@ -71,6 +95,11 @@ export const checkoutSchema = z
     orderNotes: z.string().trim().max(1000).optional(),
     tipCents: z.number().int().min(0).max(50_000),
     lines: z.array(cartLineSchema).min(1, "Your cart is empty").max(50),
+    promoCodes: promoCodesSchema,
+    /** The total the customer saw on the button; a mismatch refuses the order. */
+    expectedTotalCents: z.number().int().min(0).optional(),
+    joinLoyalty: z.boolean().optional(),
+    rewardId: rewardIdSchema,
   })
   .superRefine((data, ctx) => {
     if (data.orderType === "delivery") {
@@ -147,7 +176,7 @@ const firePlanSchema: z.ZodType<FirePlan> = z.discriminatedUnion("kind", [
 
 export const submitOrderSchema: z.ZodType<SubmitOrderRequest> = z.object({
   orderId: z.uuid(),
-  channel: z.enum(["online", "walk_in", "phone"]),
+  source: z.enum(["web", "walk_in", "phone"]),
   fulfillment: fulfillmentSchema,
   customer: customerSchema.nullable(),
   notes: optionalText(1000),
@@ -165,6 +194,7 @@ export const orderMutationSchema: z.ZodType<OrderMutation> = z.discriminatedUnio
   z.object({ kind: z.literal("fire"), lineIds: z.union([z.literal("all"), z.array(z.uuid()).min(1)]) }),
   z.object({ kind: z.literal("void_line"), lineId: z.uuid(), reason }),
   z.object({ kind: z.literal("discount"), id: z.uuid(), lineId: z.uuid().nullable(), cents: cents.min(1), reason }),
+  z.object({ kind: z.literal("remove_discount"), discountId: id }),
   z.object({ kind: z.literal("comp"), id: z.uuid(), lineId: z.uuid(), reason }),
   z.object({ kind: z.literal("tender"), tender: tenderSchema }),
   z.object({
@@ -185,8 +215,6 @@ export const orderMutationSchema: z.ZodType<OrderMutation> = z.discriminatedUnio
   z.object({ kind: z.literal("split_by_item"), lineIds: z.array(z.uuid()).min(1), newOrderId: z.uuid() }),
   z.object({ kind: z.literal("handoff") }),
 ]);
-
-export const pinSchema = z.string().regex(/^\d{4}$/, "Enter a 4-digit PIN");
 
 const approvalSchema: z.ZodType<Approval> = z.object({ managerPin: pinSchema });
 
@@ -214,3 +242,28 @@ export const drawerEventSchema = z.object({
   reason: optionalText(200),
   approval: approvalSchema.optional(),
 });
+
+const comp = {
+  reason: z
+    .string()
+    .trim()
+    .min(1, "Say why: the reason shows on the receipt.")
+    .transform((s) => s.slice(0, 120)),
+  value: z
+    .string()
+    .transform(Number)
+    .refine((n) => Number.isFinite(n) && n > 0, "Enter an amount above zero."),
+  promotionId: z.union([z.literal("").transform(() => null), z.string().transform(Number).pipe(z.number().int().positive())]),
+};
+
+/** An operator comp from the order page's form: dollars or a percent off the items. */
+export const compSchema = z
+  .discriminatedUnion("kind", [
+    z.object({ kind: z.literal("amount"), ...comp }),
+    z.object({ kind: z.literal("percent"), ...comp, value: comp.value.refine((n) => n <= 100, "Percent must be 1–100.") }),
+  ])
+  .transform((c) => ({
+    label: c.reason,
+    promotionId: c.promotionId,
+    amount: c.kind === "percent" ? { percentBps: Math.round(c.value * 100) } : { cents: Math.round(c.value * 100) },
+  }));

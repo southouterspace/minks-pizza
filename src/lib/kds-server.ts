@@ -1,6 +1,8 @@
 import "server-only";
 import { and, asc, desc, eq, gte, inArray, isNull, or, sql } from "drizzle-orm";
 import { db, orderItems, orders, storeSettings } from "@/db";
+import { RECALLABLE } from "@/lib/order-workflow";
+import type { Actor } from "@/lib/order-writes";
 import {
   bumpPlan,
   type KdsAction,
@@ -55,7 +57,7 @@ function toTickets(rows: OrderRow[], numbers: ReadonlyMap<string, number>): KdsO
       number: numbers.get(key) ?? head.orderNumber,
       // A started check makes the ticket preparing; a check still on the shelf keeps it ready.
       status: (["preparing", "ready"] as const).find((s) => group.some((o) => o.status === s)) ?? head.status,
-      channel: head.channel,
+      source: head.source,
       fulfillment: fulfillmentOf(head),
       fireAt: head.fireAt?.toISOString() ?? null,
       promisedAt: head.promisedAt?.toISOString() ?? null,
@@ -162,9 +164,17 @@ function stageColumns(stage: WorkStage, now: Date) {
   }
 }
 
-/** Applies one display action. Every action is idempotent: replays are harmless. */
-export async function applyKdsAction(action: KdsAction): Promise<void> {
+/**
+ * Applies one display action. Every action is idempotent: replays are
+ * harmless, and only status changes that actually happen are logged (the
+ * fold in orders-server/folds.ts derives the status from the item stamps).
+ */
+export async function applyKdsAction(
+  action: KdsAction,
+  operator: { id: number; name: string },
+): Promise<void> {
   const now = new Date();
+  const actor: Actor = { name: `Kitchen display · ${operator.name}`, operatorId: operator.id, employeeId: null };
 
   if (action.type === "item") {
     const [item] = await db
@@ -183,7 +193,7 @@ export async function applyKdsAction(action: KdsAction): Promise<void> {
     const stage = action.stage === "oven" && item.station !== "pizza" ? "done" : action.stage;
     await db.batch([
       db.update(orderItems).set(stageColumns(stage, now)).where(eq(orderItems.id, action.itemId)),
-      ...syncStatus(item.orderId),
+      ...syncStatus(item.orderId, actor),
     ]);
     return;
   }
@@ -200,9 +210,7 @@ export async function applyKdsAction(action: KdsAction): Promise<void> {
       .map((m) =>
         db.update(orderItems).set(stageColumns(m.stage, now)).where(inArray(orderItems.id, m.ids)),
       );
-    // syncStatus always contributes statements, so the batch is never empty.
-    const [first, ...rest] = [...moves, ...group.flatMap((o) => syncStatus(o.id))];
-    await db.batch([first, ...rest]);
+    await run([...moves, ...group.flatMap((o) => syncStatus(o.id, actor))]);
     return;
   }
 
@@ -210,11 +218,15 @@ export async function applyKdsAction(action: KdsAction): Promise<void> {
     const recallable = await db
       .select({ id: orders.id })
       .from(orders)
-      .where(and(onTicket(action.orderId), inArray(orders.status, ["ready", "completed"])));
+      .where(and(onTicket(action.orderId), inArray(orders.status, [...RECALLABLE])));
     if (recallable.length === 0) return;
-    await run(recall(recallable.map((o) => o.id)));
+    await run(recall(recallable.map((o) => o.id), actor));
     return;
   }
 
-  await run([complete(onTicket(action.orderId))]);
+  const ready = await db
+    .select({ id: orders.id })
+    .from(orders)
+    .where(and(onTicket(action.orderId), eq(orders.status, "ready")));
+  await run(complete(ready.map((o) => o.id), actor));
 }

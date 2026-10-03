@@ -1,7 +1,7 @@
 import { eq, getTableColumns } from "drizzle-orm";
 import { db, storeSettings } from "@/db";
 import type { PricingPolicy } from "@/lib/pricing";
-import { DEFAULT_TIMEZONE } from "@/lib/store-time";
+import { DEFAULT_TIMEZONE } from "@/lib/zoned";
 
 export class StoreNotConfiguredError extends Error {}
 

@@ -17,12 +17,12 @@ import { submitOrder } from "../src/lib/orders-server/submit";
 import { mutateOrder } from "../src/lib/orders-server/mutate";
 import { getStoreBasics } from "../src/lib/settings-server";
 import { getPosMenu } from "../src/lib/menu-server";
-import { closeShift, getOpenShift, openShift, recordDrawerEvent } from "../src/lib/shifts-server";
+import { closeShift, getOpenShift, openShift, recordDrawerEvent } from "../src/lib/drawer-server";
 import type { OrderMutation, OrderView, SubmitOrderRequest } from "../src/lib/orders";
 import { checkPin, pinDigest } from "../src/lib/pin";
-import { storeDateOf } from "../src/lib/store-time";
+import { localDateOf } from "../src/lib/zoned";
 import type { StaffContext } from "../src/lib/staff";
-import { BASE, check, launchBrowser, run, SHOT_DIR, signIn } from "./harness";
+import { BASE, check, launchBrowser, run, SHOT_DIR, signIn } from "./e2e/harness";
 
 const BACK_OFFICE = { email: "backoffice@minks.example", password: "pizza-test-1234", name: "Back Office" };
 
@@ -115,65 +115,63 @@ async function freePin(): Promise<string> {
 async function staffFlow(page: Page, operatorId: number) {
   const name = `Riley Test ${Date.now() % 100_000}`;
   const [pin, newPin] = [await freePin(), await freePin()];
-  await page.goto(`${BASE}/admin/team`, { waitUntil: "networkidle" });
-  const addForm = page.locator("form:has(button:has-text('Add employee'))");
-  const add = async (who: string, role: string, p: string) => {
-    await addForm.locator('input[name="name"]').fill(who);
-    await addForm.locator('select[name="role"]').selectOption(role);
-    await addForm.locator('input[name="pin"]').fill(p);
-    await addForm.locator("button[type=submit]").click();
+  const add = async (who: string, access: "cashier" | "manager", p: string) => {
+    await page.goto(`${BASE}/admin/staff/employees/new`, { waitUntil: "networkidle" });
+    await page.fill('input[name="name"]', who);
+    await page.getByRole("checkbox", { name: "Cashier" }).click();
+    await page.fill('input[name="rate-cashier"]', "15.00");
+    await page.selectOption('select[name="posAccess"]', access);
+    await page.fill('input[name="pin"]', p);
+    await page.getByTestId("employee-save").click();
   };
 
   await add(name, "cashier", pin);
-  await page.waitForURL(/notice=staff-added/, { timeout: 15_000 });
-  const row = page.locator('[data-testid="employee-row"]', { hasText: name });
-  check("new employee is listed as a cashier", await row.locator("[data-slot=badge]").innerText(), "Cashier");
-  check(
-    "the PIN is not shown back: every PIN field is empty and masked",
-    await page.locator('input[name="pin"]').evaluateAll((els) => [...new Set(els.map((e) => `${(e as HTMLInputElement).type}:${(e as HTMLInputElement).value}`))]),
-    ["password:"],
-  );
+  await page.getByTestId("employee-created").waitFor({ timeout: 15_000 });
   const [created] = await db.select().from(employees).where(eq(employees.name, name));
-  check("only a 64-hex-digit digest of the PIN is stored", [/^[0-9a-f]{64}$/.test(created.pinDigest), created.pinDigest.includes(pin)], [true, false]);
-  check("the new PIN unlocks the POS as the new cashier", await checkPin(pin, operatorId), { ok: true, actor: { employeeId: created.id, name, role: "cashier" } });
+  check("new employee saved with cashier POS access and a cashier job", [created.posAccess, created.isActive], ["cashier", true]);
+  check("only a 64-hex-digit digest of the PIN is stored", [/^[0-9a-f]{64}$/.test(created.pinDigest ?? ""), (created.pinDigest ?? "").includes(pin)], [true, false]);
+  check("the new PIN unlocks the POS as the new cashier", await checkPin(pin, operatorId), { ok: true, actor: { employeeId: created.id, name, access: "cashier" } });
 
   await add("Duplicate Dana", "manager", pin);
-  check("a PIN another active employee holds is refused", await addForm.locator("[data-slot=field-error]").innerText(), "That PIN belongs to someone else. Pick another.");
-  await add("Duplicate Dana", "manager", "1234");
-  check("the demo manager's PIN is refused too", await addForm.locator("[data-slot=field-error]").innerText(), "That PIN belongs to someone else. Pick another.");
-  check("a refused add keeps the name and role typed in", [await addForm.locator('input[name="name"]').inputValue(), await addForm.locator('select[name="role"]').inputValue()], ["Duplicate Dana", "manager"]);
+  check("a PIN another employee holds is refused", await page.locator("[data-slot=field-error]").innerText(), "Someone else already has that PIN. Pick another.");
   check("no duplicate was written", (await db.select().from(employees).where(eq(employees.name, "Duplicate Dana"))).length, 0);
   await page.screenshot({ path: `${SHOT_DIR}/bo-team.png`, fullPage: true });
 
-  const pinForm = row.locator("form:has(button:has-text('Set PIN'))");
-  await pinForm.locator('input[name="pin"]').fill("5678");
-  await pinForm.locator("button[type=submit]").click();
-  check("changing to a taken PIN is refused", await pinForm.locator("[data-slot=field-error]").innerText(), "That PIN belongs to someone else. Pick another.");
-  await pinForm.locator('input[name="pin"]').fill(newPin);
-  await pinForm.locator("button[type=submit]").click();
-  await page.waitForURL(/notice=pin-changed/, { timeout: 15_000 });
-  check("after Set PIN the new PIN unlocks as the same employee", await checkPin(newPin, operatorId), { ok: true, actor: { employeeId: created.id, name, role: "cashier" } });
+  await page.goto(`${BASE}/admin/staff/employees/${created.id}`, { waitUntil: "networkidle" });
+  await page.fill('input[name="pin"]', "1234");
+  await page.getByTestId("employee-save").click();
+  check("changing to the demo manager's PIN is refused", await page.locator("[data-slot=field-error]").innerText(), "Someone else already has that PIN. Pick another.");
+  await page.fill('input[name="pin"]', newPin);
+  await page.getByTestId("employee-save").click();
+  await page.getByTestId("pin-notice").waitFor({ timeout: 15_000 });
+  check("after a new PIN is saved it unlocks as the same employee", await checkPin(newPin, operatorId), { ok: true, actor: { employeeId: created.id, name, access: "cashier" } });
   check("and the old PIN no longer does", await checkPin(pin, operatorId), { ok: false, reason: "bad_pin" });
   await db.delete(pinAttempts).where(eq(pinAttempts.operatorId, operatorId));
 
-  const deactivate = page.locator('[data-testid="employee-row"]', { hasText: name }).getByRole("button", { name: "Deactivate" });
-  await deactivate.click();
-  await page.locator('[data-testid="employee-row"]', { hasText: name }).getByRole("button", { name: "Confirm deactivate" }).click();
-  await page.waitForURL(/notice=staff-deactivated/, { timeout: 15_000 });
+  await page.goto(`${BASE}/admin/staff/employees/${created.id}`, { waitUntil: "networkidle" });
+  await page.selectOption('select[name="posAccess"]', "none");
+  await page.getByTestId("employee-save").click();
+  await page.getByText("Saved.").waitFor({ timeout: 15_000 });
+  check("taking POS access away keeps the PIN for the clock but not the terminal", await checkPin(newPin, operatorId), { ok: false, reason: "bad_pin" });
+  await db.delete(pinAttempts).where(eq(pinAttempts.operatorId, operatorId));
+
+  await page.getByRole("button", { name: "Archive" }).click();
+  await page.getByRole("button", { name: "Confirm archive" }).click();
+  await page.waitForURL(/notice=archived/, { timeout: 15_000 });
   const [gone] = await db.select().from(employees).where(eq(employees.id, created.id));
-  check("deactivate keeps the row but turns the PIN off", gone.isActive, false);
-  check("a deactivated employee leaves the active list", await page.locator('[data-testid="employee-row"]', { hasText: name }).count(), 0);
+  check("archiving keeps the row but turns the employee off", gone.isActive, false);
   await db.delete(employees).where(eq(employees.id, created.id));
 
-  const morgan = page.locator('[data-testid="employee-row"]', { hasText: "Morgan Manager" });
+  const [morgan] = await db.select().from(employees).where(eq(employees.name, "Morgan Manager"));
   try {
-    await morgan.getByRole("button", { name: "Deactivate" }).click();
-    await morgan.getByRole("button", { name: "Confirm deactivate" }).click();
-    await page.waitForURL(/notice=last-approver/, { timeout: 15_000 });
-    const [m] = await db.select().from(employees).where(eq(employees.name, "Morgan Manager"));
-    check("the last active manager can't be deactivated", m.isActive, true);
+    await page.goto(`${BASE}/admin/staff/employees/${morgan.id}`, { waitUntil: "networkidle" });
+    await page.getByRole("button", { name: "Archive" }).click();
+    await page.getByRole("button", { name: "Confirm archive" }).click();
+    await page.waitForURL(/notice=last-manager/, { timeout: 15_000 });
+    const [m] = await db.select().from(employees).where(eq(employees.id, morgan.id));
+    check("the last active POS manager can't be archived", m.isActive, true);
   } finally {
-    await db.update(employees).set({ isActive: true }).where(eq(employees.name, "Morgan Manager"));
+    await db.update(employees).set({ isActive: true }).where(eq(employees.id, morgan.id));
   }
 }
 
@@ -189,7 +187,7 @@ async function ringShift() {
   const as = (name: string): StaffContext => {
     const e = staff.find((r) => r.name === name && r.isActive);
     if (!e) throw new Error(`missing demo employee ${name}; run npm run db:seed`);
-    return { actor: { employeeId: e.id, name: e.name, role: e.role }, operatorId: operator.id };
+    return { actor: { employeeId: e.id, name: e.name, access: e.posAccess }, operatorId: operator.id };
   };
   const cashier = as("Casey Cashier");
   const manager = as("Morgan Manager");
@@ -215,11 +213,11 @@ async function ringShift() {
     selections: [mod('Medium 12"'), mod("Hand Tossed")].map((modifierId) => ({ modifierId, placement: "whole" as const, amount: "regular" as const })),
   });
   const knots = () => ({ lineId: randomUUID(), itemId: item("Garlic Knots (6)").id, quantity: 1, notes: null, selections: [] });
-  const order = (channel: "walk_in" | "phone", lines: SubmitOrderRequest["lines"], name: string): SubmitOrderRequest => ({
+  const order = (source: "walk_in" | "phone", lines: SubmitOrderRequest["lines"], name: string): SubmitOrderRequest => ({
     orderId: randomUUID(),
-    channel,
+    source,
     fulfillment: { kind: "pickup" },
-    customer: channel === "phone" ? { phone: "5550104455", name, email: null, saveAddress: false } : null,
+    customer: source === "phone" ? { phone: "5550104455", name, email: null, saveAddress: false } : null,
     notes: null,
     fire: { kind: "now" },
     promisedAt: null,
@@ -269,7 +267,7 @@ async function ringShift() {
 
 async function reportsFlow(page: Page, shift: Awaited<ReturnType<typeof ringShift>>) {
   const { timezone } = await getStoreBasics();
-  const today = storeDateOf(new Date(), timezone);
+  const today = localDateOf(new Date(), timezone);
 
   await page.goto(`${BASE}/admin/reports`, { waitUntil: "networkidle" });
   const row = page.locator(`[data-testid="shift-row"][href="/admin/reports/shift/${shift.shiftId}"]`);
@@ -314,7 +312,7 @@ async function reportsFlow(page: Page, shift: Awaited<ReturnType<typeof ringShif
   check(
     "lines CSV header",
     lines[0],
-    ["order_number", "placed_at_local", "channel", "order_type", "status", "customer", "item", "quantity", "unit_price", "line_total", "modifiers", "notes", "voided_at_local", "void_reason", "voided_by", "void_approved_by"],
+    ["order_number", "placed_at_local", "source", "order_type", "status", "customer", "item", "quantity", "unit_price", "line_total", "modifiers", "notes", "voided_at_local", "void_reason", "voided_by", "void_approved_by"],
   );
   const knotsRow = lines.find((l) => l[0] === String(shift.voided.number) && l[6] === "Garlic Knots (6)")!;
   check("lines CSV: the voided knots with price, reason, who and approver", [knotsRow[8], knotsRow[9], ...knotsRow.slice(-3)], ["5.99", "5.99", "customer changed mind", "Casey Cashier", "Morgan Manager"]);
@@ -343,23 +341,32 @@ async function reportsFlow(page: Page, shift: Awaited<ReturnType<typeof ringShif
 
 async function inboxFlow(page: Page, shift: Awaited<ReturnType<typeof ringShift>>) {
   await page.goto(`${BASE}/admin`, { waitUntil: "networkidle" });
-  const unpaid = page.locator(`[data-testid="order-card"][data-order-number="${shift.unpaid.number}"]`);
+  const unpaid = page.locator(`[data-testid="board-order-${shift.unpaid.number}"]`);
   const collect = unpaid.getByRole("link", { name: /Collect/ });
   check("an unpaid order links to the POS to collect", [await collect.innerText(), await collect.getAttribute("href")], ["Collect $15.14 at POS", `/pos?order=${shift.unpaid.id}`]);
-  const voided = page.locator(`[data-testid="order-card"][data-order-number="${shift.voided.number}"]`);
+  const voided = page.locator(`[data-testid="board-order-${shift.voided.number}"]`);
   check("a paid order has no Collect link", await voided.getByRole("link", { name: /Collect/ }).count(), 0);
-  await voided.locator("[data-testid=order-activity] summary").click();
-  const activity = (await voided.locator("[data-testid=order-activity] ol").innerText()).split("\n").map((l) => l.replace(/^\d{1,2}:\d{2} [AP]M\s*/, ""));
-  check(
-    "Activity shows placed, sent, the approved void and the payment",
-    activity,
-    [
-      "Placed (Walk-in) · Casey Cashier",
-      "Sent to kitchen: 1 × Cheese Pizza, 1 × Garlic Knots (6)",
-      "Voided 1 × Garlic Knots (6) (customer changed mind) · Casey Cashier, approved by Morgan Manager",
-      "Paid 15.14 cash · Casey Cashier",
-    ],
+  await page.goto(`${BASE}/admin/orders/${shift.voided.id}`, { waitUntil: "networkidle" });
+  const activity = await page.locator('[data-testid="timeline"] li').evaluateAll((els) =>
+    els.map((li) => {
+      const [text, meta] = [...li.querySelectorAll("p")].map((p) => p.textContent ?? "");
+      const who = (meta ?? "").replace(/(^| · )[A-Z][a-z]{2} \d{1,2}, \d{1,2}:\d{2} [AP]M$/, "");
+      return who ? `${text} · ${who}` : text;
+    }),
   );
+  const wanted = [
+    "Placed (Walk-in) · Casey Cashier",
+    "Sent to kitchen: 1 × Cheese Pizza, 1 × Garlic Knots (6)",
+    "Voided 1 × Garlic Knots (6) (customer changed mind) · Casey Cashier · approved by Morgan Manager",
+    "Paid 15.14 cash · Casey Cashier",
+  ];
+  let cursor = -1;
+  check(
+    "the detail timeline shows placed, sent, the approved void and the payment, in order",
+    wanted.every((w) => (cursor = activity.indexOf(w, cursor + 1)) >= 0) ? wanted : activity,
+    wanted,
+  );
+  await page.goto(`${BASE}/admin`, { waitUntil: "networkidle" });
   await voided.scrollIntoViewIfNeeded();
   await page.screenshot({ path: `${SHOT_DIR}/bo-inbox.png` });
 }

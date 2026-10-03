@@ -1,5 +1,6 @@
 "use client";
 
+import { POS_ACCESS_LABEL } from "@/lib/pos-access";
 import { Lock, Menu as MenuIcon, Moon, WifiOff } from "lucide-react";
 import {
   DropdownMenu,
@@ -13,7 +14,7 @@ import {
 } from "@/components/ui/dropdown-menu";
 import type { DrawerEventKind } from "@/lib/orders";
 import type { OutboxEntry } from "@/lib/pos-outbox";
-import { formatStoreTime } from "@/lib/store-time";
+import { formatClock } from "@/lib/zoned";
 import { cn } from "@/lib/utils";
 import { usePos } from "./context";
 import { Tap } from "./touch";
@@ -98,13 +99,13 @@ export function TerminalHeader({
         <DropdownMenuTrigger className="flex h-11 items-center gap-2 rounded-xl px-3 hover:bg-muted" data-testid="staff-menu">
           <span className="text-right leading-tight">
             <span className="block font-semibold">{staff.name}</span>
-            <span className="block text-xs text-muted-foreground capitalize">{staff.role}</span>
+            <span className="block text-xs text-muted-foreground">{POS_ACCESS_LABEL[staff.access]}</span>
           </span>
           <MenuIcon className="size-5" />
         </DropdownMenuTrigger>
         <DropdownMenuContent align="end" className="w-60">
           <DropdownMenuGroup>
-            <DropdownMenuLabel>{shift ? `Shift open since ${formatStoreTime(shift.openedAt, store.timeZone)}` : "No open shift"}</DropdownMenuLabel>
+            <DropdownMenuLabel>{shift ? `Shift open since ${formatClock(shift.openedAt, store.timeZone)}` : "No open shift"}</DropdownMenuLabel>
             {shift ? (
               <>
                 <DropdownMenuItem onClick={() => openDialog({ kind: "drawer", drawer: "no_sale" })}>Open drawer (no sale)</DropdownMenuItem>

@@ -2,15 +2,21 @@ import type { Metadata } from "next";
 import { eq } from "drizzle-orm";
 import { db, storeSettings, type DayHours } from "@/db";
 import { requireOperator } from "@/lib/auth";
-import { DAY_NAMES } from "@/lib/hours";
+import { STORE_TIMEZONES } from "@/lib/hours";
+import { DAY_NAMES } from "@/lib/zoned";
 import {
   saveSettings,
   toggleAcceptingOrders,
   togglePublished,
 } from "@/app/admin/actions";
-import { ToggleSwitchForm } from "@/components/admin/toggle-switch-form";
+import { ActionSwitch } from "@/components/admin/action-switch";
 import { LogoField } from "@/components/admin/logo-field";
-import { centsToDollars } from "@/components/admin/ui";
+import { centsToDollars } from "@/lib/money";
+import { DEFAULT_STAFF_RULES, ruleInputValue, STAFF_RULE_FIELDS, type StaffRules } from "@/lib/timeclock";
+import { DEFAULT_TIMEZONE } from "@/lib/zoned";
+import type { HalfToppingRule } from "@/lib/pricing";
+import { POS_SETTING_LIMITS } from "@/lib/settings";
+import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -24,15 +30,12 @@ import {
 } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import { NativeSelect, NativeSelectOption } from "@/components/ui/native-select";
-import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
-import type { HalfToppingRule } from "@/lib/pricing";
-import { POS_SETTING_LIMITS } from "@/lib/settings";
-import { defaultSettings } from "@/lib/settings-server";
-import { US_TIMEZONES } from "@/lib/store-time";
 
 export const dynamic = "force-dynamic";
 
 export const metadata: Metadata = { title: "Settings" };
+
+const STAFF_DEFAULTS: StaffRules = DEFAULT_STAFF_RULES;
 
 const HALF_RULES: { value: HalfToppingRule; label: string; example: string }[] = [
   {
@@ -46,6 +49,41 @@ const HALF_RULES: { value: HalfToppingRule; label: string; example: string }[] =
     example: "$2.00 topping on the left, $1.00 on the right charges $2.00.",
   },
 ];
+
+const DEFAULTS = {
+  name: "My Pizzeria",
+  tagline: null as string | null,
+  logoUrl: null as string | null,
+  logoUploadedAt: null as Date | null,
+  phone: null as string | null,
+  email: null as string | null,
+  addressLine1: null as string | null,
+  addressLine2: null as string | null,
+  city: null as string | null,
+  state: null as string | null,
+  zip: null as string | null,
+  hours: null as DayHours[] | null,
+  pickupEnabled: true,
+  deliveryEnabled: false,
+  pickupPrepMinutes: 20,
+  deliveryPrepMinutes: 45,
+  kdsWarnMinutes: 10,
+  kdsLateMinutes: 15,
+  kdsOvenMinutes: 7,
+  deliveryFeeCents: 0,
+  deliveryMinimumCents: 0,
+  taxRateBps: 0,
+  timezone: DEFAULT_TIMEZONE,
+  halfToppingRule: "average" as HalfToppingRule,
+  extraToppingBps: 20_000,
+  discountApprovalCents: 500,
+  ovenCapacityPies: 6,
+  makeMinutes: 3,
+  posLockSeconds: 120,
+  ...STAFF_DEFAULTS,
+  isPublished: false,
+  isAcceptingOrders: true,
+};
 
 export default async function SettingsPage({
   searchParams,
@@ -61,7 +99,7 @@ export default async function SettingsPage({
     .select()
     .from(storeSettings)
     .where(eq(storeSettings.id, 1));
-  const settings = row ?? defaultSettings();
+  const settings = row ?? DEFAULTS;
 
   const hoursByDay = new Map<number, DayHours>(
     (settings.hours ?? []).map((h) => [h.day, h]),
@@ -91,7 +129,7 @@ export default async function SettingsPage({
               )}
             </p>
           </div>
-          <ToggleSwitchForm
+          <ActionSwitch
             action={togglePublished}
             checked={settings.isPublished}
             label={settings.isPublished ? "Unpublish store" : "Publish store"}
@@ -110,7 +148,7 @@ export default async function SettingsPage({
               )}
             </p>
           </div>
-          <ToggleSwitchForm
+          <ActionSwitch
             action={toggleAcceptingOrders}
             checked={settings.isAcceptingOrders}
             label={
@@ -266,6 +304,26 @@ export default async function SettingsPage({
 
         <FieldSet>
           <FieldLegend className="w-full border-b border-border pb-2 text-sm!">
+            Time zone
+          </FieldLegend>
+          <Field className="max-w-xs">
+            <FieldLabel htmlFor="s-timezone">Store time zone</FieldLabel>
+            <NativeSelect id="s-timezone" name="timezone" defaultValue={settings.timezone}>
+              {STORE_TIMEZONES.map((tz) => (
+                <NativeSelectOption key={tz.value} value={tz.value}>
+                  {tz.label} ({tz.value})
+                </NativeSelectOption>
+              ))}
+            </NativeSelect>
+            <FieldDescription>
+              Decides when the store&apos;s day starts for order stats, history
+              dates and promised times, and for every shift and payroll week.
+            </FieldDescription>
+          </Field>
+        </FieldSet>
+
+        <FieldSet>
+          <FieldLegend className="w-full border-b border-border pb-2 text-sm!">
             Ordering
           </FieldLegend>
           <div className="grid gap-4 sm:grid-cols-2">
@@ -362,6 +420,52 @@ export default async function SettingsPage({
 
         <FieldSet>
           <FieldLegend className="w-full border-b border-border pb-2 text-sm!">
+            Kitchen display
+          </FieldLegend>
+          <Card>
+            <div className="grid gap-4 px-4 sm:grid-cols-3">
+              <Field>
+                <FieldLabel htmlFor="s-kds-warn">Ticket turns amber at (min)</FieldLabel>
+                <Input
+                  id="s-kds-warn"
+                  name="kdsWarnMinutes"
+                  type="number"
+                  min="1"
+                  step="1"
+                  defaultValue={settings.kdsWarnMinutes}
+                  className="tabular-nums"
+                />
+              </Field>
+              <Field>
+                <FieldLabel htmlFor="s-kds-late">Ticket turns red at (min)</FieldLabel>
+                <Input
+                  id="s-kds-late"
+                  name="kdsLateMinutes"
+                  type="number"
+                  min="1"
+                  step="1"
+                  defaultValue={settings.kdsLateMinutes}
+                  className="tabular-nums"
+                />
+              </Field>
+              <Field>
+                <FieldLabel htmlFor="s-kds-oven">Oven bake time (min)</FieldLabel>
+                <Input
+                  id="s-kds-oven"
+                  name="kdsOvenMinutes"
+                  type="number"
+                  min="1"
+                  step="1"
+                  defaultValue={settings.kdsOvenMinutes}
+                  className="tabular-nums"
+                />
+              </Field>
+            </div>
+          </Card>
+        </FieldSet>
+
+        <FieldSet>
+          <FieldLegend className="w-full border-b border-border pb-2 text-sm!">
             Point of sale
           </FieldLegend>
           <Field>
@@ -450,65 +554,44 @@ export default async function SettingsPage({
               />
               <FieldDescription>With oven capacity, sets the quoted wait.</FieldDescription>
             </Field>
-            <Field>
-              <FieldLabel htmlFor="s-timezone">Store timezone</FieldLabel>
-              <NativeSelect id="s-timezone" name="timezone" defaultValue={settings.timezone} className="w-full">
-                {(US_TIMEZONES.some((z) => z.tz === settings.timezone)
-                  ? US_TIMEZONES
-                  : [{ tz: settings.timezone, label: settings.timezone }, ...US_TIMEZONES]
-                ).map((z) => (
-                  <NativeSelectOption key={z.tz} value={z.tz}>
-                    {z.label} ({z.tz.split("/").pop()?.replace("_", " ")})
-                  </NativeSelectOption>
-                ))}
-              </NativeSelect>
-              <FieldDescription>Where report days start and end.</FieldDescription>
-            </Field>
           </div>
         </FieldSet>
 
         <FieldSet>
           <FieldLegend className="w-full border-b border-border pb-2 text-sm!">
-            Kitchen display
+            Staff &amp; payroll
           </FieldLegend>
+          <FieldDescription>
+            Rules for the time clock, schedule and timesheets. Leave a field blank to turn that rule off.
+          </FieldDescription>
           <Card>
-            <div className="grid gap-4 px-4 sm:grid-cols-3">
+            <div className="grid gap-4 px-4 sm:grid-cols-2">
               <Field>
-                <FieldLabel htmlFor="s-kds-warn">Ticket turns amber at (min)</FieldLabel>
-                <Input
-                  id="s-kds-warn"
-                  name="kdsWarnMinutes"
-                  type="number"
-                  min="1"
-                  step="1"
-                  defaultValue={settings.kdsWarnMinutes}
-                  className="tabular-nums"
-                />
+                <FieldLabel htmlFor="s-week">Payroll week starts on</FieldLabel>
+                <NativeSelect id="s-week" name="weekStartsOn" defaultValue={String(settings.weekStartsOn)} className="w-full">
+                  {DAY_NAMES.map((name, day) => (
+                    <NativeSelectOption key={day} value={day}>
+                      {name}
+                    </NativeSelectOption>
+                  ))}
+                </NativeSelect>
               </Field>
-              <Field>
-                <FieldLabel htmlFor="s-kds-late">Ticket turns red at (min)</FieldLabel>
-                <Input
-                  id="s-kds-late"
-                  name="kdsLateMinutes"
-                  type="number"
-                  min="1"
-                  step="1"
-                  defaultValue={settings.kdsLateMinutes}
-                  className="tabular-nums"
-                />
-              </Field>
-              <Field>
-                <FieldLabel htmlFor="s-kds-oven">Oven bake time (min)</FieldLabel>
-                <Input
-                  id="s-kds-oven"
-                  name="kdsOvenMinutes"
-                  type="number"
-                  min="1"
-                  step="1"
-                  defaultValue={settings.kdsOvenMinutes}
-                  className="tabular-nums"
-                />
-              </Field>
+              {STAFF_RULE_FIELDS.map((f) => (
+                <Field key={f.key}>
+                  <FieldLabel htmlFor={f.id}>{f.label}</FieldLabel>
+                  <Input
+                    id={f.id}
+                    name={f.name}
+                    type="number"
+                    min={f.min}
+                    step={f.step}
+                    required={f.required}
+                    defaultValue={ruleInputValue(f, settings[f.key])}
+                    className="tabular-nums"
+                  />
+                  {f.hint ? <FieldDescription>{f.hint}</FieldDescription> : null}
+                </Field>
+              ))}
             </div>
           </Card>
         </FieldSet>
@@ -575,7 +658,6 @@ export default async function SettingsPage({
 
         <div className="flex items-center gap-3 border-t border-border pt-5">
           <Button type="submit">Save settings</Button>
-
           {saved ? (
             <span className="text-sm font-medium text-success" role="status">
               Saved

@@ -92,6 +92,9 @@ export async function getPosMenu(): Promise<PosMenu> {
 
 export type PricedLine = SubmitLine & {
   name: string;
+  categoryId: number;
+  /** Chosen modifier ids, so promotions can target a size. */
+  modifierIds: number[];
   station: MenuItem["station"];
   unitPriceCents: number;
   modifiers: ReturnType<typeof priceLine>["modifiers"];
@@ -106,7 +109,14 @@ export async function priceLines(lines: SubmitLine[], policy: PricingPolicy): Pr
       const item = items.get(line.itemId);
       if (!item) throw new PricingError("An item in this order is no longer on the menu.");
       const priced = priceLine(item, line.selections, policy);
-      return { ...line, name: item.name, station: item.station, ...priced };
+      return {
+        ...line,
+        name: item.name,
+        categoryId: item.categoryId,
+        modifierIds: line.selections.map((s) => s.modifierId),
+        station: item.station,
+        ...priced,
+      };
     });
   } catch (err) {
     if (err instanceof PricingError) return rejected(err.message);

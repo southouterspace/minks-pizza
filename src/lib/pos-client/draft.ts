@@ -7,7 +7,7 @@
 import {
   digitsOf,
   type Address,
-  type Channel,
+  type StoreSource,
   type FirePlan,
   type Fulfillment,
   type PosMenu,
@@ -17,16 +17,16 @@ import {
 } from "@/lib/orders";
 import { ticketLine } from "@/lib/kds";
 import { priceLine, type LineModifier, type MenuItem, type PricingPolicy, type Selection } from "@/lib/pricing";
-import { taxFromBps } from "@/lib/money";
+import { bpsOf } from "@/lib/money";
 
-/** What the cashier picks; maps onto the server's channel × fulfillment. */
+/** What the cashier picks; maps onto the server's source × fulfillment. */
 export type Mode = "walk_in" | "phone" | "delivery" | "dine_in";
 
 type ModeSpec = {
   label: string;
   /** As in "Pay new phone order". */
   noun: string;
-  channel: Channel;
+  source: StoreSource;
   fulfillment: Fulfillment["kind"];
   /** The caller's number and name come before the food. */
   phoneFirst: boolean;
@@ -37,10 +37,10 @@ type ModeSpec = {
 };
 
 export const MODES: Record<Mode, ModeSpec> = {
-  walk_in: { label: "Walk-in", noun: "walk-in", channel: "walk_in", fulfillment: "pickup", phoneFirst: false, hold: false, next: "walk_in" },
-  phone: { label: "Phone", noun: "phone", channel: "phone", fulfillment: "pickup", phoneFirst: true, hold: false, next: "walk_in" },
-  delivery: { label: "Delivery", noun: "phone", channel: "phone", fulfillment: "delivery", phoneFirst: true, hold: false, next: "walk_in" },
-  dine_in: { label: "Dine-in", noun: "dine-in", channel: "walk_in", fulfillment: "dine_in", phoneFirst: false, hold: true, next: "dine_in" },
+  walk_in: { label: "Walk-in", noun: "walk-in", source: "walk_in", fulfillment: "pickup", phoneFirst: false, hold: false, next: "walk_in" },
+  phone: { label: "Phone", noun: "phone", source: "phone", fulfillment: "pickup", phoneFirst: true, hold: false, next: "walk_in" },
+  delivery: { label: "Delivery", noun: "phone", source: "phone", fulfillment: "delivery", phoneFirst: true, hold: false, next: "walk_in" },
+  dine_in: { label: "Dine-in", noun: "dine-in", source: "walk_in", fulfillment: "dine_in", phoneFirst: false, hold: true, next: "dine_in" },
 };
 
 const MODE_ORDER: Mode[] = ["walk_in", "phone", "delivery", "dine_in"];
@@ -203,7 +203,7 @@ export type DraftTotals = { subtotalCents: number; taxCents: number; deliveryFee
 
 export function draftTotals(d: Draft, menu: Pick<PosMenu, "taxRateBps" | "deliveryFeeCents">): DraftTotals {
   const subtotalCents = d.lines.reduce((s, l) => s + l.unitPriceCents * l.quantity, 0);
-  const taxCents = taxFromBps(subtotalCents, menu.taxRateBps);
+  const taxCents = bpsOf(subtotalCents, menu.taxRateBps);
   // An added line rides on the check's existing fee.
   const deliveryFeeCents = d.kind === "new" && MODES[d.mode].fulfillment === "delivery" ? menu.deliveryFeeCents : 0;
   return { subtotalCents, taxCents, deliveryFeeCents, totalCents: subtotalCents + taxCents + deliveryFeeCents };
@@ -259,7 +259,7 @@ export function toSubmitRequest(d: NewOrderDraft, quoteMinutes: number, tenders:
   const mode = MODES[d.mode];
   return {
     orderId: d.orderId,
-    channel: mode.channel,
+    source: mode.source,
     fulfillment: fulfillmentOf(d),
     customer:
       digitsOf(phone).length >= 7

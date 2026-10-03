@@ -1,20 +1,20 @@
 /**
  * Staff at the POS terminal. The device is signed in by an operator session
- * (like /kitchen); staff then switch with a 4-digit PIN, which sets a short
- * second cookie. Roles are read from the database on every action, so a
- * demotion takes effect on the next tap.
+ * (like /kitchen); staff then switch with their PIN, which sets a short
+ * second cookie. POS access is read from the database on every action, so
+ * a demotion takes effect on the next tap.
  */
 import { cookies } from "next/headers";
 import { SignJWT, jwtVerify } from "jose";
-import { and, eq } from "drizzle-orm";
+import { and, eq, ne } from "drizzle-orm";
 import { db, employees, storeSettings } from "@/db";
 import { getSessionOperatorId } from "@/lib/auth";
-import type { Actor } from "@/lib/orders";
+import type { StaffActor } from "@/lib/orders";
 import { checkPin, type PinCheck } from "@/lib/pin";
 
 const STAFF_COOKIE = "minks_staff";
 
-export type StaffContext = { actor: Actor; operatorId: number };
+export type StaffContext = { actor: StaffActor; operatorId: number };
 
 function secretKey(): Uint8Array {
   const secret = process.env.SESSION_SECRET;
@@ -22,11 +22,11 @@ function secretKey(): Uint8Array {
   return new TextEncoder().encode(secret);
 }
 
-async function actorById(employeeId: number): Promise<Actor | null> {
+async function actorById(employeeId: number): Promise<StaffActor | null> {
   const [employee] = await db
-    .select({ employeeId: employees.id, name: employees.name, role: employees.role })
+    .select({ employeeId: employees.id, name: employees.name, access: employees.posAccess })
     .from(employees)
-    .where(and(eq(employees.id, employeeId), eq(employees.isActive, true)));
+    .where(and(eq(employees.id, employeeId), eq(employees.isActive, true), ne(employees.posAccess, "none")));
   return employee ?? null;
 }
 

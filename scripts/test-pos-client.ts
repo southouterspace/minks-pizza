@@ -12,8 +12,8 @@ import { reorderLines, type MenuItem, type PricingPolicy } from "../src/lib/pric
 import { withCounts } from "../src/lib/reports";
 import { parseCents } from "../src/lib/money";
 import { chargeRows } from "../src/components/pos/totals";
-import { formatStoreClock, formatStoreTime, nextStoreTime, storeHhmm } from "../src/lib/store-time";
-import { check, run } from "./harness";
+import { formatClockSeconds, formatClock, nextStoreTime, hhmmOf } from "../src/lib/zoned";
+import { check, run } from "./e2e/harness";
 
 const mod = (id: number, name: string, priceDeltaCents: number, isDefault = false) => ({
   id,
@@ -110,7 +110,7 @@ run(async () => {
   const req = toSubmitRequest(asNew(filled), 30, []);
   check(
     "delivery submits as a phone order with the address saved",
-    [req.channel, req.fulfillment.kind, req.customer?.saveAddress, req.fire.kind, req.lines.length],
+    [req.source, req.fulfillment.kind, req.customer?.saveAddress, req.fire.kind, req.lines.length],
     ["phone", "delivery", true, "now", 2],
   );
   check(
@@ -123,9 +123,9 @@ run(async () => {
   check("Later 09:00 picked at 3 PM Chicago rolls to tomorrow morning", nextStoreTime("09:00", new Date("2026-10-03T20:00:00Z"), CHICAGO).toISOString(), "2026-10-04T14:00:00.000Z");
   check("Later 23:45 picked at 11:30 PM Chicago stays on the store's day, not UTC's", nextStoreTime("23:45", new Date("2026-10-04T04:30:00Z"), CHICAGO).toISOString(), "2026-10-04T04:45:00.000Z");
   check("Later 18:00 on the day DST ends uses CST", nextStoreTime("18:00", new Date("2026-11-01T12:00:00Z"), CHICAGO).toISOString(), "2026-11-02T00:00:00.000Z");
-  check("the picker shows the store's wall clock", storeHhmm("2026-10-04T04:45:00Z", CHICAGO), "23:45");
-  check("times read in the store's zone", formatStoreTime("2026-10-04T04:45:00Z", CHICAGO), "11:45 PM");
-  check("the KDS as-of stamp keeps the seconds", formatStoreClock("2026-10-04T04:45:07Z", CHICAGO), "11:45:07 PM");
+  check("the picker shows the store's wall clock", hhmmOf("2026-10-04T04:45:00Z", CHICAGO), "23:45");
+  check("times read in the store's zone", formatClock("2026-10-04T04:45:00Z", CHICAGO), "11:45 PM");
+  check("the KDS as-of stamp keeps the seconds", formatClockSeconds("2026-10-04T04:45:07Z", CHICAGO), "11:45:07 PM");
   const dineIn = draftReducer(d, { type: "mode", mode: "dine_in" });
   check("dine-in needs a table", draftProblem(dineIn), "Enter the table.");
   const held = draftReducer(dineIn, { type: "schedule", schedule: { kind: "hold" } });

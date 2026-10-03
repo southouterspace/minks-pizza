@@ -3,10 +3,14 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import {
+  CalendarClock,
   ChartColumn,
   ClipboardList,
+  Gift,
+  History,
   Settings,
   SlidersHorizontal,
+  Tag,
   Users,
   UtensilsCrossed,
 } from "lucide-react";
@@ -14,6 +18,7 @@ import { cn } from "@/lib/utils";
 
 const LINKS = [
   { href: "/admin", label: "Orders", exact: true, icon: ClipboardList },
+  { href: "/admin/orders", label: "History", exact: false, icon: History },
   { href: "/admin/menu", label: "Menu", exact: false, icon: UtensilsCrossed },
   {
     href: "/admin/modifiers",
@@ -21,6 +26,9 @@ const LINKS = [
     exact: false,
     icon: SlidersHorizontal,
   },
+  { href: "/admin/promotions", label: "Promotions", exact: false, icon: Tag },
+  { href: "/admin/staff", label: "Staff", exact: false, icon: CalendarClock },
+  { href: "/admin/loyalty", label: "Loyalty", exact: false, icon: Gift },
   { href: "/admin/reports", label: "Reports", exact: false, icon: ChartColumn },
   { href: "/admin/settings", label: "Settings", exact: false, icon: Settings },
   { href: "/admin/team", label: "Team", exact: false, icon: Users },

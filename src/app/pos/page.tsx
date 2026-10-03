@@ -5,7 +5,7 @@ import { requireOperator } from "@/lib/auth";
 import { getPosMenu } from "@/lib/menu-server";
 import { getBoard } from "@/lib/orders-server/views";
 import { getStaff } from "@/lib/staff";
-import { DEFAULT_TIMEZONE } from "@/lib/store-time";
+import { DEFAULT_TIMEZONE } from "@/lib/zoned";
 import { POS_TOASTER } from "@/components/pos/notify";
 import { PosTerminal } from "@/components/pos/terminal";
 import { Toaster } from "@/components/ui/sonner";

@@ -17,13 +17,13 @@ import { getSettings } from "../src/lib/settings-server";
 import { getPosMenu } from "../src/lib/menu-server";
 import { getOrderView } from "../src/lib/orders-server/views";
 import { fireDue } from "../src/lib/orders-server/folds";
-import { closeShift, getOpenShift, openShift, recordDrawerEvent } from "../src/lib/shifts-server";
+import { closeShift, getOpenShift, openShift, recordDrawerEvent } from "../src/lib/drawer-server";
 import {
   channelLabel,
   orderHistory,
   paymentState,
   sourceLabel,
-  type Channel,
+  type OrderSource,
   type Fulfillment,
   type MutationResult,
   type OrderMutation,
@@ -32,10 +32,10 @@ import {
 } from "../src/lib/orders";
 import { allocate, priceLine, shareByItem, splitEvenly, type MenuItem, type Selection } from "../src/lib/pricing";
 import { checkPin } from "../src/lib/pin";
-import { storeDateOf, storeDayRange } from "../src/lib/store-time";
+import { localDateOf, dayBounds } from "../src/lib/zoned";
 import type { StaffContext } from "../src/lib/staff";
 import { cartLineSchema } from "../src/lib/validation";
-import { check, run } from "./harness";
+import { check, run } from "./e2e/harness";
 
 
 function view(r: MutationResult): OrderView {
@@ -54,7 +54,7 @@ run(async () => {
   const actor = (name: string) => {
     const e = staffRows.find((r) => r.name === name);
     if (!e) throw new Error(`missing demo employee ${name}; run npm run db:seed`);
-    return { employeeId: e.id, name: e.name, role: e.role };
+    return { employeeId: e.id, name: e.name, access: e.posAccess };
   };
   const cashier: StaffContext = { actor: actor("Casey Cashier"), operatorId: operator.id };
   const manager: StaffContext = { actor: actor("Morgan Manager"), operatorId: operator.id };
@@ -116,7 +116,7 @@ run(async () => {
   check("a fully comped check splits the balance evenly", shareByItem(100, 3, [{ cents: 0, guests: [0] }]), [34, 33, 33]);
 
   const kinds: Fulfillment[] = [{ kind: "pickup" }, { kind: "delivery", address: { line1: "1 Main", line2: null, city: null, zip: "77380" } }, { kind: "dine_in", table: "4" }];
-  const channels: Channel[] = ["walk_in", "phone", "online"];
+  const channels: OrderSource[] = ["walk_in", "phone", "web"];
   check(
     "badge and placed label for every channel × fulfillment",
     channels.flatMap((c) => kinds.map((f) => `${c}/${f.kind}: ${channelLabel(c, f.kind)} | ${sourceLabel(c, f)}`)),
@@ -127,9 +127,9 @@ run(async () => {
       "phone/pickup: Phone | Phone, pickup",
       "phone/delivery: Phone | Phone, delivery",
       "phone/dine_in: Dine-in | Dine-in, table 4",
-      "online/pickup: Online | Online, pickup",
-      "online/delivery: Online | Online, delivery",
-      "online/dine_in: Dine-in | Dine-in, table 4",
+      "web/pickup: Online | Online, pickup",
+      "web/delivery: Online | Online, delivery",
+      "web/dine_in: Dine-in | Dine-in, table 4",
     ],
   );
 
@@ -150,7 +150,7 @@ run(async () => {
   });
   const walkIn = (lines: SubmitOrderRequest["lines"], extra: Partial<SubmitOrderRequest> = {}): SubmitOrderRequest => ({
     orderId: randomUUID(),
-    channel: "walk_in",
+    source: "walk_in",
     fulfillment: { kind: "pickup" },
     customer: null,
     notes: null,
@@ -199,7 +199,7 @@ run(async () => {
 
   const later = new Date(Date.now() + 60 * 60_000);
   const scheduled = view(
-    await submitOrder(walkIn([line("Cheese Pizza", [sel('Small 10"'), sel("Hand Tossed")])], { channel: "phone", fire: { kind: "at", at: later.toISOString() } }), { kind: "pos", staff: cashier }),
+    await submitOrder(walkIn([line("Cheese Pizza", [sel('Small 10"'), sel("Hand Tossed")])], { source: "phone", fire: { kind: "at", at: later.toISOString() } }), { kind: "pos", staff: cashier }),
   );
   check("scheduled order is held with nothing fired", [scheduled.status, scheduled.lines.map((l) => l.firedAt)], ["held", [null]]);
   const water = line("Sparkling Water", []);
@@ -285,7 +285,7 @@ run(async () => {
   check(
     "sales by channel: orders, net sales, tax",
     r.byChannel.map((c) => [c.channel, c.orders, c.netCents, c.taxCents]),
-    [["walk_in", 5, 7833, 661], ["phone", 1, 1099, 91], ["dine_in", 2, 2997, 247], ["online", 0, 0, 0]],
+    [["walk_in", 5, 7833, 661], ["phone", 1, 1099, 91], ["dine_in", 2, 2997, 247], ["web", 0, 0, 0], ["marketplace", 0, 0, 0]],
   );
   check("shift sales total", [r.sales.orders, r.sales.grossCents, r.sales.discountCents, r.sales.totalCents], [8, 12_229, 300, 12_928]);
   check(
@@ -308,11 +308,11 @@ run(async () => {
   );
   check("orders still owing are listed", closed.report.unpaidOrders.map((o) => o.id).includes(scheduled.id), true);
 
-  const day = (d: string) => Object.values(storeDayRange(d, "America/Chicago")).map((x) => x.toISOString());
+  const day = (d: string) => Object.values(dayBounds(d, "America/Chicago")).map((x) => x.toISOString());
   check("a Chicago day starts at its own midnight", day("2026-10-03"), ["2026-10-03T05:00:00.000Z", "2026-10-04T05:00:00.000Z"]);
   check("spring-forward day is 23 hours", day("2026-03-08"), ["2026-03-08T06:00:00.000Z", "2026-03-09T05:00:00.000Z"]);
   check("fall-back day is 25 hours", day("2026-11-01"), ["2026-11-01T05:00:00.000Z", "2026-11-02T06:00:00.000Z"]);
-  check("11:30 PM in Chicago is still that store date", storeDateOf(new Date("2026-10-04T04:30:00Z"), "America/Chicago"), "2026-10-03");
+  check("11:30 PM in Chicago is still that store date", localDateOf(new Date("2026-10-04T04:30:00Z"), "America/Chicago"), "2026-10-03");
 
   for (let i = 0; i < 5; i++) await checkPin("0000", operator.id);
   check("five misses lock the device, even for a good PIN", await checkPin("1234", operator.id), { ok: false, reason: "locked_out" });

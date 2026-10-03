@@ -6,27 +6,28 @@ import { isOpenNow } from "@/lib/hours";
 import { cn } from "@/lib/utils";
 
 /**
- * Open/closed pill computed on the client so it reflects the visitor's
- * local clock (informational — ordering is governed by the operator's
- * pause switch, not by hours).
+ * Open/closed pill on the store's clock, kept current on the client
+ * (informational: ordering is governed by the operator's pause switch, not
+ * by hours).
  */
 export function StoreStatusBanner({
   hours,
+  timeZone,
   acceptingOrders,
 }: {
   hours: DayHours[] | null;
+  timeZone: string;
   acceptingOrders: boolean;
 }) {
   const [open, setOpen] = useState<boolean | null>(null);
 
-  // Deliberate post-mount computation: uses the viewer's local clock, which
-  // must not run during SSR (server timezone would mismatch the client).
+  // Post-mount so the pill ticks with the viewer's session, not the render time.
   useEffect(() => {
     // eslint-disable-next-line react-hooks/set-state-in-effect
-    setOpen(isOpenNow(hours));
-    const t = setInterval(() => setOpen(isOpenNow(hours)), 60_000);
+    setOpen(isOpenNow(hours, timeZone));
+    const t = setInterval(() => setOpen(isOpenNow(hours, timeZone)), 60_000);
     return () => clearInterval(t);
-  }, [hours]);
+  }, [hours, timeZone]);
 
   if (open === null) return null;
 

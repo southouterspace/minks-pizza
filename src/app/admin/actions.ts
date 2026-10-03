@@ -2,12 +2,11 @@
 
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
-import { and, asc, desc, eq, inArray } from "drizzle-orm";
+import { asc, desc, eq, inArray } from "drizzle-orm";
 import { z } from "zod";
 import {
   categories,
   db,
-  employees,
   itemModifierGroups,
   menuItems,
   modifierGroups,
@@ -25,59 +24,47 @@ import {
   requireOperator,
   verifyPassword,
 } from "@/lib/auth";
+import { cancelCourier, dispatchCourier } from "@/lib/delivery/dispatch";
+import { COURIER_PROVIDERS, CourierError } from "@/lib/delivery/types";
+import { OrderError } from "@/lib/checkout";
+import { STORE_TIMEZONES } from "@/lib/hours";
 import { KITCHEN_STATIONS, type KitchenStation } from "@/lib/kds";
-import { EMPLOYEE_ROLES } from "@/lib/orders";
-import { pinDigest } from "@/lib/pin";
+import { DEFAULT_STAFF_RULES, parseStaffRules } from "@/lib/timeclock";
+import { DEFAULT_TIMEZONE } from "@/lib/zoned";
+import {
+  checkbox,
+  dollarsToCents,
+  idField,
+  intField,
+  textField,
+  textOrNull,
+} from "@/lib/form-data";
+import { bpsOf } from "@/lib/money";
+import { CANCEL_REASONS, ORDER_STATUSES } from "@/lib/order-workflow";
+import {
+  addOrderNote,
+  adjustPromisedTime,
+  transitionOrder,
+  type Actor,
+  type OrderActionResult,
+} from "@/lib/order-writes";
+import { dueCents, TENDER_METHODS, type MutationResult, type OrderMutation } from "@/lib/orders";
+import { mutateOrder, type OperatorContext } from "@/lib/orders-server/mutate";
+import { getOrderView } from "@/lib/orders-server/views";
 import { HALF_TOPPING_RULES } from "@/lib/pricing";
 import { POS_SETTING_LIMITS } from "@/lib/settings";
-import { isTimeZone } from "@/lib/store-time";
+import { compSchema } from "@/lib/validation";
 
 export type AuthFormState = { error?: string };
-
-// ---------------------------------------------------------------------------
-// FormData helpers
-// ---------------------------------------------------------------------------
-
-function textField(fd: FormData, name: string): string {
-  const v = fd.get(name);
-  return typeof v === "string" ? v.trim() : "";
-}
-
-function textOrNull(fd: FormData, name: string): string | null {
-  const v = textField(fd, name);
-  return v === "" ? null : v;
-}
-
-function checkbox(fd: FormData, name: string): boolean {
-  return fd.get(name) === "on";
-}
-
-/** Required positive integer id (from a hidden input). Throws when tampered. */
-function idField(fd: FormData, name: string): number {
-  const n = Number.parseInt(textField(fd, name), 10);
-  if (!Number.isInteger(n) || n <= 0) throw new Error(`Invalid ${name}`);
-  return n;
-}
-
-/** Non-negative integer with a fallback for blank/invalid input. */
-function intField(fd: FormData, name: string, fallback: number): number {
-  const n = Number.parseInt(textField(fd, name), 10);
-  if (Number.isNaN(n)) return fallback;
-  return Math.max(0, n);
-}
-
-/** Dollars string ("12.50") → integer cents. Blank = 0. */
-function dollarsToCents(fd: FormData, name: string): number {
-  const raw = textField(fd, name);
-  if (raw === "") return 0;
-  const n = Number.parseFloat(raw);
-  if (Number.isNaN(n) || n < 0) throw new Error(`Invalid ${name}`);
-  return Math.round(n * 100);
-}
 
 /** Kitchen-display routing for a category; blank or unknown → "kitchen". */
 function stationField(fd: FormData): KitchenStation {
   return z.enum(KITCHEN_STATIONS).catch("kitchen").parse(textField(fd, "station"));
+}
+
+function timezoneField(fd: FormData): string {
+  const zones = STORE_TIMEZONES.map((tz) => tz.value);
+  return z.enum(zones).catch(DEFAULT_TIMEZONE).parse(textField(fd, "timezone"));
 }
 
 function directionField(fd: FormData): "up" | "down" {
@@ -268,91 +255,152 @@ export async function changeOwnPassword(
 }
 
 // ---------------------------------------------------------------------------
-// Team: POS staff
-//
-// Staff sign in at the POS with a 4-digit PIN. A PIN is stored only as its
-// digest and never shown again, so it must be unique among active staff:
-// the digest is how the POS finds who typed it.
+// Orders
 // ---------------------------------------------------------------------------
 
-/** On a refused add, the name and role come back so the form keeps them. */
-export type StaffFormState = { error?: string; name?: string; role?: string };
+export type OrderActionState = { error?: string };
 
-const pinSchema = z.string().regex(/^\d{4}$/, "A PIN is exactly 4 digits.");
-
-const employeeSchema = z.object({
-  name: z.string().trim().min(1, "Name is required").max(80),
-  role: z.enum(EMPLOYEE_ROLES, "Pick a role."),
-  pin: pinSchema,
-});
-
-const PIN_TAKEN = "That PIN belongs to someone else. Pick another.";
-
-/** Postgres unique_violation: the partial index on active PINs refused a taken PIN. */
-function isUniqueViolation(err: unknown): boolean {
-  const cause = (err as { cause?: { code?: string } })?.cause;
-  return (err as { code?: string })?.code === "23505" || cause?.code === "23505";
+async function operatorActor(): Promise<Actor> {
+  const operator = await requireOperator();
+  return { name: operator.name, operatorId: operator.id, employeeId: null };
 }
 
-export async function addEmployee(_prev: StaffFormState, formData: FormData): Promise<StaffFormState> {
+function orderActionState(result: OrderActionResult): OrderActionState {
+  revalidatePath("/admin", "layout");
+  return result.ok ? {} : { error: result.reason };
+}
+
+const orderIdField = (fd: FormData) => z.uuid().parse(textField(fd, "orderId"));
+
+/** One order verb from the admin, through the same seam as the POS, with the operator as the actor. */
+async function mutateAsOperator(fd: FormData, mutation: OrderMutation): Promise<OrderActionState> {
+  const operator = await requireOperator();
+  const by: OperatorContext = { operator: { id: operator.id, name: operator.name } };
+  const result: MutationResult = await mutateOrder({ orderId: orderIdField(fd), mutation }, by);
+  revalidatePath("/admin", "layout");
+  if (result.ok) return {};
+  return { error: result.reason === "rejected" ? result.message : "That didn't go through. Refresh and try again." };
+}
+
+export async function moveOrder(formData: FormData): Promise<OrderActionState> {
+  const actor = await operatorActor();
+  const to = z.enum(ORDER_STATUSES).exclude(["canceled"]).parse(textField(formData, "to"));
+  return orderActionState(
+    await transitionOrder({ orderId: orderIdField(formData), to, actor }),
+  );
+}
+
+export async function cancelOrder(formData: FormData): Promise<OrderActionState> {
+  const reason = z.enum(CANCEL_REASONS).safeParse(textField(formData, "reason"));
+  if (!reason.success) return { error: "Pick a reason for canceling." };
+  const detail = textField(formData, "detail").slice(0, 300);
+  return mutateAsOperator(formData, { kind: "cancel", reason: detail ? `${reason.data}: ${detail}` : reason.data });
+}
+
+export async function adjustPromisedTimeAction(formData: FormData): Promise<OrderActionState> {
+  const actor = await operatorActor();
+  const minutes = z.coerce.number().int().min(-60).max(120).parse(textField(formData, "minutes"));
+  return orderActionState(
+    await adjustPromisedTime({ orderId: orderIdField(formData), minutes, actor }),
+  );
+}
+
+/** The balance due, as one tender taken outside the till (no drawer). */
+export async function recordPaymentAction(formData: FormData): Promise<OrderActionState> {
   await requireOperator();
-  const parsed = employeeSchema.safeParse({
-    name: formData.get("name"),
-    role: formData.get("role"),
-    pin: textField(formData, "pin"),
+  const method = z.enum(TENDER_METHODS).exclude(["marketplace"]).parse(textField(formData, "method"));
+  const order = await getOrderView(orderIdField(formData));
+  if (!order) return { error: "Order not found." };
+  const amountCents = dueCents(order.totals);
+  if (amountCents === 0) return { error: "Payment is already recorded for this order." };
+  return mutateAsOperator(formData, {
+    kind: "tender",
+    tender: { id: crypto.randomUUID(), method, amountCents, tenderedCents: null, tipCents: 0, last4: null },
   });
-  const kept = { name: textField(formData, "name"), role: textField(formData, "role") };
-  if (!parsed.success) return { error: parsed.error.issues[0]?.message ?? "Check the form.", ...kept };
-  try {
-    await db.insert(employees).values({
-      name: parsed.data.name,
-      role: parsed.data.role,
-      pinDigest: pinDigest(parsed.data.pin),
-    });
-  } catch (err) {
-    if (isUniqueViolation(err)) return { error: PIN_TAKEN, ...kept };
-    throw err;
-  }
-  revalidatePath("/admin/team");
-  redirect("/admin/team?notice=staff-added");
 }
 
-export async function changeEmployeePin(_prev: StaffFormState, formData: FormData): Promise<StaffFormState> {
-  await requireOperator();
-  const employeeId = idField(formData, "employeeId");
-  const parsed = pinSchema.safeParse(textField(formData, "pin"));
-  if (!parsed.success) return { error: parsed.error.issues[0]?.message };
-  try {
-    await db
-      .update(employees)
-      .set({ pinDigest: pinDigest(parsed.data) })
-      .where(and(eq(employees.id, employeeId), eq(employees.isActive, true)));
-  } catch (err) {
-    if (isUniqueViolation(err)) return { error: PIN_TAKEN };
-    throw err;
-  }
-  revalidatePath("/admin/team");
-  redirect("/admin/team?notice=pin-changed");
+export async function addOrderNoteAction(formData: FormData): Promise<OrderActionState> {
+  const actor = await operatorActor();
+  const note = textField(formData, "note").slice(0, 500);
+  if (!note) return { error: "Write a note first." };
+  return orderActionState(
+    await addOrderNote({ orderId: orderIdField(formData), note, actor }),
+  );
 }
 
-/**
- * Deactivated staff stay in the table: their ids are on every order, tender
- * and void they touched. Refuses to remove the last manager or owner,
- * because then nobody could approve a void or close a shift.
- */
-export async function deactivateEmployee(formData: FormData): Promise<void> {
+/** An operator comp: a fixed amount or a percent of what is left of the items. */
+export async function applyDiscountAction(formData: FormData): Promise<OrderActionState> {
   await requireOperator();
-  const employeeId = idField(formData, "employeeId");
-  const approvers = await db
-    .select({ id: employees.id })
-    .from(employees)
-    .where(and(eq(employees.isActive, true), inArray(employees.role, ["manager", "owner"])));
-  if (approvers.length === 1 && approvers[0].id === employeeId) {
-    redirect("/admin/team?notice=last-approver");
+  const parsed = compSchema.safeParse({
+    kind: textField(formData, "kind"),
+    reason: textField(formData, "reason"),
+    value: textField(formData, "value"),
+    promotionId: textField(formData, "promotionId"),
+  });
+  if (!parsed.success) return { error: parsed.error.issues[0]?.message ?? "Check the discount." };
+  const order = await getOrderView(orderIdField(formData));
+  if (!order) return { error: "Order not found." };
+  const live = new Set(order.lines.filter((l) => !l.voided).map((l) => l.lineId));
+  const itemsLeft =
+    order.totals.subtotalCents -
+    order.discounts
+      .filter((d) => d.target === "items" && (d.lineId === null || live.has(d.lineId)))
+      .reduce((n, d) => n + d.amountCents, 0);
+  const { amount } = parsed.data;
+  const cents =
+    amount.cents !== undefined ? Math.min(amount.cents, itemsLeft) : Math.min(itemsLeft, bpsOf(itemsLeft, amount.percentBps));
+  if (cents <= 0) return { error: "Nothing left on the items to discount." };
+  return mutateAsOperator(formData, {
+    kind: "discount",
+    id: crypto.randomUUID(),
+    lineId: null,
+    cents,
+    reason: parsed.data.label,
+    promotionId: parsed.data.promotionId,
+  });
+}
+
+export async function removeDiscountAction(formData: FormData): Promise<OrderActionState> {
+  return mutateAsOperator(formData, { kind: "remove_discount", discountId: idField(formData, "discountId") });
+}
+
+// ---------------------------------------------------------------------------
+// Couriers
+// ---------------------------------------------------------------------------
+
+export type CourierFormState = { error?: string };
+
+/** Runs a courier operation, turning its expected failures into a form error. */
+async function courierAction(run: () => Promise<void>): Promise<CourierFormState> {
+  await requireOperator();
+  try {
+    await run();
+    return {};
+  } catch (err) {
+    if (err instanceof CourierError || err instanceof OrderError) return { error: err.message };
+    throw err;
+  } finally {
+    revalidatePath("/admin");
   }
-  await db.update(employees).set({ isActive: false }).where(eq(employees.id, employeeId));
-  revalidatePath("/admin/team");
-  redirect("/admin/team?notice=staff-deactivated");
+}
+
+export async function requestCourier(
+  _prev: CourierFormState,
+  formData: FormData,
+): Promise<CourierFormState> {
+  return courierAction(() =>
+    dispatchCourier(
+      z.uuid().parse(textField(formData, "orderId")),
+      z.enum(COURIER_PROVIDERS).parse(textField(formData, "provider")),
+    ),
+  );
+}
+
+export async function cancelCourierDelivery(
+  _prev: CourierFormState,
+  formData: FormData,
+): Promise<CourierFormState> {
+  return courierAction(() => cancelCourier(z.uuid().parse(textField(formData, "deliveryId"))));
 }
 
 // ---------------------------------------------------------------------------
@@ -819,7 +867,6 @@ const posSettingsSchema = z.object({
     .int()
     .min(lock.min, `Auto-lock is at least ${lock.min} seconds.`)
     .max(lock.max, `Auto-lock tops out at ${lock.max} seconds (an hour).`),
-  timezone: z.string().refine(isTimeZone, "Pick a timezone."),
 });
 
 export async function saveSettings(formData: FormData): Promise<void> {
@@ -832,7 +879,6 @@ export async function saveSettings(formData: FormData): Promise<void> {
     ovenCapacityPies: num(formData, "ovenCapacityPies"),
     makeMinutes: num(formData, "makeMinutes"),
     posLockSeconds: num(formData, "posLockSeconds"),
-    timezone: textField(formData, "timezone"),
   });
   if (!pos.success) {
     redirect(`/admin/settings?error=${encodeURIComponent(pos.error.issues[0]?.message ?? "Check the POS settings.")}`);
@@ -886,7 +932,10 @@ export async function saveSettings(formData: FormData): Promise<void> {
     deliveryFeeCents: dollarsToCents(formData, "deliveryFee"),
     deliveryMinimumCents: dollarsToCents(formData, "deliveryMinimum"),
     taxRateBps: Math.round(taxPercent * 100),
+    timezone: timezoneField(formData),
     ...pos.data,
+    weekStartsOn: Math.min(6, intField(formData, "weekStartsOn", DEFAULT_STAFF_RULES.weekStartsOn)),
+    ...parseStaffRules((name) => textField(formData, name)),
     updatedAt: new Date(),
   };
 
@@ -897,6 +946,7 @@ export async function saveSettings(formData: FormData): Promise<void> {
 
   revalidatePath("/");
   revalidatePath("/admin/settings");
+  revalidatePath("/admin/staff", "layout");
   redirect("/admin/settings?saved=1");
 }
 

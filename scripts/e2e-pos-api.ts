@@ -12,7 +12,7 @@ import { SignJWT } from "jose";
 import { count, eq } from "drizzle-orm";
 import { db, employees, operators, orders } from "../src/db";
 import type { PosMenu } from "../src/lib/orders";
-import { BASE, check, run } from "./harness";
+import { BASE, check, run } from "./e2e/harness";
 
 const key = new TextEncoder().encode(process.env.SESSION_SECRET);
 const sign = (claims: Record<string, unknown>) =>
@@ -20,7 +20,7 @@ const sign = (claims: Record<string, unknown>) =>
 
 run(async () => {
   const [operator] = await db.select().from(operators).limit(1);
-  const [cashier] = await db.select().from(employees).where(eq(employees.role, "cashier")).limit(1);
+  const [cashier] = await db.select().from(employees).where(eq(employees.posAccess, "cashier")).limit(1);
   if (!operator || !cashier) throw new Error("needs an operator and the demo staff (npm run db:seed)");
   const session = `minks_session=${await sign({ sub: String(operator.id) })}`;
   const staff = `minks_staff=${await sign({ sub: String(cashier.id), op: operator.id })}`;
@@ -44,7 +44,7 @@ run(async () => {
   const orderId = randomUUID();
   const body = JSON.stringify({
     orderId,
-    channel: "walk_in",
+    source: "walk_in",
     fulfillment: { kind: "pickup" },
     customer: null,
     notes: null,

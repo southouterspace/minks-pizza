@@ -1,21 +1,20 @@
 /** Order reads: the views every POS, admin and storefront screen renders. */
 import { and, asc, desc, eq, inArray, isNull, sql } from "drizzle-orm";
-import { customerAddresses, customers, db, orderItems, orders } from "@/db";
-import {
-  normalizePhone,
-  type Board,
-  type CustomerLookup,
-  type KitchenStatus,
-  type OrderView,
-  type Quote,
-} from "@/lib/orders";
+import { customerAddresses, customers, db, orderDiscounts, orderEvents, orderItems, orders } from "@/db";
+import type { OrderStatus } from "@/lib/order-workflow";
+import { normalizePhone, type Board, type CustomerLookup, type OrderView, type Quote } from "@/lib/orders";
 import { quoteMinutes } from "@/lib/pricing";
 import { getSettings, type Settings } from "@/lib/settings-server";
-import { getOpenShift } from "@/lib/shifts-server";
+import { getOpenShift } from "@/lib/drawer-server";
 import { fireDue } from "./folds";
 import { fulfillmentOf, staffNames, totalsOf } from "./rows";
 
-const withFacts = { items: true, tenders: true, adjustments: true } as const;
+const withFacts = {
+  items: true as const,
+  tenders: true as const,
+  discounts: { orderBy: [asc(orderDiscounts.id)] },
+  events: { orderBy: [asc(orderEvents.createdAt), asc(orderEvents.id)] },
+};
 type OrderRow = NonNullable<Awaited<ReturnType<typeof findOrder>>>;
 
 function findOrder(id: string) {
@@ -28,7 +27,8 @@ async function toViews(rows: OrderRow[]): Promise<OrderView[]> {
       o.createdBy,
       ...o.items.flatMap((i) => [i.voidedBy, i.voidApprovedBy]),
       ...o.tenders.flatMap((t) => [t.employeeId, t.approvedBy]),
-      ...o.adjustments.flatMap((a) => [a.employeeId, a.approvedBy]),
+      ...o.discounts.flatMap((d) => [d.employeeId, d.approvedBy]),
+      ...o.events.flatMap((e) => [e.employeeId, e.approvedBy]),
     ]),
   );
   return rows.map((o) => toView(o, staff));
@@ -42,7 +42,7 @@ function toView(o: OrderRow, staff: Record<number, string>): OrderView {
     number: o.orderNumber,
     ticketOrderId: o.ticketOrderId ?? o.id,
     status: o.status,
-    channel: o.channel,
+    source: o.source,
     fulfillment: fulfillmentOf(o),
     customer: { id: o.customerId, name: o.customerName, phone: o.customerPhone, email: o.customerEmail },
     notes: o.orderNotes,
@@ -85,18 +85,30 @@ function toView(o: OrderRow, staff: Record<number, string>): OrderView {
         reason: t.reason,
         at: t.createdAt.toISOString(),
       })),
-    adjustments: o.adjustments
-      .toSorted((a, b) => a.createdAt.getTime() - b.createdAt.getTime())
-      .map((a) => ({
-        id: a.id,
-        lineId: a.lineUid,
-        kind: a.kind,
-        cents: a.cents,
-        reason: a.reason,
-        employeeId: a.employeeId,
-        approvedBy: a.approvedBy,
-        at: a.createdAt.toISOString(),
-      })),
+    discounts: o.discounts.map((d) => ({
+      id: d.id,
+      uid: d.uid,
+      lineId: d.lineUid,
+      label: d.label,
+      amountCents: d.amountCents,
+      target: d.target,
+      source: d.source,
+      employeeId: d.employeeId,
+      approvedBy: d.approvedBy,
+      operatorId: d.operatorId,
+      at: d.createdAt.toISOString(),
+    })),
+    events: o.events.map((e) => ({
+      id: e.id,
+      type: e.type,
+      fromStatus: e.fromStatus,
+      toStatus: e.toStatus,
+      actor: e.actor,
+      employeeId: e.employeeId,
+      approvedBy: e.approvedBy,
+      note: e.note,
+      at: e.createdAt.toISOString(),
+    })),
     totals: totalsOf(o),
     staff,
   };
@@ -108,7 +120,7 @@ export async function getOrderView(id: string): Promise<OrderView | null> {
 }
 
 /** Orders in these kitchen states, newest first, for the admin inbox. */
-export async function listOrderViews(statuses: KitchenStatus[]): Promise<OrderView[]> {
+export async function listOrderViews(statuses: OrderStatus[]): Promise<OrderView[]> {
   return toViews(
     await db.query.orders.findMany({
       where: inArray(orders.status, statuses),

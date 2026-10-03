@@ -12,7 +12,8 @@ import {
 import { findItem, lineSummary } from "@/lib/pos-client/draft";
 import { formatCents } from "@/lib/money";
 import { priceLine } from "@/lib/pricing";
-import { formatStoreDateTime, formatStoreTime } from "@/lib/store-time";
+import { formatClock } from "@/lib/zoned";
+import { formatDateTime } from "@/components/admin/ui";
 import type { StoreInfo } from "./context";
 import { chargeRows } from "./totals";
 
@@ -78,8 +79,8 @@ export function Receipt({ order, store }: { order: OrderView; store: StoreInfo }
         {store.phone && <div>{store.phone}</div>}
       </div>
       <Rule />
-      <Row left={<b>Order #{order.number}</b>} right={channelLabel(order.channel, order.fulfillment.kind)} />
-      <div>{formatStoreDateTime(order.placedAt, store.timeZone)}</div>
+      <Row left={<b>Order #{order.number}</b>} right={channelLabel(order.source, order.fulfillment.kind)} />
+      <div>{formatDateTime(order.placedAt, store.timeZone)}</div>
       <Fulfillment order={order} />
       <Rule />
       {live.map((l) => (
@@ -147,7 +148,7 @@ export function FallbackTicket({ req, lines, at, timeZone }: { req: SubmitOrderR
       <div style={{ fontSize: "16pt", fontWeight: 800, textAlign: "center" }}>NOT SENT · PAPER TICKET</div>
       <div style={{ textAlign: "center" }}>Kitchen screen did not get this order</div>
       <Rule />
-      <Row left={<b>ID {shortId(req.orderId)}</b>} right={formatStoreTime(new Date(at), timeZone)} />
+      <Row left={<b>ID {shortId(req.orderId)}</b>} right={formatClock(new Date(at), timeZone)} />
       <Fulfillment
         order={{
           fulfillment: f,
@@ -155,7 +156,7 @@ export function FallbackTicket({ req, lines, at, timeZone }: { req: SubmitOrderR
           notes: req.notes,
         }}
       />
-      {req.fire.kind === "at" && <div style={{ fontWeight: 700 }}>START AT {formatStoreTime(req.fire.at, timeZone)}</div>}
+      {req.fire.kind === "at" && <div style={{ fontWeight: 700 }}>START AT {formatClock(req.fire.at, timeZone)}</div>}
       {req.fire.kind === "hold" && <div style={{ fontWeight: 700 }}>HOLD · DO NOT START</div>}
       <Rule />
       {lines.map((l, i) => (

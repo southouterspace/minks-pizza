@@ -8,9 +8,11 @@
     "start": "next start",
     "lint": "eslint",
     "test": "npm run test:unit && npm run test:domain",
-    "test:unit": "tsx scripts/test-pos-client.ts",
+    "test:unit": "tsx --test \"src/**/*.test.ts\" && tsx scripts/test-pos-client.ts && tsx scripts/test-order-workflow.ts && tsx scripts/test-promotions.ts && tsx scripts/test-timeclock.ts",
     "test:domain": "tsx --env-file=.env.local scripts/test-pos-domain.ts",
-    "db:migrate-pos": "tsx --env-file=.env.local scripts/run-sql.ts scripts/migrate-pos.sql",
+    "e2e:loyalty": "tsx --env-file=.env.local --test --test-concurrency=1 scripts/e2e/loyalty.e2e.ts",
+    "loyalty:audit": "tsx --env-file=.env.local scripts/loyalty-audit.ts",
+    "db:migrate": "tsx --env-file=.env.local scripts/run-migration.ts",
     "db:push": "drizzle-kit push",
     "db:seed": "tsx --env-file=.env.local src/db/seed.ts"
   },

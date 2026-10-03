@@ -7,7 +7,7 @@ import { mutateOrderAction } from "@/app/pos/actions";
 import { channelLabel, dueCents, orderHistory, requiredRole, type LineView, type OrderMutation, type OrderView } from "@/lib/orders";
 import { lineSummary } from "@/lib/pos-client/draft";
 import { formatCents } from "@/lib/money";
-import { formatStoreTime } from "@/lib/store-time";
+import { formatClock } from "@/lib/zoned";
 import { cn } from "@/lib/utils";
 import { PaymentChip, StatusChip, orderLabel } from "./board";
 import { usePos } from "./context";
@@ -225,7 +225,7 @@ export function OrderDetail({
           lines={live.map((l) => ({
             lineId: l.lineId,
             label: `${l.quantity} × ${l.name}`,
-            cents: l.lineTotalCents - order.adjustments.filter((a) => a.lineId === l.lineId).reduce((s, a) => s + a.cents, 0),
+            cents: l.lineTotalCents - order.discounts.filter((d) => d.lineId === l.lineId).reduce((s, d) => s + d.amountCents, 0),
           }))}
           onTender={async (tender) => {
             const o = await mutate("Payment", { kind: "tender", tender });
@@ -241,7 +241,7 @@ export function OrderDetail({
 
 function OrderHeading({ order, onBack, showLog, onToggleLog }: { order: OrderView; onBack: () => void; showLog: boolean; onToggleLog: () => void }) {
   const { store } = usePos();
-  const clock = (iso: string) => formatStoreTime(iso, store.timeZone);
+  const clock = (iso: string) => formatClock(iso, store.timeZone);
   const f = order.fulfillment;
   return (
     <div className="flex items-center gap-3">
@@ -254,7 +254,7 @@ function OrderHeading({ order, onBack, showLog, onToggleLog }: { order: OrderVie
           <span className="truncate text-xl font-semibold">{orderLabel(order)}</span>
         </h2>
         <p className="flex flex-wrap items-center gap-2 text-sm text-muted-foreground">
-          <Badge variant="outline">{channelLabel(order.channel, f.kind)}</Badge>
+          <Badge variant="outline">{channelLabel(order.source, f.kind)}</Badge>
           <StatusChip status={order.status} />
           <PaymentChip order={order} />
           {order.customer.phone && <span>{order.customer.phone}</span>}
@@ -297,7 +297,7 @@ function LineRow({
   onComp: () => void;
   onVoid: () => void;
 }) {
-  const adj = order.adjustments.filter((a) => a.lineId === l.lineId);
+  const adj = order.discounts.filter((d) => d.lineId === l.lineId);
   return (
     <li className={cn("flex items-center gap-3 px-4 py-3", l.voided && "opacity-60")} data-line={l.name}>
       {picked !== null && <input type="checkbox" className="size-6" aria-label={`Move ${l.name}`} checked={picked} onChange={(e) => onPick(e.target.checked)} />}
@@ -311,9 +311,9 @@ function LineRow({
         {l.modifiers.length > 0 && <p className="text-sm text-muted-foreground">{lineSummary(l.modifiers)}</p>}
         {l.notes && <p className="text-sm text-warning italic">“{l.notes}”</p>}
         {l.voided && <p className="text-xs text-muted-foreground">{l.voided.reason}</p>}
-        {adj.map((a) => (
-          <p key={a.id} className="text-xs text-success">
-            {a.kind === "comp" ? "Comped" : "Discount"} −{formatCents(a.cents)} · {a.reason}
+        {adj.map((d) => (
+          <p key={d.id} className="text-xs text-success">
+            Comped −{formatCents(d.amountCents)} · {d.label}
           </p>
         ))}
       </div>
@@ -372,7 +372,7 @@ function ActivityLog({ order }: { order: OrderView }) {
     <ol className="w-72 shrink-0 space-y-2 overflow-y-auto rounded-2xl border bg-card p-3 text-sm" data-testid="activity-log">
       {orderHistory(order).map((h, i) => (
         <li key={i}>
-          <span className="text-xs text-muted-foreground">{formatStoreTime(h.at, store.timeZone)}</span> {h.text}
+          <span className="text-xs text-muted-foreground">{formatClock(h.at, store.timeZone)}</span> {h.text}
           {h.who && <span className="text-muted-foreground"> · {h.who}</span>}
           {h.approvedBy && h.approvedBy !== h.who && <span className="text-muted-foreground"> · approved by {h.approvedBy}</span>}
         </li>

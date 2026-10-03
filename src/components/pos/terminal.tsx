@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useReducer, useState } from "react";
-import type { Actor, Board, PosMenu } from "@/lib/orders";
+import type { StaffActor, Board, PosMenu } from "@/lib/orders";
 import { draftReducer, emptyDraft } from "@/lib/pos-client/draft";
 import { usePersistentPrefs } from "@/lib/use-persistent-prefs";
 import { useServerSnapshot } from "@/lib/use-server-snapshot";
@@ -52,7 +52,7 @@ export function PosTerminal({
 }: {
   initialMenu: PosMenu;
   initialBoard: Board;
-  initialStaff: Actor | null;
+  initialStaff: StaffActor | null;
   store: StoreInfo;
   lockSeconds: number;
   names: Record<number, string>;

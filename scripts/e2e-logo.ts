@@ -6,7 +6,7 @@
  * Requires a running dev server and an existing operator account.
  */
 import { execFileSync } from "node:child_process";
-import { BASE, check, launchBrowser, run, SHOT_DIR, signIn } from "./harness";
+import { BASE, check, launchBrowser, run, SHOT_DIR, signIn } from "./e2e/harness";
 
 const OWNER = {
   email: process.env.E2E_EMAIL ?? "owner@minks.example",

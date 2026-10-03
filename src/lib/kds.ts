@@ -3,7 +3,8 @@
  * rules it applies to them (station routing, ticket timers, pizza-aware
  * modifier layout, all-day counts). Shared by server and client — no I/O.
  */
-import type { Channel, Fulfillment, KitchenStatus } from "@/lib/orders";
+import type { OrderStatus } from "@/lib/order-workflow";
+import type { Fulfillment, OrderSource } from "@/lib/orders";
 import type { LineModifier } from "@/lib/pricing";
 
 export const KITCHEN_STATIONS = ["pizza", "kitchen", "counter"] as const;
@@ -46,8 +47,8 @@ export type KdsItem = {
 export type KdsOrder = {
   id: string;
   number: number;
-  status: KitchenStatus;
-  channel: Channel;
+  status: OrderStatus;
+  source: OrderSource;
   fulfillment: Fulfillment;
   fireAt: string | null;
   promisedAt: string | null;

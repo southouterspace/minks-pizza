@@ -48,15 +48,22 @@ async function main() {
     })
     .onConflictDoNothing();
 
-  // Demo staff for the POS terminal (PINs documented in README). PINs are
-  // unique among active staff, so a re-run skips them.
-  await db
-    .insert(schema.employees)
-    .values([
-      { name: "Morgan Manager", role: "manager", pinDigest: pinDigest("1234") },
-      { name: "Casey Cashier", role: "cashier", pinDigest: pinDigest("5678") },
-    ])
-    .onConflictDoNothing();
+  // Demo staff for the POS terminal and the time clock (PINs documented in
+  // README). PINs are unique, so a re-run skips them.
+  const demoStaff = [
+    { name: "Morgan Manager", posAccess: "manager" as const, pin: "1234", job: "manager" as const, rate: 2200 },
+    { name: "Casey Cashier", posAccess: "cashier" as const, pin: "5678", job: "cashier" as const, rate: 1500 },
+  ];
+  for (const s of demoStaff) {
+    const [created] = await db
+      .insert(schema.employees)
+      .values({ name: s.name, posAccess: s.posAccess, pinDigest: pinDigest(s.pin) })
+      .onConflictDoNothing()
+      .returning({ id: schema.employees.id });
+    if (created) {
+      await db.insert(schema.employeeRoles).values({ employeeId: created.id, role: s.job, hourlyRateCents: s.rate, isPrimary: true });
+    }
+  }
 
   const existing = await db.select().from(schema.categories);
   if (existing.length > 0) {

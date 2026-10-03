@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Delete, Lock, ShieldCheck } from "lucide-react";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
-import { formatStoreTime } from "@/lib/store-time";
+import { formatClock } from "@/lib/zoned";
 import { cn } from "@/lib/utils";
 
 const KEYS = ["1", "2", "3", "4", "5", "6", "7", "8", "9", "clear", "0", "back"] as const;
@@ -139,7 +139,7 @@ export function LockScreen({
             <Lock className="size-4" /> {storeName} · Counter
           </p>
           <p className="mt-1 text-4xl font-semibold tabular-nums">
-            {now ? formatStoreTime(now, timeZone) : " "}
+            {now ? formatClock(now, timeZone) : " "}
           </p>
           <p className="mt-3 text-lg">Enter your PIN</p>
           {lastName && <p className="text-sm text-muted-foreground">Last signed in: {lastName}</p>}

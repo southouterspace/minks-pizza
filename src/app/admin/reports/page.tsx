@@ -5,15 +5,8 @@ import { requireOperator } from "@/lib/auth";
 import { formatCents } from "@/lib/money";
 import { getStoreBasics } from "@/lib/settings-server";
 import { getDayReport, listShifts } from "@/lib/reports-server";
-import {
-  addDays,
-  formatStoreDate,
-  formatStoreDateTime,
-  formatStoreTime,
-  parseStoreDate,
-  storeDateOf,
-  storeDayRange,
-} from "@/lib/store-time";
+import { addDays, formatLongDay, formatClock, localDateSchema, localDateOf, dayBounds } from "@/lib/zoned";
+import { formatDateTime } from "@/components/admin/ui";
 import { overShortLabel, overShortTone } from "@/components/admin/report-document";
 import { Badge } from "@/components/ui/badge";
 import { Button, buttonVariants } from "@/components/ui/button";
@@ -33,10 +26,11 @@ export default async function ReportsPage({
   await requireOperator();
   const settings = await getStoreBasics();
   const tz = settings.timezone;
-  const today = storeDateOf(new Date(), tz);
+  const today = localDateOf(new Date(), tz);
   const raw = (await searchParams).date;
-  const date = parseStoreDate(typeof raw === "string" ? raw : undefined) ?? today;
-  const [report, shifts] = await Promise.all([getDayReport(date, tz), listShifts(storeDayRange(date, tz))]);
+  const parsed = localDateSchema.safeParse(raw);
+  const date = parsed.success ? parsed.data : today;
+  const [report, shifts] = await Promise.all([getDayReport(date, tz), listShifts(dayBounds(date, tz))]);
   const cash = report.byMethod.find((m) => m.method === "cash")!;
   const card = report.byMethod.find((m) => m.method === "card_external")!;
   const exceptions = report.audit.filter((a) => a.kind !== "paid_in").length;
@@ -55,7 +49,7 @@ export default async function ReportsPage({
         <div>
           <h1 className="text-xl font-semibold tracking-tight">Reports</h1>
           <p className="mt-1 text-sm text-muted-foreground">
-            {formatStoreDate(date)}
+            {formatLongDay(date)}
             {date === today ? " (today)" : ""}
           </p>
         </div>
@@ -139,11 +133,11 @@ export default async function ReportsPage({
                         Open
                       </Badge>
                     )}
-                    {storeDateOf(s.openedAt, tz) === date
-                      ? formatStoreTime(s.openedAt, tz)
-                      : formatStoreDateTime(s.openedAt, tz)}
+                    {localDateOf(s.openedAt, tz) === date
+                      ? formatClock(s.openedAt, tz)
+                      : formatDateTime(s.openedAt, tz)}
                     {" – "}
-                    {s.closedAt ? formatStoreTime(s.closedAt, tz) : "now"}
+                    {s.closedAt ? formatClock(s.closedAt, tz) : "now"}
                   </p>
                   <p data-testid="shift-people" className="mt-0.5 text-xs text-muted-foreground">
                     Opened by {s.openedBy}

@@ -31,7 +31,7 @@ import {
   type KdsView,
 } from "@/lib/kds";
 import { formatAddress, type Fulfillment } from "@/lib/orders";
-import { formatStoreClock, formatStoreTime } from "@/lib/store-time";
+import { formatClockSeconds, formatClock } from "@/lib/zoned";
 import { usePersistentPrefs } from "@/lib/use-persistent-prefs";
 import { useNow, useServerSnapshot } from "@/lib/use-server-snapshot";
 import { cn } from "@/lib/utils";
@@ -386,7 +386,7 @@ export function KitchenDisplay({ initial, storeName, timeZone }: { initial: KdsS
               className={cn("size-2 rounded-full", stale ? "bg-red-500" : "bg-emerald-400")}
               aria-hidden="true"
             />
-            {formatStoreTime(new Date(screenNow), timeZone)}
+            {formatClock(new Date(screenNow), timeZone)}
           </span>
         </div>
       </header>
@@ -396,7 +396,7 @@ export function KitchenDisplay({ initial, storeName, timeZone }: { initial: KdsS
         <div role="alert" className="flex shrink-0 items-center gap-2 bg-red-600 px-4 py-2 font-bold">
           <WifiOff className="size-5" aria-hidden="true" />
           Connection lost — showing tickets as of{" "}
-          {formatStoreClock(new Date(lastSync + offsetMs), timeZone)}
+          {formatClockSeconds(new Date(lastSync + offsetMs), timeZone)}
           . Retrying… Check the wifi or call orders in by phone.
         </div>
       ) : null}

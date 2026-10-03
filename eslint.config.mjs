@@ -20,11 +20,12 @@ const eslintConfig = defineConfig([
       "src/lib/use-*.ts",
     ],
     rules: {
-      "no-restricted-imports": [
+      // Type-only imports are erased at build time, so a component may name a server module's types.
+      "@typescript-eslint/no-restricted-imports": [
         "error",
         {
-          paths: ["@/db", "@/lib/auth", "@/lib/staff", "@/lib/pin"].map((name) => ({ name, message: SERVER_ONLY })),
-          patterns: [{ group: ["@/lib/*-server", "@/lib/*-server/*"], message: SERVER_ONLY }],
+          paths: ["@/db", "@/lib/auth", "@/lib/staff", "@/lib/pin"].map((name) => ({ name, message: SERVER_ONLY, allowTypeImports: true })),
+          patterns: [{ group: ["@/lib/*-server", "@/lib/*-server/*"], message: SERVER_ONLY, allowTypeImports: true }],
         },
       ],
     },

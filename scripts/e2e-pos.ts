@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 /**
  * Counter POS e2e against a running dev server and its database: PIN unlock,
  * a walk-in half-and-half paid in cash, a returning caller's delivery
@@ -16,12 +17,12 @@
  */
 import type { Locator, Page } from "playwright";
 import { and, eq, gte, isNull, type SQL } from "drizzle-orm";
-import { randomUUID } from "node:crypto";
-import { adjustments, customers, db, drawerEvents, employees, menuItems, orderItems, orders, pinAttempts, shifts, storeSettings, tenders } from "../src/db";
+import { orderDiscounts, customers, db, drawerEvents, employees, menuItems, operators, orderItems, orders, pinAttempts, drawerSessions, storeSettings, tenders } from "../src/db";
 import type { KdsSnapshot } from "../src/lib/kds";
 import { normalizePhone } from "../src/lib/orders";
-import { submitOrder } from "../src/lib/orders-server/submit";
-import { BASE, check, eventually, launchBrowser, menuLookup, run, SHOT_DIR, signIn } from "./harness";
+import { createOrder } from "../src/lib/checkout";
+import { mutateOrder } from "../src/lib/orders-server/mutate";
+import { BASE, check, eventually, launchBrowser, menuLookup, run, SHOT_DIR, signIn } from "./e2e/harness";
 
 const KITCHEN = { name: "Kitchen", email: "kitchen@minks.example", password: "pizza-test-1234" };
 const CALLER = { name: "Rita Regular", phone: "(555) 010-7788" };
@@ -66,7 +67,7 @@ async function setup() {
   };
   const manager = staffId("Morgan Manager");
   const cashier = staffId("Casey Cashier");
-  await db.update(shifts).set({ closedAt: new Date(), closedBy: manager }).where(isNull(shifts.closedAt));
+  await db.update(drawerSessions).set({ closedAt: new Date(), closedBy: manager }).where(isNull(drawerSessions.closedAt));
   await db.delete(pinAttempts);
   // Clear the board so new orders are easy to find on screen.
   for (const status of ["held", "new", "preparing", "ready"] as const) {
@@ -78,61 +79,44 @@ async function setup() {
 
   // A returning caller: one past delivery order with a pie and a salad.
   await db.delete(customers).where(eq(customers.phone, normalizePhone(CALLER.phone)));
-  const past = await submitOrder(
-    {
-      orderId: randomUUID(),
-      channel: "online",
-      fulfillment: { kind: "delivery", address: { line1: "42 Oak Lane", line2: "Gate 7", city: "The Woodlands", zip: "77380" } },
-      customer: { ...CALLER, email: null, saveAddress: true },
-      notes: null,
-      fire: { kind: "now" },
-      promisedAt: null,
-      tipCents: 0,
-      lines: [
-        {
-          lineId: randomUUID(),
-          itemId: item("Cheese Pizza"),
-          quantity: 1,
-          notes: null,
-          selections: [
-            { modifierId: pick("Size", 'X-Large 16"'), placement: "whole", amount: "regular" },
-            { modifierId: pick("Crust", "Thin Crust"), placement: "whole", amount: "regular" },
-            { modifierId: pick("Extra Toppings", "Bacon"), placement: "whole", amount: "extra" },
-          ],
-        },
-        { lineId: randomUUID(), itemId: item("Caesar Salad"), quantity: 1, notes: null, selections: [{ modifierId: pick("Dressing", "Caesar"), placement: "whole", amount: "regular" }] },
-      ],
-      tenders: [],
-    },
-    { kind: "online" },
-  );
-  if (!past.ok) throw new Error(`past order rejected: ${JSON.stringify(past)}`);
-  await db.update(orders).set({ status: "completed" }).where(eq(orders.id, past.order.id));
+  const whole = (modifierId: number, amount: "regular" | "extra" = "regular") => ({ modifierId, placement: "whole" as const, amount });
+  const past = await createOrder({
+    orderType: "delivery",
+    customerName: CALLER.name,
+    customerPhone: CALLER.phone,
+    addressLine1: "42 Oak Lane",
+    addressLine2: "Gate 7",
+    city: "The Woodlands",
+    zip: "77380",
+    tipCents: 0,
+    lines: [
+      {
+        itemId: item("Cheese Pizza"),
+        quantity: 1,
+        notes: null,
+        selections: [whole(pick("Size", 'X-Large 16"')), whole(pick("Crust", "Thin Crust")), whole(pick("Extra Toppings", "Bacon"), "extra")],
+      },
+      { itemId: item("Caesar Salad"), quantity: 1, notes: null, selections: [whole(pick("Dressing", "Caesar"))] },
+    ],
+  });
+  await db.update(orders).set({ status: "completed" }).where(eq(orders.id, past.id));
   // The salad is 86'd today, so Reorder must flag it.
   await db.update(menuItems).set({ isAvailable: false }).where(eq(menuItems.name, "Caesar Salad"));
 
   // An online order waiting to be paid at pickup.
-  const online = await submitOrder(
-    {
-      orderId: randomUUID(),
-      channel: "online",
-      fulfillment: { kind: "pickup" },
-      customer: { name: "Olive Online", phone: "(555) 010-4400", email: null, saveAddress: false },
-      notes: null,
-      fire: { kind: "now" },
-      promisedAt: null,
-      tipCents: 0,
-      lines: [{ lineId: randomUUID(), itemId: item("Margherita"), quantity: 1, notes: null, selections: [{ modifierId: pick("Size", 'Medium 12"'), placement: "whole", amount: "regular" }, { modifierId: pick("Crust", "Hand Tossed"), placement: "whole", amount: "regular" }] }],
-      tenders: [],
-    },
-    { kind: "online" },
-  );
-  if (!online.ok) throw new Error(`online order rejected: ${JSON.stringify(online)}`);
-  return { online: online.order, tz: settings.timezone, manager, cashier };
+  const online = await createOrder({
+    orderType: "pickup",
+    customerName: "Olive Online",
+    customerPhone: "(555) 010-4400",
+    tipCents: 0,
+    lines: [{ itemId: item("Margherita"), quantity: 1, notes: null, selections: [whole(pick("Size", 'Medium 12"')), whole(pick("Crust", "Hand Tossed"))] }],
+  });
+  const [operator] = await db.select({ id: operators.id }).from(operators).where(eq(operators.email, KITCHEN.email));
+  return { online, tz: settings.timezone, manager, cashier, operatorId: operator?.id ?? 0 };
 }
 
 async function main() {
-  const { online, tz, manager, cashier } = await setup();
+  const { online, tz, manager, cashier, operatorId } = await setup();
   // The expected wall clocks come from Intl in the store's zone, not from the app's formatters.
   const storeClock = (at: Date, options: Intl.DateTimeFormatOptions) => new Intl.DateTimeFormat("en-US", { timeZone: tz, ...options }).format(at);
   const clock12 = (minutes: number) => `${((Math.floor(minutes / 60) + 11) % 12) + 1}:${String(minutes % 60).padStart(2, "0")} ${minutes >= 720 ? "PM" : "AM"}`;
@@ -202,8 +186,8 @@ async function main() {
   await page.getByLabel("Starting bank").fill("150.00");
   await page.getByTestId("open-shift-confirm").click();
   await page.getByTestId("open-shift").waitFor({ state: "detached" });
-  const shift = await eventually(async () => (await db.select().from(shifts).where(isNull(shifts.closedAt))).length === 1);
-  const [openShift] = await db.select().from(shifts).where(isNull(shifts.closedAt));
+  const shift = await eventually(async () => (await db.select().from(drawerSessions).where(isNull(drawerSessions.closedAt))).length === 1);
+  const [openShift] = await db.select().from(drawerSessions).where(isNull(drawerSessions.closedAt));
   check("shift opens with a $150.00 bank", [shift, openShift?.startingBankCents], [true, 15000]);
 
   // --- Walk-in: 2 × half-and-half large, cash ---------------------------------
@@ -233,7 +217,7 @@ async function main() {
   check("walk-in half-and-half paid in 12 taps or fewer", taps <= 12, true);
   await shot("05-change");
   await page.getByTestId("tender-done").click();
-  const walkIn = await newestOrder(eq(orders.channel, "walk_in"));
+  const walkIn = await newestOrder(eq(orders.source, "walk_in"));
   const walkInLines = await linesOf(walkIn.id);
   const walkInTenders = await tendersOf(walkIn.id);
   const placements = walkInLines[0].modifiers.flatMap((m) => (m.kind === "placed" ? [`${m.placement}:${m.modifierName}`] : []));
@@ -275,7 +259,7 @@ async function main() {
   check("the sent toast covers neither the header nor Send and Pay", covered.map((b) => !toastBox || !b || overlaps(toastBox, b)), [false, false, false]);
   check("the toast sits above two wrapped rows of order-detail actions", !!toastBox && toastBox.y + toastBox.height <= 768 - 2 * 48 - 8 - 12, true);
   await shot("07b-sent-toast");
-  const phoneOrder = await eventually(async () => (await newestOrder(eq(orders.customerName, CALLER.name)))?.channel === "phone");
+  const phoneOrder = await eventually(async () => (await newestOrder(eq(orders.customerName, CALLER.name)))?.source === "phone");
   const delivery = await newestOrder(eq(orders.customerName, CALLER.name));
   check(
     "phone delivery stored held with a fire time, address and fee",
@@ -337,6 +321,23 @@ async function main() {
   await page.getByTestId("tab-board").click();
   await page.getByLabel("Search open orders").fill("");
   await page.locator(`[data-order="${dine.orderNumber}"]`).click();
+  // --- Discount: under the threshold, then over it ----------------------------------
+  await page.getByTestId("discount").click();
+  await page.getByLabel("Amount").fill("2.00");
+  await page.getByRole("button", { name: "Coupon" }).click();
+  await page.getByTestId("prompt-confirm").click();
+  check("a $2 discount needs no manager", await eventually(async () => (await db.select().from(orderDiscounts).where(eq(orderDiscounts.orderId, dine.id))).length === 1), true);
+  await page.getByTestId("discount").click();
+  await page.getByLabel("Amount").fill("6.00");
+  await page.getByRole("button", { name: "Manager special" }).click();
+  await page.getByTestId("prompt-confirm").click();
+  check("a $6 discount pops the manager PIN pad", await shows(page.getByTestId("manager-pin").getByText("Discount $6.00")), true);
+  await pin("1234");
+  await page.getByTestId("manager-pin").waitFor({ state: "detached" });
+  const discounts = await db.select().from(orderDiscounts).where(and(eq(orderDiscounts.orderId, dine.id), eq(orderDiscounts.amountCents, 600)));
+  check("$6 discount stored with the manager's approval", discounts.map((d) => d.approvedBy), [manager]);
+
+  // --- Pay: split three ways; money on the check then locks discounts -----------
   await page.getByTestId("order-pay").click();
   await page.getByRole("button", { name: "Split 3 ways" }).click();
   await shot("09-split");
@@ -354,6 +355,12 @@ async function main() {
     { tenders: shares.length, sumIsTotal: shares.reduce((a, b) => a + b, 0) === dinePaid.totalCents, withinACent: shares[0] - shares[2] <= 1, paidInFull: dinePaid.paidCents === dinePaid.totalCents },
     { tenders: 3, sumIsTotal: true, withinACent: true, paidInFull: true },
   );
+
+  const lockedDiscount = await mutateOrder(
+    { orderId: dine.id, mutation: { kind: "discount", id: randomUUID(), lineId: null, cents: 100, reason: "too late" } },
+    { actor: { employeeId: manager, name: "Morgan Manager", access: "manager" }, operatorId: operatorId },
+  );
+  check("once paid, a discount is refused: money goes back as a refund", lockedDiscount.ok === false && lockedDiscount.reason === "rejected", true);
 
   // --- Cashier void after send → manager PIN → KDS shows VOID ---------------------
   const knots = (await linesOf(dine.id)).find((l) => l.itemName === "Garlic Knots (6)")!;
@@ -375,21 +382,6 @@ async function main() {
   check("KDS shows the voided line as VOID", await eventually(async () => (await kdsRow.getAttribute("data-stage").catch(() => null)) === "void"), true);
   await kitchen.close();
 
-  // --- Discount: under the threshold, then over it ----------------------------------
-  await page.getByTestId("discount").click();
-  await page.getByLabel("Amount").fill("2.00");
-  await page.getByRole("button", { name: "Coupon" }).click();
-  await page.getByTestId("prompt-confirm").click();
-  check("a $2 discount needs no manager", await eventually(async () => (await db.select().from(adjustments).where(eq(adjustments.orderId, dine.id))).length === 1), true);
-  await page.getByTestId("discount").click();
-  await page.getByLabel("Amount").fill("6.00");
-  await page.getByRole("button", { name: "Manager special" }).click();
-  await page.getByTestId("prompt-confirm").click();
-  check("a $6 discount pops the manager PIN pad", await shows(page.getByTestId("manager-pin").getByText("Discount $6.00")), true);
-  await pin("1234");
-  await page.getByTestId("manager-pin").waitFor({ state: "detached" });
-  const discounts = await db.select().from(adjustments).where(and(eq(adjustments.orderId, dine.id), eq(adjustments.cents, 600)));
-  check("$6 discount stored with the manager's approval", discounts.map((d) => d.approvedBy), [manager]);
   await page.getByRole("button", { name: "Log" }).click();
   const log = await page.getByTestId("activity-log").innerText();
   check(
@@ -526,8 +518,8 @@ async function main() {
   await page.getByTestId("manager-pin").waitFor();
   await pin("1234");
   await page.getByTestId("manager-pin").waitFor({ state: "detached" });
-  const paidOut = await eventually(async () => (await db.select().from(drawerEvents).where(and(eq(drawerEvents.shiftId, openShift.id), eq(drawerEvents.kind, "paid_out")))).length === 1);
-  check("paid out of the drawer needs and records a manager", [paidOut, (await db.select().from(drawerEvents).where(eq(drawerEvents.shiftId, openShift.id)))[0]?.approvedBy], [true, manager]);
+  const paidOut = await eventually(async () => (await db.select().from(drawerEvents).where(and(eq(drawerEvents.drawerSessionId, openShift.id), eq(drawerEvents.kind, "paid_out")))).length === 1);
+  check("paid out of the drawer needs and records a manager", [paidOut, (await db.select().from(drawerEvents).where(eq(drawerEvents.drawerSessionId, openShift.id)))[0]?.approvedBy], [true, manager]);
 
   // --- Shift close: counted vs expected ---------------------------------------------------
   await page.getByTestId("staff-menu").click();
@@ -535,11 +527,11 @@ async function main() {
   await page.getByTestId("shift-report").waitFor();
   const expectedText = await page.getByTestId("shift-report").innerText();
   check(
-    "expected cash: $150 bank + $40.31 + $31.36 + $4.32 + $25.41 cash − $5 paid out = $246.40",
-    expectedText.startsWith("Expected cash\n$246.40"),
+    "expected cash: $150 bank + the cash tenders ($40.31, three $7.57/$7.56 shares, $4.32, $10.46, $8.82, $6.13) − $5 paid out = $237.74",
+    expectedText.startsWith("Expected cash\n$237.74"),
     true,
   );
-  await page.getByLabel("Counted cash").fill("244.90");
+  await page.getByLabel("Counted cash").fill("236.24");
   await page.getByLabel("Card batch total").fill("15.00");
   check("short by $1.50 shows before closing", (await page.getByTestId("shift-report").innerText()).includes("-$1.50"), true);
   await page.getByTestId("close-shift-confirm").click();
@@ -548,8 +540,8 @@ async function main() {
   await page.getByTestId("z-report").waitFor();
   await page.getByTestId("manager-pin").waitFor({ state: "detached" });
   await shot("13-shift-closed");
-  const [closedShift] = await db.select().from(shifts).where(eq(shifts.id, openShift.id));
-  check("shift closed with counted cash and the manager as closer", [closedShift.closedAt !== null, closedShift.countedCashCents, closedShift.closedBy], [true, 24490, manager]);
+  const [closedShift] = await db.select().from(drawerSessions).where(eq(drawerSessions.id, openShift.id));
+  check("shift closed with counted cash and the manager as closer", [closedShift.closedAt !== null, closedShift.countedCashCents, closedShift.closedBy], [true, 23624, manager]);
   check("Z report links to the printable page", await page.getByTestId("z-report").getAttribute("href"), `/admin/reports/shift/${openShift.id}`);
 
   // --- Lock ---------------------------------------------------------------------------------
@@ -594,8 +586,8 @@ async function main() {
   await page.getByText("Guest 2 of 3").waitFor();
   await page.clock.fastForward(130_000);
   check("the idle timer locks the terminal mid-split", await page.getByTestId("lock-screen").waitFor({ timeout: 5_000 }).then(() => true, () => false), true);
-  const splitOrder = await eventually(async () => (await newestOrder(eq(orders.channel, "walk_in"), payPressedAt)) !== undefined);
-  const knotsOrder = await newestOrder(eq(orders.channel, "walk_in"), payPressedAt);
+  const splitOrder = await eventually(async () => (await newestOrder(eq(orders.source, "walk_in"), payPressedAt)) !== undefined);
+  const knotsOrder = await newestOrder(eq(orders.source, "walk_in"), payPressedAt);
   const takenBeforeLock = knotsOrder ? (await tendersOf(knotsOrder.id)).map((t) => t.amountCents) : [];
   check("guest 1's $2.16 is on a recorded $6.48 order after the lock", [splitOrder, knotsOrder?.totalCents, takenBeforeLock.join()], [true, 648, "216"]);
   await page.keyboard.type("5678");

@@ -4,7 +4,7 @@ import type { Dispatch } from "react";
 import { Clock, Copy, Minus, Pencil, Plus, Trash2, X } from "lucide-react";
 import { draftProblem, draftTotals, lineSummary, MODE_OPTIONS, MODES, type AppendDraft, type Draft, type DraftAction, type DraftLine, type Mode, type NewOrderDraft } from "@/lib/pos-client/draft";
 import { formatCents } from "@/lib/money";
-import { formatStoreTime, nextStoreTime, storeHhmm } from "@/lib/store-time";
+import { formatClock, nextStoreTime, hhmmOf } from "@/lib/zoned";
 import { cn } from "@/lib/utils";
 import { usePos } from "./context";
 import { ChargeRows } from "./totals";
@@ -162,7 +162,7 @@ function NewOrderHeader({ draft, dispatch, onShowCaller }: { draft: NewOrderDraf
 
 function NewOrderFooter({ draft, dispatch }: { draft: NewOrderDraft; dispatch: Dispatch<DraftAction> }) {
   const { board, now, store } = usePos();
-  const timeOf = (at: Date) => formatStoreTime(at, store.timeZone);
+  const timeOf = (at: Date) => formatClock(at, store.timeZone);
   const mode = MODES[draft.mode];
   const quote = mode.fulfillment === "delivery" ? board.quote.deliveryMinutes : board.quote.pickupMinutes;
   return (
@@ -188,7 +188,7 @@ function NewOrderFooter({ draft, dispatch }: { draft: NewOrderDraft; dispatch: D
             <input
               type="time"
               aria-label="Ready at"
-              value={storeHhmm(draft.schedule.readyAt, store.timeZone)}
+              value={hhmmOf(draft.schedule.readyAt, store.timeZone)}
               onChange={(e) => e.target.value && dispatch({ type: "schedule", schedule: { kind: "later", readyAt: nextStoreTime(e.target.value, new Date(), store.timeZone).toISOString() } })}
               className="h-11 min-w-0 flex-1 rounded-lg border bg-background px-2 text-base"
             />

@@ -5,7 +5,7 @@ import { ClipboardList, Printer, RotateCw, Trash2 } from "lucide-react";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { formatCents } from "@/lib/money";
 import * as outbox from "@/lib/pos-outbox";
-import { formatStoreTime } from "@/lib/store-time";
+import { formatClock } from "@/lib/zoned";
 import { cn } from "@/lib/utils";
 import { notify } from "./notify";
 import { shortId } from "./print";
@@ -72,7 +72,7 @@ export function OutboxDialog({
             <ClipboardList className="size-5" /> Connection and unsent orders
           </DialogTitle>
           <DialogDescription>
-            {online ? "Connected" : "Not connected"}. Last sync {formatStoreTime(new Date(lastSync), timeZone)}. Orders that fail to send are kept on this
+            {online ? "Connected" : "Not connected"}. Last sync {formatClock(new Date(lastSync), timeZone)}. Orders that fail to send are kept on this
             device and retried automatically. While the internet is down the kitchen screen is down too, so hand the printed paper ticket to the
             kitchen. Payments, voids and approvals on existing orders need the connection.
           </DialogDescription>

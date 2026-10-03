@@ -8,8 +8,8 @@
  * rate and the America/Chicago timezone.
  */
 import { eq } from "drizzle-orm";
-import { db, orders } from "../src/db";
-import { BASE, check, launchBrowser, run, SHOT_DIR } from "./harness";
+import { db, orders, storeSettings } from "../src/db";
+import { BASE, check, launchBrowser, run, SHOT_DIR } from "./e2e/harness";
 
 run(async () => {
   const browser = await launchBrowser();
@@ -66,9 +66,12 @@ run(async () => {
     true,
   );
   check("tracker shows the balance due at pickup", details.includes("Payment $32.32 due at pickup"), true);
-  // Neither the browser's zone (Tokyo) nor the server's (UTC): a wrong zone shows.
-  const readyBy = new Intl.DateTimeFormat("en-US", { timeZone: "America/Chicago", hour: "numeric", minute: "2-digit" }).format(placed.promisedAt ?? undefined);
-  check("tracker's ready-by time reads in the store's zone", details.includes(`Estimated ready by ${readyBy}`), true);
+  // Neither the browser's zone (Tokyo) nor the server's (UTC): the store's own zone, whatever it is set to.
+  const [{ timezone }] = await db.select({ timezone: storeSettings.timezone }).from(storeSettings).where(eq(storeSettings.id, 1));
+  const readyBy = new Intl.DateTimeFormat("en-US", { timeZone: timezone, hour: "numeric", minute: "2-digit" })
+    .format(placed.promisedAt ?? undefined)
+    .replace(/\u202f/g, " ");
+  check("tracker's ready-by time reads in the store's zone", details.includes(`Ready around ${readyBy}`), true);
 
   await browser.close();
 });

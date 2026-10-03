@@ -7,7 +7,7 @@ import { digitsOf, type CustomerLookup } from "@/lib/orders";
 import { allItems, lineSummary, MODES, type DraftAction, type NewOrderDraft } from "@/lib/pos-client/draft";
 import { formatCents } from "@/lib/money";
 import { reorderLines } from "@/lib/pricing";
-import { formatStoreDateTime } from "@/lib/store-time";
+import { formatDateTime } from "@/components/admin/ui";
 import { cn } from "@/lib/utils";
 import { usePos } from "./context";
 import { Tap } from "./touch";
@@ -174,7 +174,7 @@ export function CallerPanel({ draft, dispatch, onContinue }: { draft: NewOrderDr
             <div key={o.id} className="flex items-center gap-3 rounded-xl border bg-card p-3" data-testid="recent-order">
               <div className="min-w-0 flex-1">
                 <p className="text-sm text-muted-foreground">
-                  #{o.number} · {formatStoreDateTime(o.placedAt, store.timeZone)} · {formatCents(o.totals.totalCents)}
+                  #{o.number} · {formatDateTime(o.placedAt, store.timeZone)} · {formatCents(o.totals.totalCents)}
                 </p>
                 <p className="truncate font-medium">
                   {o.lines

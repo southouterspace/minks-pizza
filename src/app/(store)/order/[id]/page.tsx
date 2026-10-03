@@ -1,20 +1,18 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 import { notFound } from "next/navigation";
+import { and, asc, desc, eq, notInArray } from "drizzle-orm";
+import { Gift } from "lucide-react";
+import { courierDeliveries, db, orderDiscounts, orderItems, orders } from "@/db";
+import { COURIER_STATUS_LABEL, TERMINAL_COURIER_STATUSES } from "@/lib/delivery/types";
+import { formatClock } from "@/lib/zoned";
+import { orderPointsStatus } from "@/lib/loyalty";
 import { formatCents } from "@/lib/money";
+import { dueCents, modifierLabel, paymentState } from "@/lib/orders";
+import { isActive, isCooking } from "@/lib/order-workflow";
 import { getSettings } from "@/lib/settings-server";
-import { formatStoreTime } from "@/lib/store-time";
-import {
-  dueCents,
-  FULFILLMENT_LABEL,
-  modifierLabel,
-  PAYMENT_LABEL,
-  paymentState,
-  type Fulfillment,
-  type KitchenStatus,
-} from "@/lib/orders";
-import { getOrderView } from "@/lib/orders-server/views";
 import { OrderAutoRefresh } from "@/components/store/order-auto-refresh";
+import { orderTotals, TotalsList } from "@/components/totals-list";
 import { buttonVariants } from "@/components/ui/button";
 import {
   Card,
@@ -28,25 +26,9 @@ import { cn } from "@/lib/utils";
 export const metadata: Metadata = { title: "Order status" };
 export const dynamic = "force-dynamic";
 
-const PROGRESS_STEPS = ["new", "preparing", "ready"] as const;
+const STATUS_STEPS = ["new", "preparing", "ready", "completed"] as const;
 
-/** How many progress steps are filled; held and canceled orders fill none. */
-const STEPS_DONE: Record<KitchenStatus, number> = {
-  held: -1,
-  new: 0,
-  preparing: 1,
-  ready: 2,
-  completed: PROGRESS_STEPS.length,
-  canceled: -1,
-};
-
-const DUE_AT: Record<Fulfillment["kind"], string> = {
-  pickup: "due at pickup",
-  delivery: "due at delivery",
-  dine_in: "due at the table",
-};
-
-const STATUS_LABELS: Record<KitchenStatus, { title: string; blurb: string }> = {
+const STATUS_LABELS: Record<string, { title: string; blurb: string }> = {
   held: {
     title: "Scheduled",
     blurb: "We'll start making it closer to your time.",
@@ -82,37 +64,60 @@ export default async function OrderPage({
 
   if (!/^[0-9a-f-]{36}$/i.test(id)) notFound();
 
-  const [order, settings] = await Promise.all([getOrderView(id), getSettings()]);
+  const [order] = await db.select().from(orders).where(eq(orders.id, id));
   if (!order) notFound();
 
-  const stepIndex = STEPS_DONE[order.status];
-  const active = order.status !== "completed" && order.status !== "canceled";
-  const label = STATUS_LABELS[order.status];
-  const t = order.totals;
-  const payment = paymentState(t);
-  const readyBy = order.promisedAt
-    ? formatStoreTime(order.promisedAt, settings.timezone)
-    : null;
+  const [items, discounts, settings, [courier]] = await Promise.all([
+    db.select().from(orderItems).where(eq(orderItems.orderId, order.id)),
+    db
+      .select()
+      .from(orderDiscounts)
+      .where(eq(orderDiscounts.orderId, order.id))
+      .orderBy(asc(orderDiscounts.id)),
+    getSettings(),
+    db
+      .select()
+      .from(courierDeliveries)
+      .where(
+        and(
+          eq(courierDeliveries.orderId, order.id),
+          notInArray(courierDeliveries.status, [...TERMINAL_COURIER_STATUSES]),
+        ),
+      )
+      .orderBy(desc(courierDeliveries.createdAt))
+      .limit(1),
+  ]);
+
+  const stepIndex = STATUS_STEPS.indexOf(
+    order.status as (typeof STATUS_STEPS)[number],
+  );
+  const active = isActive(order.status);
+  const label = STATUS_LABELS[order.status] ?? STATUS_LABELS.new;
 
   return (
     <div className="mx-auto max-w-2xl px-4 py-10 sm:px-6">
       {active ? <OrderAutoRefresh /> : null}
 
       <p className="text-sm text-muted-foreground">
-        Order <span className="font-mono">#{order.number}</span> ·{" "}
-        {FULFILLMENT_LABEL[order.fulfillment.kind]}
+        Order <span className="font-mono">#{order.orderNumber}</span> ·{" "}
+        {order.orderType === "pickup" ? "Pickup" : "Delivery"}
       </p>
       <h1 className="mt-1 text-2xl font-bold tracking-tight">{label.title}</h1>
-      <p className="mt-2 text-sm text-muted-foreground">
-        {label.blurb}
-        {readyBy && (order.status === "held" || order.status === "new" || order.status === "preparing")
-          ? ` Estimated ready by ${readyBy}.`
-          : ""}
-      </p>
+      <p className="mt-2 text-sm text-muted-foreground">{label.blurb}</p>
+      {order.status === "canceled" && order.cancelReason ? (
+        <p className="mt-2 text-sm" data-testid="cancel-reason">
+          Reason: {order.cancelReason}
+        </p>
+      ) : null}
+      {isCooking(order.status) && order.promisedAt ? (
+        <p className="mt-3 text-sm font-medium" data-testid="ready-around">
+          Ready around {formatClock(order.promisedAt, settings.timezone)}
+        </p>
+      ) : null}
 
       {order.status !== "canceled" ? (
         <ol className="mt-6 flex items-center gap-1.5" aria-label="Order progress">
-          {PROGRESS_STEPS.map((step, i) => (
+          {STATUS_STEPS.slice(0, 4).map((step, i) => (
             <li
               key={step}
               className={cn(
@@ -125,7 +130,47 @@ export default async function OrderPage({
         </ol>
       ) : null}
 
-      {order.fulfillment.kind === "pickup" && settings.addressLine1 ? (
+      {courier ? (
+        <Card className="mt-6">
+          <CardContent className="flex flex-wrap items-center justify-between gap-3 text-sm">
+            <div>
+              <p className="font-medium">{COURIER_STATUS_LABEL[courier.status]}</p>
+              {courier.courierName ? (
+                <p className="mt-1 text-muted-foreground">
+                  Your driver is {courier.courierName}.
+                </p>
+              ) : null}
+            </div>
+            {courier.trackingUrl ? (
+              <a
+                href={courier.trackingUrl}
+                target="_blank"
+                rel="noreferrer"
+                className={buttonVariants({ variant: "outline" })}
+              >
+                Track your driver
+              </a>
+            ) : null}
+          </CardContent>
+        </Card>
+      ) : null}
+
+      {order.loyaltyMemberId !== null && order.loyaltyPointsEarned > 0 && orderPointsStatus(order.status) !== "Reversed" ? (
+        <p
+          data-testid="order-points"
+          className="mt-6 flex items-center gap-2 rounded-lg bg-muted px-4 py-3 text-sm"
+        >
+          <Gift className="size-4 shrink-0" aria-hidden />
+          {orderPointsStatus(order.status) === "Posted"
+            ? `You earned ${order.loyaltyPointsEarned.toLocaleString()} points.`
+            : `You'll earn ${order.loyaltyPointsEarned.toLocaleString()} points once your order is complete.`}
+          <Link href="/rewards" className="ml-auto font-medium underline underline-offset-4">
+            Rewards
+          </Link>
+        </p>
+      ) : null}
+
+      {order.orderType === "pickup" && settings.addressLine1 ? (
         <Card className="mt-6">
           <CardContent className="text-sm">
             <p className="font-medium">Pickup at</p>
@@ -147,81 +192,46 @@ export default async function OrderPage({
         </CardHeader>
         <CardContent>
           <ul className="divide-y divide-border">
-            {order.lines.filter((line) => !line.voided).map((line) => (
+            {items.map((item) => (
               <li
-                key={line.lineId}
+                key={item.id}
                 className="flex justify-between gap-3 py-3 text-sm first:pt-0"
               >
                 <div className="min-w-0">
                   <p>
                     <span className="tabular-nums text-muted-foreground">
-                      {line.quantity}×
+                      {item.quantity}×
                     </span>{" "}
-                    <span className="font-medium">{line.name}</span>
+                    <span className="font-medium">{item.itemName}</span>
                   </p>
-                  {line.modifiers.length > 0 ? (
+                  {item.modifiers.length > 0 ? (
                     <p className="mt-0.5 text-xs text-muted-foreground">
-                      {line.modifiers.map(modifierLabel).join(" · ")}
+                      {item.modifiers.map(modifierLabel).join(" · ")}
                     </p>
                   ) : null}
-                  {line.notes ? (
+                  {item.notes ? (
                     <p className="mt-0.5 text-xs italic text-muted-foreground">
-                      “{line.notes}”
+                      “{item.notes}”
                     </p>
                   ) : null}
                 </div>
                 <span className="shrink-0 tabular-nums">
-                  {formatCents(line.lineTotalCents)}
+                  {formatCents(item.lineTotalCents)}
                 </span>
               </li>
             ))}
           </ul>
         </CardContent>
-        <CardFooter>
-          <dl className="w-full space-y-1.5 text-sm">
-            <div className="flex justify-between">
-              <dt className="text-muted-foreground">Subtotal</dt>
-              <dd className="tabular-nums">{formatCents(t.subtotalCents)}</dd>
-            </div>
-            {t.discountCents > 0 ? (
-              <div className="flex justify-between">
-                <dt className="text-muted-foreground">Discounts</dt>
-                <dd className="tabular-nums">−{formatCents(t.discountCents)}</dd>
-              </div>
-            ) : null}
-            {t.taxCents > 0 ? (
-              <div className="flex justify-between">
-                <dt className="text-muted-foreground">Tax</dt>
-                <dd className="tabular-nums">{formatCents(t.taxCents)}</dd>
-              </div>
-            ) : null}
-            {t.deliveryFeeCents > 0 ? (
-              <div className="flex justify-between">
-                <dt className="text-muted-foreground">Delivery fee</dt>
-                <dd className="tabular-nums">
-                  {formatCents(t.deliveryFeeCents)}
-                </dd>
-              </div>
-            ) : null}
-            {t.tipCents > 0 ? (
-              <div className="flex justify-between">
-                <dt className="text-muted-foreground">Tip</dt>
-                <dd className="tabular-nums">{formatCents(t.tipCents)}</dd>
-              </div>
-            ) : null}
-            <div className="flex justify-between border-t border-border pt-2 text-base font-semibold">
-              <dt>Total</dt>
-              <dd className="tabular-nums">{formatCents(t.totalCents)}</dd>
-            </div>
-            <div className="flex justify-between pt-1">
-              <dt className="text-muted-foreground">Payment</dt>
-              <dd className="text-muted-foreground">
-                {payment === "unpaid" || payment === "partial"
-                  ? `${formatCents(dueCents(t))} ${DUE_AT[order.fulfillment.kind]}`
-                  : PAYMENT_LABEL[payment]}
-              </dd>
-            </div>
-          </dl>
+        <CardFooter className="flex-col items-stretch gap-1.5">
+          <TotalsList totals={orderTotals({ ...order, discounts })} audience="customer" />
+          <p className="flex justify-between text-sm text-muted-foreground">
+            <span>Payment</span>
+            <span>
+              {paymentState(order) === "paid"
+                ? "Paid"
+                : `${formatCents(dueCents(order))} due at ${order.orderType === "pickup" ? "pickup" : "delivery"}`}
+            </span>
+          </p>
         </CardFooter>
       </Card>
 

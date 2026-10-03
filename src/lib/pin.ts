@@ -1,20 +1,20 @@
 import { createHmac } from "node:crypto";
-import { and, eq, sql } from "drizzle-orm";
+import { and, eq, ne, sql } from "drizzle-orm";
 import { db, employees, pinAttempts } from "@/db";
-import { roleSatisfies, type Actor, type Approval, type Failure, type RequiredRole } from "@/lib/orders";
+import { roleSatisfies, type Approval, type Failure, type RequiredRole, type StaffActor } from "@/lib/orders";
 import type { StaffContext } from "@/lib/staff";
 
 const MAX_FAILURES = 5;
 const FAILURE_WINDOW = "5 minutes";
 
 export type PinCheck =
-  | { ok: true; actor: Actor }
+  | { ok: true; actor: StaffActor }
   | { ok: false; reason: "bad_pin" | "locked_out" };
 
 /**
- * Keyed digest of a staff PIN. Keyed with SESSION_SECRET so a leaked
- * employees table can't be reversed by hashing all 10,000 PINs; rotating the
- * secret means re-setting every PIN.
+ * Keyed digest of an employee's PIN, shared by the time clock and the POS.
+ * Keyed with SESSION_SECRET so a leaked employees table can't be reversed by
+ * hashing every possible PIN; rotating the secret means re-setting every PIN.
  */
 export function pinDigest(pin: string): string {
   const secret = process.env.SESSION_SECRET;
@@ -51,16 +51,16 @@ function recordFailure(operatorId: number) {
 }
 
 /**
- * Looks a PIN up by its digest among active staff. Failures count against
- * the signed-in device: five misses in five minutes lock it for the rest of
- * the window, because a 4-digit space is small.
+ * Looks a PIN up by its digest among active staff with POS access. Failures
+ * count against the signed-in device: five misses in five minutes lock it
+ * for the rest of the window, because a short PIN space is small.
  */
 export async function checkPin(pin: string, operatorId: number): Promise<PinCheck> {
   if (await lockedOut(operatorId)) return { ok: false, reason: "locked_out" };
   const [employee] = await db
-    .select({ employeeId: employees.id, name: employees.name, role: employees.role })
+    .select({ employeeId: employees.id, name: employees.name, access: employees.posAccess })
     .from(employees)
-    .where(and(eq(employees.pinDigest, pinDigest(pin)), eq(employees.isActive, true)));
+    .where(and(eq(employees.pinDigest, pinDigest(pin)), eq(employees.isActive, true), ne(employees.posAccess, "none")));
   if (!employee) {
     await recordFailure(operatorId);
     return { ok: false, reason: "bad_pin" };
@@ -79,10 +79,10 @@ export async function authorize(
   approval: Approval | undefined,
 ): Promise<{ ok: true; approvedBy: number | null } | Failure> {
   if (required === "cashier") return { ok: true, approvedBy: null };
-  if (roleSatisfies(staff.actor.role, required)) return { ok: true, approvedBy: staff.actor.employeeId };
+  if (roleSatisfies(staff.actor.access, required)) return { ok: true, approvedBy: staff.actor.employeeId };
   if (!approval) return { ok: false, reason: "needs_manager" };
   const check = await checkPin(approval.managerPin, staff.operatorId);
   if (!check.ok) return { ok: false, reason: check.reason };
-  if (!roleSatisfies(check.actor.role, required)) return { ok: false, reason: "needs_manager" };
+  if (!roleSatisfies(check.actor.access, required)) return { ok: false, reason: "needs_manager" };
   return { ok: true, approvedBy: check.actor.employeeId };
 }

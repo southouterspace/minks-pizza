@@ -4,7 +4,9 @@ import { MenuBrowser } from "@/components/store/menu-browser";
 import { ComingSoon } from "@/components/store/coming-soon";
 import { StoreStatusBanner } from "@/components/store/status-banner";
 import { RecentOrderLink } from "@/components/store/recent-order-link";
-import { formatTime, DAY_NAMES } from "@/lib/hours";
+import { DealsStrip } from "@/components/store/deals-strip";
+import { getAdvertisedDeals } from "@/lib/promotion-queries";
+import { DAY_NAMES, formatHhmm } from "@/lib/zoned";
 
 export const dynamic = "force-dynamic";
 
@@ -22,7 +24,10 @@ export default async function StorePage() {
     );
   }
 
-  const menu = await getPublicMenu();
+  const [menu, deals] = await Promise.all([
+    getPublicMenu(),
+    getAdvertisedDeals(new Date(), settings.timezone),
+  ]);
   const todayHours = settings.hours?.find(
     (h) => h.day === new Date().getDay(),
   );
@@ -42,6 +47,7 @@ export default async function StorePage() {
           <div className="mt-6 flex flex-wrap items-center gap-x-5 gap-y-2 text-sm text-muted-foreground">
             <StoreStatusBanner
               hours={settings.hours ?? null}
+              timeZone={settings.timezone}
               acceptingOrders={settings.isAcceptingOrders}
             />
             {settings.pickupEnabled ? (
@@ -56,6 +62,8 @@ export default async function StorePage() {
           </div>
         </div>
       </section>
+
+      <DealsStrip deals={deals} />
 
       {settings.isAcceptingOrders ? null : (
         <div className="border-b border-border bg-muted">
@@ -94,7 +102,7 @@ export default async function StorePage() {
                     <dd className="font-medium tabular-nums">
                       {h.closed
                         ? "Closed"
-                        : `${formatTime(h.open)} – ${formatTime(h.close)}`}
+                        : `${formatHhmm(h.open)} – ${formatHhmm(h.close)}`}
                     </dd>
                   </div>
                 ))}

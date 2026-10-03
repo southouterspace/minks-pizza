@@ -9,9 +9,9 @@ import {
   type DrawerReconciliation,
   type SalesReport,
 } from "@/lib/reports";
-import { formatStoreTime } from "@/lib/store-time";
+import { formatClock } from "@/lib/zoned";
 import { cn } from "@/lib/utils";
-import { STATUS_META } from "./order-card";
+import { STATUS_META } from "@/lib/order-workflow";
 
 export type Paper = "letter" | "receipt";
 
@@ -155,7 +155,7 @@ export function ReportDocument({
                   <li key={i} className="pl-3">
                     <div className="flex justify-between gap-3">
                       <span className="min-w-0">
-                        {a.order ? `#${a.order.number}` : formatStoreTime(a.at, tz)}
+                        {a.order ? `#${a.order.number}` : formatClock(a.at, tz)}
                         {a.item ? ` ${a.item}` : ""}
                       </span>
                       {kind === "no_sale" ? null : <span className="shrink-0 tabular-nums">{formatCents(a.cents)}</span>}
@@ -163,7 +163,7 @@ export function ReportDocument({
                     <p className="text-muted-foreground">
                       {name(a.employeeId)}
                       {a.approvedBy !== null && a.approvedBy !== a.employeeId ? `, approved by ${name(a.approvedBy)}` : ""}
-                      {a.order ? ` · ${formatStoreTime(a.at, tz)}` : ""}
+                      {a.order ? ` · ${formatClock(a.at, tz)}` : ""}
                     </p>
                     {a.reason ? <p className="text-muted-foreground">“{a.reason}”</p> : null}
                   </li>

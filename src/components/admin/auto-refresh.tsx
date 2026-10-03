@@ -12,15 +12,13 @@ export function AutoRefresh({ intervalMs = 15_000 }: { intervalMs?: number }) {
   const [elapsed, setElapsed] = useState(0);
 
   useEffect(() => {
+    let last = Date.now();
     const tick = setInterval(() => {
-      setElapsed((s) => {
-        const next = s + 1;
-        if (next * 1000 >= intervalMs) {
-          router.refresh();
-          return 0;
-        }
-        return next;
-      });
+      if (Date.now() - last >= intervalMs) {
+        last = Date.now();
+        router.refresh();
+      }
+      setElapsed(Math.floor((Date.now() - last) / 1000));
     }, 1000);
     return () => clearInterval(tick);
   }, [router, intervalMs]);

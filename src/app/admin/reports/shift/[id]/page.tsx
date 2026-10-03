@@ -3,7 +3,8 @@ import { notFound } from "next/navigation";
 import { requireOperator } from "@/lib/auth";
 import { getStoreBasics } from "@/lib/settings-server";
 import { getShift, shiftReportOf, UUID_RE } from "@/lib/reports-server";
-import { formatStoreDateTime, storeDateOf } from "@/lib/store-time";
+import { localDateOf } from "@/lib/zoned";
+import { formatDateTime } from "@/components/admin/ui";
 import { ReportDocument, type Paper } from "@/components/admin/report-document";
 import { ReportToolbar } from "@/components/admin/report-toolbar";
 import { formatCents } from "@/lib/money";
@@ -32,7 +33,7 @@ export default async function ShiftReportPage({
   return (
     <div>
       <ReportToolbar
-        backHref={`/admin/reports?date=${storeDateOf(shift.openedAt, tz)}`}
+        backHref={`/admin/reports?date=${localDateOf(shift.openedAt, tz)}`}
         pageHref={(p) => `/admin/reports/shift/${id}?paper=${p}`}
         paper={paper}
         csvQuery={`shift=${id}`}
@@ -43,13 +44,13 @@ export default async function ShiftReportPage({
         title={shift.closedAt ? "Z report" : "X report (shift still open)"}
         tz={tz}
         details={[
-          { label: "Opened", value: `${formatStoreDateTime(shift.openedAt, tz)} · ${openedBy}` },
+          { label: "Opened", value: `${formatDateTime(shift.openedAt, tz)} · ${openedBy}` },
           {
             label: "Closed",
-            value: shift.closedAt ? `${formatStoreDateTime(shift.closedAt, tz)} · ${closedBy ?? "—"}` : "Still open",
+            value: shift.closedAt ? `${formatDateTime(shift.closedAt, tz)} · ${closedBy ?? "—"}` : "Still open",
           },
           { label: "Shift", value: shift.id.slice(0, 8) },
-          { label: "Printed", value: formatStoreDateTime(new Date(), tz) },
+          { label: "Printed", value: formatDateTime(new Date(), tz) },
           ...(shift.notes ? [{ label: "Closing note", value: shift.notes }] : []),
         ]}
         report={report}

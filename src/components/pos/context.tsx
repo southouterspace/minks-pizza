@@ -1,7 +1,7 @@
 "use client";
 
 import { createContext, useContext } from "react";
-import type { ActionFailure, Actor, Approval, Board, PosMenu } from "@/lib/orders";
+import type { ActionFailure, StaffActor, Approval, Board, PosMenu } from "@/lib/orders";
 
 export type StoreInfo = {
   name: string;
@@ -14,7 +14,7 @@ export type StoreInfo = {
 export type Pos = {
   menu: PosMenu;
   board: Board;
-  staff: Actor;
+  staff: StaffActor;
   store: StoreInfo;
   online: boolean;
   /** Wall clock, ticked by the board poll; render code reads this, not Date.now(). */

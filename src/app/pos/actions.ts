@@ -4,10 +4,10 @@ import { z } from "zod";
 import { mutateOrder } from "@/lib/orders-server/mutate";
 import { getOrderView } from "@/lib/orders-server/views";
 import { getShiftReport } from "@/lib/reports-server";
-import { closeShift as closeShiftSeam, openShift as openShiftSeam, recordDrawerEvent } from "@/lib/shifts-server";
+import { closeShift as closeShiftSeam, openShift as openShiftSeam, recordDrawerEvent } from "@/lib/drawer-server";
 import {
   rejected,
-  type Actor,
+  type StaffActor,
   type Failure,
   type Locked,
   type MutationResult,
@@ -17,13 +17,8 @@ import {
 } from "@/lib/orders";
 import type { ShiftReport } from "@/lib/reports";
 import { getStaff, lockTerminal as clearStaff, renewStaff, unlockStaff, type StaffContext } from "@/lib/staff";
-import {
-  closeShiftSchema,
-  drawerEventSchema,
-  mutateOrderSchema,
-  openShiftSchema,
-  pinSchema,
-} from "@/lib/validation";
+import { pinSchema } from "@/lib/timeclock";
+import { closeShiftSchema, drawerEventSchema, mutateOrderSchema, openShiftSchema } from "@/lib/validation";
 
 function invalid(error: z.ZodError): Rejected {
   return rejected(error.issues[0]?.message ?? "Invalid input.");
@@ -44,7 +39,7 @@ async function withStaff<S extends z.ZodType, R>(
 
 export async function switchEmployee(
   pin: unknown,
-): Promise<{ ok: true; actor: Actor } | { ok: false; reason: "bad_pin" | "locked_out" | "signed_out" } | Rejected> {
+): Promise<{ ok: true; actor: StaffActor } | { ok: false; reason: "bad_pin" | "locked_out" | "signed_out" } | Rejected> {
   const parsed = pinSchema.safeParse(pin);
   if (!parsed.success) return invalid(parsed.error);
   return unlockStaff(parsed.data);
@@ -54,7 +49,7 @@ export async function lockTerminal(): Promise<void> {
   await clearStaff();
 }
 
-export async function keepUnlocked(): Promise<{ ok: true; actor: Actor } | Locked> {
+export async function keepUnlocked(): Promise<{ ok: true; actor: StaffActor } | Locked> {
   const staff = await renewStaff();
   return staff ? { ok: true, actor: staff.actor } : { ok: false, reason: "locked" };
 }

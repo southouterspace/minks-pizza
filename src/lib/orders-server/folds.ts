@@ -2,12 +2,17 @@
  * The folds: convergent statements that derive an order's money columns
  * from its facts and its kitchen status from its line stamps. Every order
  * write batch ends with them, so a replayed or half-retried write lands on
- * the same end state. Kitchen status otherwise moves only along the named
- * edges at the end of this file.
+ * the same end state. Each status edge is a logged transition
+ * (order-writes.ts), so a move writes its audit row only when it happens.
+ * Kitchen status otherwise moves only along the named edges at the end of
+ * this file.
  */
 import { and, eq, inArray, isNull, lte, sql, type SQL } from "drizzle-orm";
 import type { BatchItem } from "drizzle-orm/batch";
 import { db, orderItems, orders } from "@/db";
+import { ACTIVE_STATUSES, RECALLABLE } from "@/lib/order-workflow";
+import { SCHEDULER, transitionStatements, type Actor } from "@/lib/order-writes";
+import { MARKETPLACE_SOURCES } from "@/lib/orders";
 
 export type Statement = BatchItem<"pg">;
 
@@ -16,35 +21,51 @@ export async function run(statements: Statement[]): Promise<void> {
   if (first) await db.batch([first, ...rest]);
 }
 
+const EXTERNAL = sql.raw(MARKETPLACE_SOURCES.map((s) => `'${s}'`).join(", "));
+
+/**
+ * Money from the rows: subtotal over live lines, discounts capped at what
+ * they apply to (items rows whose line is live, delivery rows at the fee),
+ * tax on items after item discounts at the order's own rate, paid and
+ * refunded from the tenders. A marketplace order keeps the totals its
+ * platform sent (its tax is the platform's, not ours); only its payments fold.
+ */
 function recomputeTotals(orderId: string): Statement {
+  const external = sql`o.source in (${EXTERNAL})`;
   return db.execute(sql`
     update orders o set
-      subtotal_cents = f.subtotal,
-      discount_cents = f.discount,
-      tax_cents = f.tax,
-      total_cents = f.subtotal - f.discount + f.tax + o.delivery_fee_cents + o.tip_cents,
+      subtotal_cents = case when ${external} then o.subtotal_cents else f.subtotal end,
+      discount_cents = case when ${external} then o.discount_cents else f.items_off + f.delivery_off end,
+      tax_cents = case when ${external} then o.tax_cents else f.tax end,
+      total_cents = case when ${external} then o.total_cents
+        else f.subtotal - f.items_off - f.delivery_off + f.tax + o.delivery_fee_cents + o.tip_cents end,
       paid_cents = f.paid,
       refunded_cents = f.refunded,
       updated_at = now()
     from (
-      select x.subtotal, least(x.subtotal, x.adjusted) as discount,
-        round((x.subtotal - least(x.subtotal, x.adjusted)) * r.tax_rate_bps / 10000.0)::int as tax,
-        x.paid, x.refunded
-      from orders r, (
-        select
-          coalesce((select sum(i.line_total_cents) from order_items i
-                    where i.order_id = ${orderId} and i.voided_at is null), 0)::int as subtotal,
-          coalesce((select sum(a.cents) from adjustments a
-                    where a.order_id = ${orderId}
-                      and (a.line_uid is null or exists (
-                        select 1 from order_items i
-                        where i.line_uid = a.line_uid and i.order_id = ${orderId} and i.voided_at is null))), 0)::int as adjusted,
-          coalesce((select sum(t.amount_cents) from tenders t
-                    where t.order_id = ${orderId} and t.direction = 'payment'), 0)::int as paid,
-          coalesce((select sum(t.amount_cents) from tenders t
-                    where t.order_id = ${orderId} and t.direction = 'refund'), 0)::int as refunded
-      ) x
-      where r.id = ${orderId}
+      select y.subtotal, y.items_off, y.delivery_off,
+        round((y.subtotal - y.items_off) * y.bps / 10000.0)::int as tax, y.paid, y.refunded
+      from (
+        select x.subtotal, least(x.subtotal, x.items_raw) as items_off,
+          least(r.delivery_fee_cents, x.delivery_raw) as delivery_off, r.tax_rate_bps as bps, x.paid, x.refunded
+        from orders r, (
+          select
+            coalesce((select sum(i.line_total_cents) from order_items i
+                      where i.order_id = ${orderId} and i.voided_at is null), 0)::int as subtotal,
+            coalesce((select sum(d.amount_cents) from order_discounts d
+                      where d.order_id = ${orderId} and d.target = 'items'
+                        and (d.line_uid is null or exists (
+                          select 1 from order_items i
+                          where i.line_uid = d.line_uid and i.order_id = ${orderId} and i.voided_at is null))), 0)::int as items_raw,
+            coalesce((select sum(d.amount_cents) from order_discounts d
+                      where d.order_id = ${orderId} and d.target = 'delivery'), 0)::int as delivery_raw,
+            coalesce((select sum(t.amount_cents) from tenders t
+                      where t.order_id = ${orderId} and t.direction = 'payment'), 0)::int as paid,
+            coalesce((select sum(t.amount_cents) from tenders t
+                      where t.order_id = ${orderId} and t.direction = 'refund'), 0)::int as refunded
+        ) x
+        where r.id = ${orderId}
+      ) y
     ) f
     where o.id = ${orderId}`);
 }
@@ -55,10 +76,11 @@ function recomputeTotals(orderId: string): Statement {
  * that needs cooking is done; ready/completed → new when lines are fired
  * onto the check after it was ready. Canceled is terminal and only `cancel`
  * sets it. Fire stamps and ready_at both come from the database clock
- * (fireStamp, insertLines): an app server clock that lags it would make a
- * course fired just after ready look older than the ready stamp.
+ * (fireStamp, insertLines, transitionStatements): an app server clock that
+ * lags it would make a course fired just after ready look older than the
+ * ready stamp.
  */
-export function syncStatus(orderId: string): Statement[] {
+export function syncStatus(orderId: string, actor: Actor): Statement[] {
   const fired = sql`exists (select 1 from order_items i where i.order_id = ${orderId}
     and i.fired_at is not null and i.voided_at is null)`;
   const pending = sql`exists (select 1 from order_items i where i.order_id = ${orderId}
@@ -69,29 +91,21 @@ export function syncStatus(orderId: string): Statement[] {
   const touched = sql`exists (select 1 from order_items i where i.order_id = ${orderId}
     and i.voided_at is null and (i.oven_at is not null or i.done_at is not null))`;
   return [
-    db
-      .update(orders)
-      .set({ status: "new", updatedAt: sql`now()` })
-      .where(and(eq(orders.id, orderId), eq(orders.status, "held"), fired)),
-    db
-      .update(orders)
-      .set({ status: "new", readyAt: null, updatedAt: sql`now()` })
-      .where(and(eq(orders.id, orderId), inArray(orders.status, ["ready", "completed"]), firedSinceReady)),
-    db
-      .update(orders)
-      .set({ status: "preparing", updatedAt: sql`now()` })
-      .where(and(eq(orders.id, orderId), eq(orders.status, "new"), touched)),
-    db
-      .update(orders)
-      .set({ status: "ready", readyAt: sql`now()`, updatedAt: sql`now()` })
-      .where(
-        and(eq(orders.id, orderId), inArray(orders.status, ["new", "preparing"]), fired, sql`not ${pending}`),
-      ),
+    ...transitionStatements({ orderId, from: ["held"], to: "new", actor, when: fired }),
+    ...transitionStatements({ orderId, from: RECALLABLE, to: "new", actor, when: firedSinceReady }),
+    ...transitionStatements({ orderId, from: ["new"], to: "preparing", actor, when: touched }),
+    ...transitionStatements({
+      orderId,
+      from: ["new", "preparing"],
+      to: "ready",
+      actor,
+      when: sql`${fired} and not ${pending}`,
+    }),
   ];
 }
 
-export function folds(orderId: string): Statement[] {
-  return [recomputeTotals(orderId), ...syncStatus(orderId)];
+export function folds(orderId: string, actor: Actor): Statement[] {
+  return [recomputeTotals(orderId), ...syncStatus(orderId, actor)];
 }
 
 /** Sends the matching live lines to the kitchen; lines already fired keep their stamp. */
@@ -113,7 +127,7 @@ export async function fireDue(now: Date): Promise<number> {
     .where(and(eq(orders.status, "held"), lte(orders.fireAt, now)));
   if (due.length === 0) return 0;
   const ids = due.map((d) => d.id);
-  await run([fireStamp(inArray(orderItems.orderId, ids)), ...ids.flatMap(folds)]);
+  await run([fireStamp(inArray(orderItems.orderId, ids)), ...ids.flatMap((id) => folds(id, SCHEDULER))]);
   return ids.length;
 }
 
@@ -122,28 +136,28 @@ export async function fireDue(now: Date): Promise<number> {
 // ---------------------------------------------------------------------------
 
 /** Ready → completed: handed to the customer (POS handoff, KDS bump off the ready shelf). */
-export function complete(where: SQL | undefined): Statement {
-  return db
-    .update(orders)
-    .set({ status: "completed", updatedAt: sql`now()` })
-    .where(and(where, eq(orders.status, "ready")));
+export function complete(orderIds: string[], actor: Actor): Statement[] {
+  return orderIds.flatMap((orderId) => [...transitionStatements({ orderId, from: ["ready"], to: "completed", actor })]);
 }
 
 /** Back on the line from scratch: a recalled ticket usually means a remake. */
-export function recall(orderIds: string[]): Statement[] {
+export function recall(orderIds: string[], actor: Actor): Statement[] {
   return [
-    db
-      .update(orders)
-      .set({ status: "preparing", readyAt: null, updatedAt: sql`now()` })
-      .where(inArray(orders.id, orderIds)),
+    ...orderIds.flatMap((orderId) => [...transitionStatements({ orderId, from: RECALLABLE, to: "preparing", actor })]),
     db.update(orderItems).set({ ovenAt: null, doneAt: null }).where(inArray(orderItems.orderId, orderIds)),
   ];
 }
 
 /** Terminal. The fee and tip go too, so recomputeTotals folds the total to zero once lines are voided. */
-export function cancel(orderId: string): Statement {
-  return db
-    .update(orders)
-    .set({ status: "canceled", deliveryFeeCents: 0, tipCents: 0, updatedAt: sql`now()` })
-    .where(eq(orders.id, orderId));
+export function cancel(orderId: string, actor: Actor, reason: string): Statement[] {
+  return [
+    ...transitionStatements({
+      orderId,
+      from: ACTIVE_STATUSES,
+      to: "canceled",
+      actor,
+      cancelReason: reason,
+      also: [sql`delivery_fee_cents = 0`, sql`tip_cents = 0`],
+    }),
+  ];
 }

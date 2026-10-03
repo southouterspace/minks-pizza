@@ -6,7 +6,7 @@
  * Run: npx tsx --env-file=.env.local scripts/e2e-operator.ts
  * Precondition: no operator row exists yet (first-run state).
  */
-import { BASE, check, launchBrowser, run, SHOT_DIR, signIn } from "./harness";
+import { BASE, check, launchBrowser, run, SHOT_DIR, signIn } from "./e2e/harness";
 
 const OWNER = { email: "owner@minks.example", password: "pizza-test-1234", name: "Mink Operator" };
 

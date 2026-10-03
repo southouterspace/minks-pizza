@@ -4,7 +4,7 @@
  */
 import { and, asc, desc, eq, gte, inArray, isNull, lt, or, sql, type SQL } from "drizzle-orm";
 import { alias, type PgColumn } from "drizzle-orm/pg-core";
-import { adjustments, db, drawerEvents, employees, orderItems, orders, shifts, tenders } from "@/db";
+import { db, drawerEvents, drawerSessions, employees, orderDiscounts, orderItems, orders, tenders } from "@/db";
 import { modifierLabel } from "@/lib/orders";
 import {
   reconcileDrawer,
@@ -17,7 +17,7 @@ import {
   type ShiftReport,
 } from "@/lib/reports";
 import { staffNames, totalsOf } from "@/lib/orders-server/rows";
-import { formatStoreTimestamp, parseStoreDate, storeDateOf, storeDayRange, type StoreDate } from "@/lib/store-time";
+import { dayBounds, formatSortable, localDateOf, localDateSchema, type LocalDate } from "@/lib/zoned";
 
 export type ShiftSummary = {
   id: string;
@@ -33,24 +33,24 @@ const closer = alias(employees, "closer");
 
 function shiftRows(where: SQL | undefined) {
   return db
-    .select({ shift: shifts, openedBy: opener.name, closedBy: closer.name })
-    .from(shifts)
-    .innerJoin(opener, eq(opener.id, shifts.openedBy))
-    .leftJoin(closer, eq(closer.id, shifts.closedBy))
+    .select({ shift: drawerSessions, openedBy: opener.name, closedBy: closer.name })
+    .from(drawerSessions)
+    .innerJoin(opener, eq(opener.id, drawerSessions.openedBy))
+    .leftJoin(closer, eq(closer.id, drawerSessions.closedBy))
     .where(where)
-    .orderBy(desc(shifts.openedAt));
+    .orderBy(desc(drawerSessions.openedAt));
 }
 
-/** Shifts opened on a store day, plus any shift still open, newest first. */
+/** Drawer shifts opened on a store day, plus any still open, newest first. */
 export async function listShifts(day: { from: Date; to: Date }): Promise<ShiftSummary[]> {
   const rows = await shiftRows(
-    or(and(gte(shifts.openedAt, day.from), lt(shifts.openedAt, day.to)), isNull(shifts.closedAt)),
+    or(and(gte(drawerSessions.openedAt, day.from), lt(drawerSessions.openedAt, day.to)), isNull(drawerSessions.closedAt)),
   );
   const ids = rows.map((r) => r.shift.id);
   const [tenderRows, drawerRows] = ids.length
     ? await Promise.all([
-        db.select().from(tenders).where(inArray(tenders.shiftId, ids)),
-        db.select().from(drawerEvents).where(inArray(drawerEvents.shiftId, ids)),
+        db.select().from(tenders).where(inArray(tenders.drawerSessionId, ids)),
+        db.select().from(drawerEvents).where(inArray(drawerEvents.drawerSessionId, ids)),
       ])
     : [[], []];
   return rows.map(({ shift, openedBy, closedBy }) => ({
@@ -61,14 +61,14 @@ export async function listShifts(day: { from: Date; to: Date }): Promise<ShiftSu
     closedBy,
     startingBankCents: shift.startingBankCents,
     ...reconcileDrawer(shift, {
-      tenders: tenderRows.filter((t) => t.shiftId === shift.id),
-      drawerEvents: drawerRows.filter((e) => e.shiftId === shift.id),
+      tenders: tenderRows.filter((t) => t.drawerSessionId === shift.id),
+      drawerEvents: drawerRows.filter((e) => e.drawerSessionId === shift.id),
     }),
   }));
 }
 
 export async function getShift(id: string) {
-  const [row] = await shiftRows(eq(shifts.id, id));
+  const [row] = await shiftRows(eq(drawerSessions.id, id));
   return row ?? null;
 }
 
@@ -83,7 +83,7 @@ function within(col: PgColumn, scope: ReportScope) {
 
 /** The tenders a report counts. */
 export function tendersIn(scope: ReportScope) {
-  return scope.kind === "shift" ? eq(tenders.shiftId, scope.shiftId) : within(tenders.createdAt, scope);
+  return scope.kind === "shift" ? eq(tenders.drawerSessionId, scope.shiftId) : within(tenders.createdAt, scope);
 }
 
 /** Ids of every order a report covers: placed in the window, or paid or refunded in it. */
@@ -107,13 +107,13 @@ export async function loadReportFacts(scope: ReportScope): Promise<ReportFacts> 
     db
       .select()
       .from(drawerEvents)
-      .where(scope.kind === "shift" ? eq(drawerEvents.shiftId, scope.shiftId) : within(drawerEvents.createdAt, scope)),
+      .where(scope.kind === "shift" ? eq(drawerEvents.drawerSessionId, scope.shiftId) : within(drawerEvents.createdAt, scope)),
     db
-      .select({ a: adjustments, order: ref, item: lineName })
-      .from(adjustments)
-      .innerJoin(orders, eq(orders.id, adjustments.orderId))
-      .leftJoin(orderItems, eq(orderItems.lineUid, adjustments.lineUid))
-      .where(within(adjustments.createdAt, scope)),
+      .select({ a: orderDiscounts, order: ref, item: lineName })
+      .from(orderDiscounts)
+      .innerJoin(orders, eq(orders.id, orderDiscounts.orderId))
+      .leftJoin(orderItems, eq(orderItems.lineUid, orderDiscounts.lineUid))
+      .where(and(eq(orderDiscounts.source, "comp"), within(orderDiscounts.createdAt, scope))),
     db
       // Non-null by the within() filter below; selected on its own so the row type says so.
       .select({ i: orderItems, voidedAt: sql`${orderItems.voidedAt}`.mapWith(orderItems.voidedAt), order: ref, item: lineName })
@@ -145,11 +145,11 @@ export async function loadReportFacts(scope: ReportScope): Promise<ReportFacts> 
       order,
     })),
     adjustments: adjustmentRows.map(({ a, order, item }) => ({
-      kind: a.kind,
-      cents: a.cents,
+      kind: a.lineUid === null ? ("discount" as const) : ("comp" as const),
+      cents: a.amountCents,
       employeeId: a.employeeId,
       approvedBy: a.approvedBy,
-      reason: a.reason,
+      reason: a.label,
       at: a.createdAt.toISOString(),
       order,
       item,
@@ -175,7 +175,7 @@ export async function loadReportFacts(scope: ReportScope): Promise<ReportFacts> 
       id: o.id,
       number: o.orderNumber,
       status: o.status,
-      channel: o.channel,
+      source: o.source,
       orderType: o.orderType,
       placedAt: o.placedAt.toISOString(),
       customerName: o.customerName,
@@ -184,7 +184,7 @@ export async function loadReportFacts(scope: ReportScope): Promise<ReportFacts> 
   };
 }
 
-type ShiftRow = typeof shifts.$inferSelect;
+type ShiftRow = typeof drawerSessions.$inferSelect;
 
 function shiftScope(shift: ShiftRow): ReportScope {
   return { kind: "shift", shiftId: shift.id, from: shift.openedAt, to: shift.closedAt };
@@ -195,12 +195,12 @@ export async function shiftReportOf(shift: ShiftRow): Promise<ShiftReport> {
 }
 
 export async function getShiftReport(shiftId: string): Promise<ShiftReport | null> {
-  const [shift] = await db.select().from(shifts).where(eq(shifts.id, shiftId));
+  const [shift] = await db.select().from(drawerSessions).where(eq(drawerSessions.id, shiftId));
   return shift ? shiftReportOf(shift) : null;
 }
 
-export async function getDayReport(date: StoreDate, tz: string): Promise<SalesReport> {
-  return salesReport(await loadReportFacts({ kind: "day", ...storeDayRange(date, tz) }));
+export async function getDayReport(date: LocalDate, tz: string): Promise<SalesReport> {
+  return salesReport(await loadReportFacts({ kind: "day", ...dayBounds(date, tz) }));
 }
 
 export const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -216,11 +216,11 @@ export async function resolveScope(
     const { shift } = row;
     return {
       scope: shiftScope(shift),
-      label: `shift-${storeDateOf(shift.openedAt, tz)}-${shift.id.slice(0, 8)}`,
+      label: `shift-${localDateOf(shift.openedAt, tz)}-${shift.id.slice(0, 8)}`,
     };
   }
-  const date = parseStoreDate(query.date ?? undefined);
-  return date ? { scope: { kind: "day", ...storeDayRange(date, tz) }, label: date } : null;
+  const date = localDateSchema.safeParse(query.date);
+  return date.success ? { scope: { kind: "day", ...dayBounds(date.data, tz) }, label: date.data } : null;
 }
 
 // ---------------------------------------------------------------------------
@@ -262,7 +262,7 @@ export async function orderLinesCsv(scope: ReportScope, tz: string): Promise<str
     [
       "order_number",
       "placed_at_local",
-      "channel",
+      "source",
       "order_type",
       "status",
       "customer",
@@ -279,8 +279,8 @@ export async function orderLinesCsv(scope: ReportScope, tz: string): Promise<str
     ],
     rows.map(({ o, i, voidedBy, approvedBy }) => [
       o.orderNumber,
-      formatStoreTimestamp(o.placedAt, tz),
-      o.channel,
+      formatSortable(o.placedAt, tz),
+      o.source,
       o.orderType,
       o.status,
       o.customerName,
@@ -290,7 +290,7 @@ export async function orderLinesCsv(scope: ReportScope, tz: string): Promise<str
       dollars(i.lineTotalCents),
       i.modifiers.map(modifierLabel).join("; "),
       i.notes,
-      i.voidedAt ? formatStoreTimestamp(i.voidedAt, tz) : null,
+      i.voidedAt ? formatSortable(i.voidedAt, tz) : null,
       i.voidReason,
       voidedBy,
       approvedBy,
@@ -312,7 +312,7 @@ export async function tendersCsv(scope: ReportScope, tz: string): Promise<string
   return toCsv(
     ["at_local", "order_number", "direction", "method", "amount", "tip", "tendered", "change", "last4", "employee", "approved_by", "reason", "tender_id"],
     rows.map(({ t, number, employee, approvedBy }) => [
-      formatStoreTimestamp(t.createdAt, tz),
+      formatSortable(t.createdAt, tz),
       number,
       t.direction,
       t.method,

@@ -3,13 +3,13 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { keepUnlocked, lockTerminal, switchEmployee } from "@/app/pos/actions";
-import type { Actor } from "@/lib/orders";
+import type { StaffActor } from "@/lib/orders";
 import { failureText } from "./context";
 
 const RENEW_MS = 20_000;
 
 export type PosSession = {
-  staff: Actor | null;
+  staff: StaffActor | null;
   /** Who unlocked last, for the lock screen's greeting. */
   lastName: string | null;
   lock: () => void;
@@ -21,7 +21,7 @@ export type PosSession = {
  * Who is at the terminal. Locks after `lockSeconds` without a tap or a key,
  * and renews the server-side unlock while someone is working.
  */
-export function usePosSession(initialStaff: Actor | null, lockSeconds: number, onUnlock: () => void): PosSession {
+export function usePosSession(initialStaff: StaffActor | null, lockSeconds: number, onUnlock: () => void): PosSession {
   const router = useRouter();
   const [staff, setStaff] = useState(initialStaff);
   const [lastName, setLastName] = useState(initialStaff?.name ?? null);

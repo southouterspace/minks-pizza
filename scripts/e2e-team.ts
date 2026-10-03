@@ -10,7 +10,7 @@
  * Point this at a throwaway database — it creates and deletes operator rows.
  */
 import type { Page } from "playwright";
-import { BASE, check, launchBrowser, run, SHOT_DIR, signIn } from "./harness";
+import { BASE, check, launchBrowser, run, SHOT_DIR, signIn } from "./e2e/harness";
 
 const OWNER = {
   email: process.env.E2E_OWNER_EMAIL ?? "owner@minks.example",

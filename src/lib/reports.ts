@@ -4,15 +4,14 @@
  * is the sales report for a store-local day. No I/O; reports-server.ts loads
  * the facts.
  */
+import type { OrderStatus } from "@/lib/order-workflow";
 import {
   SALES_CHANNELS,
   dueCents,
   salesChannel,
-  type Adjustment,
-  type Channel,
   type DrawerEventKind,
   type Fulfillment,
-  type KitchenStatus,
+  type OrderSource,
   type SalesChannel,
   type Tender,
   type TenderMethod,
@@ -33,6 +32,8 @@ export type OrderRef = { id: string; number: number };
 export const TENDER_METHOD_LABEL: Record<TenderMethod, string> = {
   cash: "Cash",
   card_external: "Card (external terminal)",
+  other: "Other",
+  marketplace: "Marketplace (collected by the platform)",
 };
 
 export type AuditKind = "void" | "comp" | "discount" | "refund" | "no_sale" | "paid_in" | "paid_out";
@@ -72,17 +73,25 @@ export type ReportFacts = {
   tenders: (Pick<Tender, "direction" | "method" | "amountCents" | "tipCents" | "employeeId" | "approvedBy" | "reason" | "at"> & {
     order: OrderRef;
   })[];
-  adjustments: (Pick<Adjustment, "kind" | "cents" | "employeeId" | "approvedBy" | "reason" | "at"> & {
+  /** Staff comps (one line) and discounts (the check): order_discounts rows with source "comp". */
+  adjustments: {
+    kind: "comp" | "discount";
+    cents: number;
+    /** Null when an operator comped from the admin. */
+    employeeId: number | null;
+    approvedBy: number | null;
+    reason: string;
+    at: string;
     order: OrderRef;
     item: string | null;
-  })[];
+  }[];
   voids: { employeeId: number | null; approvedBy: number | null; cents: number; reason: string | null; at: string; order: OrderRef; item: string }[];
   drawerEvents: { kind: DrawerEventKind; cents: number; employeeId: number; approvedBy: number | null; reason: string | null; at: string }[];
   orders: {
     id: string;
     number: number;
-    status: KitchenStatus;
-    channel: Channel;
+    status: OrderStatus;
+    source: OrderSource;
     orderType: Fulfillment["kind"];
     placedAt: string;
     customerName: string;
@@ -137,7 +146,7 @@ export type SalesReport = {
   byMethod: MethodTotals[];
   audit: AuditEntry[];
   byEmployee: EmployeeTally[];
-  unpaidOrders: { id: string; number: number; customerName: string; status: KitchenStatus; dueCents: number }[];
+  unpaidOrders: { id: string; number: number; customerName: string; status: OrderStatus; dueCents: number }[];
   needsRefund: { id: string; number: number; netCents: number }[];
 };
 
@@ -187,7 +196,7 @@ export function salesReport(facts: ReportFacts): SalesReport {
   for (const o of facts.orders) {
     const { from, to } = facts.window;
     if (o.status === "canceled" || o.placedAt < from || (to !== null && o.placedAt >= to)) continue;
-    addSales(channels.get(salesChannel(o.channel, o.orderType))!, o.totals);
+    addSales(channels.get(salesChannel(o.source, o.orderType))!, o.totals);
     addSales(sales, o.totals);
   }
 
@@ -244,6 +253,7 @@ export function salesReport(facts: ReportFacts): SalesReport {
     t.voidCents += v.cents;
   }
   for (const a of facts.adjustments) {
+    if (a.employeeId === null) continue;
     const t = tally(a.employeeId);
     if (a.kind === "comp") {
       t.comps += 1;

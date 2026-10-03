@@ -1,6 +1,7 @@
-/** Statement builders shared by submitOrder and mutateOrder. */
+/** Statement builders shared by submitOrder, mutateOrder and marketplace ingestion. */
 import { sql, type SQL } from "drizzle-orm";
-import { customerAddresses, customers, db, orderItems, tenders } from "@/db";
+import { customerAddresses, customers, db, orderDiscounts, orderEvents, orderItems, tenders } from "@/db";
+import type { Actor } from "@/lib/order-writes";
 import { normalizePhone, type CustomerInput, type FirePlan, type Fulfillment, type TenderInput } from "@/lib/orders";
 import type { PricedLine } from "@/lib/menu-server";
 import type { Settings } from "@/lib/settings-server";
@@ -28,6 +29,17 @@ export function insertLines(orderId: string, lines: PricedLine[], fire: boolean)
       )
       .onConflictDoNothing({ target: orderItems.lineUid }),
   ];
+}
+
+/** The "placed" audit row: the first line of every order's history. */
+export function placedEvent(orderId: string, actor: Actor): Statement {
+  return db.insert(orderEvents).values({
+    orderId,
+    type: "placed",
+    actor: actor.name,
+    operatorId: actor.operatorId,
+    employeeId: actor.employeeId,
+  });
 }
 
 export function customerUpsert(c: CustomerInput): { statement: Statement; id: SQL } {
@@ -62,7 +74,7 @@ export function addressUpsert(customerId: SQL, f: Fulfillment): Statement[] {
   ];
 }
 
-export function fulfillmentColumns(f: Fulfillment, s: Settings) {
+export function fulfillmentColumns(f: Fulfillment, s: Pick<Settings, "deliveryFeeCents">) {
   switch (f.kind) {
     case "pickup":
       return { orderType: f.kind, addressLine1: null, addressLine2: null, city: null, zip: null, tableLabel: null, deliveryFeeCents: 0 };
@@ -81,13 +93,19 @@ export function fulfillmentColumns(f: Fulfillment, s: Settings) {
   }
 }
 
-export function tenderInsert(orderId: string, t: TenderInput, shiftId: string, employeeId: number): Statement {
+/** Null drawer and employee for money not taken at a till: an admin's record, a marketplace's collection. */
+export function tenderInsert(
+  orderId: string,
+  t: TenderInput,
+  drawerSessionId: string | null,
+  employeeId: number | null,
+): Statement {
   return db
     .insert(tenders)
     .values({
       id: t.id,
       orderId,
-      shiftId,
+      drawerSessionId,
       direction: "payment",
       method: t.method,
       amountCents: t.amountCents,
@@ -105,6 +123,35 @@ export function tenderProblem(t: TenderInput): string | null {
     return "Cash handed over is less than the amount applied.";
   }
   return null;
+}
+
+/** A staff comp or discount: one order_discounts row the fold caps at what it applies to. */
+export function discountInsert(args: {
+  uid: string;
+  orderId: string;
+  lineUid: string | null;
+  amountCents: number;
+  label: string;
+  /** An operator applying a deal by hand from the admin; counts as a use of it. */
+  promotionId?: number | null;
+  actor: Actor;
+}): Statement {
+  return db
+    .insert(orderDiscounts)
+    .values({
+      uid: args.uid,
+      orderId: args.orderId,
+      lineUid: args.lineUid,
+      promotionId: args.promotionId ?? null,
+      label: args.label,
+      amountCents: args.amountCents,
+      target: "items",
+      source: "comp",
+      operatorId: args.actor.operatorId,
+      employeeId: args.actor.employeeId,
+      approvedBy: args.actor.approvedBy ?? null,
+    })
+    .onConflictDoNothing({ target: orderDiscounts.uid });
 }
 
 /** When a fire plan sends lines to the kitchen, and when a held order fires itself. */
@@ -126,7 +173,7 @@ export function firing(plan: FirePlan, now: Date): { fireNow: boolean; fireAt: D
  * by the database clock like fired_at, so the activity log never shows a
  * void before the send it follows.
  */
-export function voidStamp(by: number, reason: string, approvedBy: number | null) {
+export function voidStamp(by: number | null, reason: string, approvedBy: number | null) {
   return {
     voidedAt: sql`coalesce(${orderItems.voidedAt}, now())`,
     voidedBy: sql`coalesce(${orderItems.voidedBy}, ${by})`,

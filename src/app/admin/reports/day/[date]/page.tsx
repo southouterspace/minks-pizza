@@ -3,7 +3,8 @@ import { notFound } from "next/navigation";
 import { requireOperator } from "@/lib/auth";
 import { getStoreBasics } from "@/lib/settings-server";
 import { getDayReport } from "@/lib/reports-server";
-import { formatStoreDate, formatStoreDateTime, parseStoreDate } from "@/lib/store-time";
+import { formatLongDay, localDateSchema } from "@/lib/zoned";
+import { formatDateTime } from "@/components/admin/ui";
 import { ReportDocument, type Paper } from "@/components/admin/report-document";
 import { ReportToolbar } from "@/components/admin/report-toolbar";
 
@@ -19,8 +20,9 @@ export default async function DayReportPage({
   searchParams: Promise<Record<string, string | string[] | undefined>>;
 }) {
   await requireOperator();
-  const date = parseStoreDate((await params).date);
-  if (!date) notFound();
+  const parsed = localDateSchema.safeParse((await params).date);
+  if (!parsed.success) notFound();
+  const date = parsed.data;
   const paper: Paper = (await searchParams).paper === "receipt" ? "receipt" : "letter";
   const settings = await getStoreBasics();
   const tz = settings.timezone;
@@ -40,9 +42,9 @@ export default async function DayReportPage({
         title="Day report"
         tz={tz}
         details={[
-          { label: "Day", value: formatStoreDate(date) },
+          { label: "Day", value: formatLongDay(date) },
           { label: "Timezone", value: tz },
-          { label: "Printed", value: formatStoreDateTime(new Date(), tz) },
+          { label: "Printed", value: formatDateTime(new Date(), tz) },
         ]}
         report={report}
         drawer={null}
