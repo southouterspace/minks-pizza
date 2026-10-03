@@ -8,7 +8,7 @@ import {
   formatMultiplier,
   formatPhone,
   formatPriceIncrease,
-  localDate,
+  localYearMonth,
   MONTHS,
   nextBirthdayGrant,
   orderPointsStatus,
@@ -110,7 +110,7 @@ export default async function RewardsPage({ searchParams }: PageProps<"/rewards"
   const [signedIn, rewards, promo] = await Promise.all([
     getCurrentMember(),
     listRewards({ activeOnly: true }),
-    currentPromotion(loyalty),
+    currentPromotion(store.timezone),
   ]);
 
   return (
@@ -122,9 +122,9 @@ export default async function RewardsPage({ searchParams }: PageProps<"/rewards"
         </p>
       ) : null}
       {signedIn ? (
-        <MemberView member={signedIn} loyalty={loyalty} rewards={rewards} />
+        <MemberView member={signedIn} loyalty={loyalty} rewards={rewards} timezone={store.timezone} />
       ) : (
-        <PitchView loyalty={loyalty} rewards={rewards} next={next} referralCode={ref} />
+        <PitchView loyalty={loyalty} rewards={rewards} timezone={store.timezone} next={next} referralCode={ref} />
       )}
     </div>
   );
@@ -133,11 +133,13 @@ export default async function RewardsPage({ searchParams }: PageProps<"/rewards"
 function PitchView({
   loyalty,
   rewards,
+  timezone,
   next,
   referralCode,
 }: {
   loyalty: LoyaltySettings;
   rewards: LoyaltyReward[];
+  timezone: string;
   next: string;
   referralCode: string | null;
 }) {
@@ -167,7 +169,7 @@ function PitchView({
                   <span className="block text-xs text-muted-foreground">{r.description}</span>
                 ) : null}
                 {r.price.increase ? (
-                  <span className="block text-xs text-warning">{formatPriceIncrease(r.price.increase, loyalty.timezone)}</span>
+                  <span className="block text-xs text-warning">{formatPriceIncrease(r.price.increase, timezone)}</span>
                 ) : null}
               </span>
               <span className="shrink-0 text-sm tabular-nums text-muted-foreground">
@@ -230,23 +232,25 @@ async function MemberView({
   member: signedIn,
   loyalty,
   rewards,
+  timezone,
 }: {
   member: LoyaltyMember;
   loyalty: LoyaltySettings;
   rewards: LoyaltyReward[];
+  timezone: string;
 }) {
   const member = (await refreshMember(signedIn.id)) ?? signedIn;
   const [status, ledger, recentOrders, birthdayArrived] = await Promise.all([
     memberStatus(member, loyalty),
     memberLedger(member.id),
     memberOrders(member.id),
-    birthdayBonusThisYear(member.id, loyalty.timezone),
+    birthdayBonusThisYear(member.id, timezone),
   ]);
-  const year = localDate(new Date(), loyalty.timezone).year;
+  const year = localYearMonth(new Date(), timezone).year;
   const safeUntil = pointsSafeUntil(member, loyalty.expirationMonths);
   const birthdayNext =
     member.birthMonth && member.birthdaySetAt
-      ? nextBirthdayGrant({ birthMonth: member.birthMonth, birthdaySetAt: member.birthdaySetAt }, new Date(), loyalty.timezone)
+      ? nextBirthdayGrant({ birthMonth: member.birthMonth, birthdaySetAt: member.birthdaySetAt }, new Date(), timezone)
       : null;
 
   return (
@@ -262,7 +266,7 @@ async function MemberView({
           {safeUntil ? (
             <p className="mt-1 text-sm text-muted-foreground" data-testid="safe-until">
               Your points are safe until{" "}
-              {safeUntil.toLocaleDateString("en-US", { month: "long", day: "numeric", year: "numeric", timeZone: loyalty.timezone })}.
+              {safeUntil.toLocaleDateString("en-US", { month: "long", day: "numeric", year: "numeric", timeZone: timezone })}.
               Any order resets the clock.
             </p>
           ) : null}
@@ -319,7 +323,7 @@ async function MemberView({
                     ) : null}
                     {r.price.increase ? (
                       <span className="block text-xs text-warning" data-testid="price-increase">
-                        {formatPriceIncrease(r.price.increase, loyalty.timezone)}
+                        {formatPriceIncrease(r.price.increase, timezone)}
                       </span>
                     ) : null}
                   </span>
@@ -395,7 +399,7 @@ async function MemberView({
                       Order #{o.orderNumber}
                     </Link>
                     <span className="block text-xs text-muted-foreground">
-                      {o.placedAt.toLocaleDateString("en-US", { month: "short", day: "numeric", timeZone: loyalty.timezone })}
+                      {o.placedAt.toLocaleDateString("en-US", { month: "short", day: "numeric", timeZone: timezone })}
                     </span>
                   </span>
                   <span className="flex items-center gap-3">
@@ -436,7 +440,7 @@ async function MemberView({
                       month: "short",
                       day: "numeric",
                       ...(e.createdAt.getFullYear() !== year ? { year: "numeric" } : {}),
-                      timeZone: loyalty.timezone,
+                      timeZone: timezone,
                     })}
                     {e.orderId && e.orderNumber ? (
                       <>

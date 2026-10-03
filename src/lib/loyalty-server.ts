@@ -15,6 +15,7 @@ import {
   loyaltyRewards,
   loyaltySettings,
   orders,
+  storeSettings,
 } from "@/db";
 import {
   EXPIRY_RESTORE_DAYS,
@@ -26,7 +27,7 @@ import {
   birthdayGrantDue,
   earnPoints,
   expiryDue,
-  localDate,
+  localYearMonth,
   rewardEffectSchema,
   rewardPrice,
   tierProgress,
@@ -34,7 +35,7 @@ import {
   type RewardEffect,
   type RewardPrice,
 } from "@/lib/loyalty";
-import { localDateOf, zonedInstant } from "@/lib/zoned";
+import { zonedInstant } from "@/lib/zoned";
 
 export type LoyaltySettings = typeof loyaltySettings.$inferSelect;
 export type LoyaltyMember = typeof loyaltyMembers.$inferSelect;
@@ -162,8 +163,8 @@ export function listPromotions() {
   return db.select().from(loyaltyPromotions).orderBy(desc(loyaltyPromotions.createdAt));
 }
 
-export async function currentPromotion(settings: LoyaltySettings, at = new Date()) {
-  return activePromotion(await listPromotions(), at, settings.timezone);
+export async function currentPromotion(timezone: string, at = new Date()) {
+  return activePromotion(await listPromotions(), at, timezone);
 }
 
 /**
@@ -398,9 +399,10 @@ export function cancellationStatements(orderId: string) {
  * it stands afterwards, or null when there is no such member.
  */
 export async function refreshMember(memberId: number, now = new Date()): Promise<LoyaltyMember | null> {
-  const [member, settings, [last]] = await Promise.all([
+  const [member, settings, [{ timezone }], [last]] = await Promise.all([
     getMember(memberId),
     getLoyaltySettings(),
+    db.select({ timezone: storeSettings.timezone }).from(storeSettings),
     db
       .select({ at: sql<Date | null>`max(${completedAt})`.mapWith((v) => new Date(v)) })
       .from(sql`${orders} o`)
@@ -422,11 +424,11 @@ export async function refreshMember(memberId: number, now = new Date()): Promise
       }),
     );
   }
-  if (birthdayGrantDue({ ...member, lastCompletedOrderAt: last?.at ?? null }, now, settings.timezone)) {
+  if (birthdayGrantDue({ ...member, lastCompletedOrderAt: last?.at ?? null }, now, timezone)) {
     statements.push(
       ledgerStatement({
         kind: "birthday",
-        idemKey: ledgerKey.birthday(memberId, localDate(now, settings.timezone).year),
+        idemKey: ledgerKey.birthday(memberId, localYearMonth(now, timezone).year),
         from: { memberId, points: settings.birthdayPoints },
       }),
     );
@@ -530,7 +532,7 @@ export async function restoreExpiry(entryId: number, operatorId: number): Promis
 }
 
 export async function birthdayBonusThisYear(memberId: number, timezone: string): Promise<boolean> {
-  const yearStart = zonedInstant(`${localDateOf(new Date(), timezone).slice(0, 4)}-01-01`, "00:00", timezone);
+  const yearStart = zonedInstant(`${localYearMonth(new Date(), timezone).year}-01-01`, "00:00", timezone);
   const [row] = await db
     .select({ id: loyaltyLedger.id })
     .from(loyaltyLedger)

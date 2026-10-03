@@ -227,7 +227,7 @@ export async function quoteOrder(
   };
   if (!loyalty.enabled) return { ...base, loyalty: null };
 
-  const promo = activePromotion(promos, new Date(), loyalty.timezone);
+  const promo = activePromotion(promos, new Date(), settings.timezone);
   return {
     ...base,
     loyalty: {

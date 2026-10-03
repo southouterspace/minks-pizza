@@ -27,8 +27,7 @@ import {
   operators,
   orders,
 } from "../src/db";
-import { localDate } from "../src/lib/loyalty";
-import { INSUFFICIENT_POINTS } from "../src/lib/loyalty";
+import { INSUFFICIENT_POINTS, localYearMonth } from "../src/lib/loyalty";
 import { getMember, refreshMember } from "../src/lib/loyalty-server";
 import { transitionOrder } from "../src/lib/order-writes";
 import { createOrder, OrderError } from "../src/lib/orders";
@@ -443,7 +442,7 @@ async function main() {
   check("referrer gets 500 once", ritaReferral.length === 1 && ritaReferral[0].points === 500);
 
   // --- Birthday -------------------------------------------------------------
-  const month = localDate(new Date(), TZ).month;
+  const month = localYearMonth(new Date(), TZ).month;
   await rita.goto(`${BASE}/rewards`, { waitUntil: "networkidle" });
   await rita.getByLabel("Birth month").selectOption(String(month));
   await rita.getByLabel("Birth day").selectOption("1");

@@ -107,8 +107,9 @@ minutes from Settings. The customer's tracker shows "Ready around 6:45 PM"
 while the order is cooking and the cancel reason if it was canceled.
 
 **Time zone.** Settings → Time zone decides when the store's day starts for
-the board numbers and history dates, and the clock that promised times are
-shown in. Default: Central.
+the board numbers and history dates, the clock that promised times are
+shown in, and the day rewards promotions and birthdays fall on. Default:
+Central.
 
 ##### Deploying the order-management schema
 

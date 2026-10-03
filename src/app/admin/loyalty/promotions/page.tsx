@@ -1,7 +1,8 @@
 import { requireOperator } from "@/lib/auth";
 import { DAY_NAMES } from "@/lib/zoned";
 import { activePromotion, formatMultiplier } from "@/lib/loyalty";
-import { getLoyaltySettings, listPromotions } from "@/lib/loyalty-server";
+import { listPromotions } from "@/lib/loyalty-server";
+import { getSettings } from "@/lib/orders";
 import { deletePromotion, savePromotion } from "../actions";
 import { ConfirmButton } from "@/components/admin/confirm-button";
 import { FormNotice } from "@/components/admin/form-notice";
@@ -77,7 +78,7 @@ function PromotionForm({ promo }: { promo: Promo | null }) {
 export default async function LoyaltyPromotionsPage({ searchParams }: PageProps<"/admin/loyalty/promotions">) {
   await requireOperator();
   const sp = await searchParams;
-  const [settings, promos] = await Promise.all([getLoyaltySettings(), listPromotions()]);
+  const [settings, promos] = await Promise.all([getSettings(), listPromotions()]);
   const running = activePromotion(promos, new Date(), settings.timezone);
 
   return (

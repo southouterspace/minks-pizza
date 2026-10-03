@@ -72,7 +72,7 @@ export default async function LoyaltySettingsPage({ searchParams }: PageProps<"/
       </FieldSet>
 
       <FieldSet>
-        <FieldLegend className="w-full border-b border-border pb-2 text-sm!">Expiration and time</FieldLegend>
+        <FieldLegend className="w-full border-b border-border pb-2 text-sm!">Expiration</FieldLegend>
         <div className="grid gap-4 sm:grid-cols-2">
           <Field>
             <FieldLabel htmlFor="ls-exp">Expire points after</FieldLabel>
@@ -86,11 +86,6 @@ export default async function LoyaltySettingsPage({ searchParams }: PageProps<"/
               placeholder="Never"
             />
             <FieldDescription>Months without a completed order. Leave blank for never.</FieldDescription>
-          </Field>
-          <Field>
-            <FieldLabel htmlFor="ls-tz">Store timezone</FieldLabel>
-            <Input id="ls-tz" name="timezone" required defaultValue={s.timezone} />
-            <FieldDescription>Decides which day promotions and birthdays fall on.</FieldDescription>
           </Field>
         </div>
       </FieldSet>

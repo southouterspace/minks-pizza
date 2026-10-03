@@ -13,9 +13,10 @@ import {
   loyaltySettings,
 } from "@/db";
 import { requireOperator } from "@/lib/auth";
+import { getSettings } from "@/lib/orders";
 import {
   birthdaySchema,
-  localDate,
+  localYearMonth,
   repriceReward,
   rewardEffectSchema,
   tiersSchema,
@@ -93,14 +94,6 @@ const settingsSchema = z.object({
   referrerBonus: points,
   refereeBonus: points,
   expirationMonths: z.union([z.literal("never").transform(() => null), z.coerce.number().int().min(1).max(60)]),
-  timezone: z.string().refine((tz) => {
-    try {
-      new Intl.DateTimeFormat("en-US", { timeZone: tz });
-      return true;
-    } catch {
-      return false;
-    }
-  }, "Unknown timezone"),
   tiers: tiersSchema,
 });
 
@@ -126,7 +119,6 @@ export async function saveLoyaltySettings(formData: FormData): Promise<void> {
     referrerBonus: text(formData, "referrerBonus"),
     refereeBonus: text(formData, "refereeBonus"),
     expirationMonths: text(formData, "expirationMonths") || "never",
-    timezone: text(formData, "timezone"),
     tiers,
   });
   if (!parsed.success) fail("/admin/loyalty/settings", parsed.error);
@@ -319,7 +311,7 @@ export async function issueBirthdayBonus(formData: FormData): Promise<void> {
   const memberId = z.coerce.number().int().positive().parse(text(formData, "memberId"));
   const memberPath = `/admin/loyalty/members/${memberId}`;
   const settings = await getLoyaltySettings();
-  const idemKey = ledgerKey.birthday(memberId, localDate(new Date(), settings.timezone).year);
+  const idemKey = ledgerKey.birthday(memberId, localYearMonth(new Date(), (await getSettings()).timezone).year);
   const [already] = await db
     .select({ id: loyaltyLedger.id })
     .from(loyaltyLedger)

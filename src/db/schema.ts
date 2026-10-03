@@ -515,7 +515,6 @@ export const loyaltySettings = pgTable("loyalty_settings", {
   refereeBonus: integer("referee_bonus").notNull().default(300),
   /** Months of inactivity before the balance expires; null = never. */
   expirationMonths: integer("expiration_months").default(12),
-  timezone: text("timezone").notNull().default("America/Chicago"),
   tiers: jsonb("tiers").$type<LoyaltyTier[]>().notNull().default(DEFAULT_TIERS),
   updatedAt: timestamp("updated_at", { withTimezone: true })
     .notNull()

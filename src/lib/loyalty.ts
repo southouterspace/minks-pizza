@@ -3,6 +3,7 @@
  * storefront, the admin and the tests share one definition of every rule.
  */
 import { z } from "zod";
+import { dayOfWeek, localDateOf } from "@/lib/zoned";
 
 export const LEDGER_KINDS = [
   "earn",
@@ -174,29 +175,10 @@ export function formatMultiplier(bps: number): string {
 // Store-local calendar
 // ---------------------------------------------------------------------------
 
-export type LocalDate = { iso: string; year: number; month: number; day: number; weekday: number };
-
-const WEEKDAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
-
-export function localDate(at: Date, timezone: string): LocalDate {
-  const parts = Object.fromEntries(
-    new Intl.DateTimeFormat("en-US", {
-      timeZone: timezone,
-      year: "numeric",
-      month: "2-digit",
-      day: "2-digit",
-      weekday: "short",
-    })
-      .formatToParts(at)
-      .map((p) => [p.type, p.value]),
-  );
-  return {
-    iso: `${parts.year}-${parts.month}-${parts.day}`,
-    year: Number(parts.year),
-    month: Number(parts.month),
-    day: Number(parts.day),
-    weekday: WEEKDAYS.indexOf(parts.weekday),
-  };
+/** Year and month (1-12) of `at` on the store's calendar. */
+export function localYearMonth(at: Date, timezone: string): { year: number; month: number } {
+  const [year, month] = localDateOf(at, timezone).split("-").map(Number);
+  return { year, month };
 }
 
 export type PromotionRule = {
@@ -214,13 +196,14 @@ export function activePromotion<P extends PromotionRule>(
   at: Date,
   timezone: string,
 ): P | null {
-  const today = localDate(at, timezone);
+  const today = localDateOf(at, timezone);
+  const weekday = dayOfWeek(today);
   let best: P | null = null;
   for (const p of promos) {
     if (!p.isActive) continue;
-    if (p.daysOfWeek.length > 0 && !p.daysOfWeek.includes(today.weekday)) continue;
-    if (p.startsOn && today.iso < p.startsOn) continue;
-    if (p.endsOn && today.iso > p.endsOn) continue;
+    if (p.daysOfWeek.length > 0 && !p.daysOfWeek.includes(weekday)) continue;
+    if (p.startsOn && today < p.startsOn) continue;
+    if (p.endsOn && today > p.endsOn) continue;
     if (!best || p.multiplierBps > best.multiplierBps) best = p;
   }
   return best;
@@ -386,7 +369,7 @@ export function birthdayGrantDue(
   if (birthMonth === null || birthdaySetAt === null || lastCompletedOrderAt === null) return false;
   if (now.getTime() - birthdaySetAt.getTime() < 30 * DAY_MS) return false;
   if (now.getTime() - lastCompletedOrderAt.getTime() > 365 * DAY_MS) return false;
-  return localDate(now, timezone).month === birthMonth;
+  return localYearMonth(now, timezone).month === birthMonth;
 }
 
 /**
@@ -400,7 +383,7 @@ export function nextBirthdayGrant(
   timezone: string,
 ): { month: number; year: number } {
   const earliest = new Date(Math.max(now.getTime(), member.birthdaySetAt.getTime() + 30 * DAY_MS));
-  const start = localDate(earliest, timezone);
+  const start = localYearMonth(earliest, timezone);
   if (start.month === member.birthMonth) return { month: start.month, year: start.year };
   const monthsAhead = (member.birthMonth - start.month + 12) % 12;
   return {
