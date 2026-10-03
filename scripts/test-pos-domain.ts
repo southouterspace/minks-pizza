@@ -26,7 +26,7 @@ import {
   type SubmitOrderRequest,
 } from "../src/lib/orders-server";
 import { channelLabel, orderHistory, paymentState, sourceLabel, type Channel, type Fulfillment, type OrderMutation, type OrderView } from "../src/lib/orders";
-import { allocate, priceLine, splitEvenly, type MenuItem, type Selection } from "../src/lib/pricing";
+import { allocate, priceLine, shareByItem, splitEvenly, type MenuItem, type Selection } from "../src/lib/pricing";
 import { checkPin } from "../src/lib/pin";
 import { storeDateOf, storeDayRange } from "../src/lib/store-time";
 import type { StaffContext } from "../src/lib/staff";
@@ -104,6 +104,18 @@ async function main() {
     [9999, 1, 1234, 100].map((t) => allocate(t, [3, 1, 7, 2]).reduce((a, b) => a + b, 0)),
     [9999, 1, 1234, 100],
   );
+
+  check(
+    "one $15 pizza shared by 3, a $3 soda each for guests 1 and 2, on a $19.49 balance",
+    shareByItem(1949, 3, [
+      { cents: 1500, guests: [] },
+      { cents: 300, guests: [0] },
+      { cents: 300, guests: [1] },
+    ]),
+    [743, 742, 464],
+  );
+  check("a pizza shared by guests 1 and 3 only leaves guest 2 at zero", shareByItem(1000, 3, [{ cents: 1000, guests: [0, 2] }]), [500, 0, 500]);
+  check("a fully comped check splits the balance evenly", shareByItem(100, 3, [{ cents: 0, guests: [0] }]), [34, 33, 33]);
 
   const kinds: Fulfillment[] = [{ kind: "pickup" }, { kind: "delivery", address: { line1: "1 Main", line2: null, city: null, zip: "77380" } }, { kind: "dine_in", table: "4" }];
   const channels: Channel[] = ["walk_in", "phone", "online"];

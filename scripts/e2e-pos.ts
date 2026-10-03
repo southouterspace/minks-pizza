@@ -2,10 +2,10 @@
  * Counter POS e2e against a running dev server and its database: PIN unlock,
  * a walk-in half-and-half paid in cash, a returning caller's delivery
  * reordered for later in the store's timezone, collecting on an online order,
- * a dine-in check split three ways, a cashier void after send approved by a
- * manager (and seen as VOID on the KDS), a discount over the threshold, an
- * order rung in while offline and replayed once, and a shift opened and
- * closed with over/short.
+ * a dine-in check split three ways and one pizza shared by three guests, a
+ * cashier void after send approved by a manager (and seen as VOID on the
+ * KDS), a discount over the threshold, an order rung in while offline and
+ * replayed once, and a shift opened and closed with over/short.
  * Asserts what the screen shows and what the database recorded.
  *
  * Run: npx tsx --env-file=.env.local scripts/e2e-pos.ts
@@ -482,6 +482,48 @@ async function main() {
   const children = await childrenOf();
   const movedLines = children[0] ? await linesOf(children[0].id) : [];
   check("split by item moves the water to a new check on the same ticket", split && movedLines.length === 1 && movedLines[0].itemName === "Sparkling Water");
+
+  // --- One pizza shared by three guests, each paying their own share -----------------------
+  await page.getByRole("button", { name: "New order" }).click();
+  await page.getByRole("radio", { name: "Dine-in" }).click();
+  await page.getByLabel("Table").fill("9");
+  await page.getByRole("tab", { name: "Specialty Pizzas" }).click();
+  await page.locator('[data-item="Pepperoni Classic"]').click();
+  await page.getByTestId("builder-add").click();
+  await page.getByRole("tab", { name: "Drinks" }).click();
+  await page.locator('[data-item="Soda (2-Liter)"]').click();
+  await page.locator('[data-item="Sparkling Water"]').click();
+  await page.getByTestId("send").click();
+  await eventually(async () => (await newestOrder(eq(orders.tableLabel, "9")))?.status === "new");
+  const table9 = await newestOrder(eq(orders.tableLabel, "9"));
+  await page.getByTestId("tab-board").click();
+  await page.getByLabel("Search open orders").fill("Table 9");
+  await page.locator(`[data-order="${table9.orderNumber}"]`).click();
+  await page.getByTestId("order-pay").click();
+  await page.getByRole("button", { name: "Split 3 ways" }).click();
+  await page.getByRole("button", { name: "Guest 1 had 1 × Soda (2-Liter)" }).click();
+  await page.getByRole("button", { name: "Guest 2 had 1 × Sparkling Water" }).click();
+  const shownShares = (await page.getByTestId("split-shares").innerText()).match(/\$\d+\.\d\d/g) ?? [];
+  await shot("09b-split-by-item");
+  for (let i = 0; i < 3; i++) {
+    await page.getByTestId("cash-exact").click();
+    if (i < 2) await page.getByText(`Guest ${i + 2} of 3`).waitFor();
+  }
+  await page.getByTestId("paid").waitFor();
+  await page.getByTestId("tender-done").click();
+  const t9 = (await tendersOf(table9.id)).sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime()).map((t) => t.amountCents);
+  const t9Row = await orderRow(table9.id);
+  const taxed = (cents: number) => Math.round(cents * 1.0825);
+  check(
+    "pizza shared three ways: each guest pays a third of it plus their own drink, to the cent",
+    t9.length === 3 &&
+      t9.reduce((a, b) => a + b, 0) === t9Row.totalCents &&
+      t9Row.paidCents === t9Row.totalCents &&
+      Math.abs(t9[0] - t9[2] - taxed(399)) <= 2 &&
+      Math.abs(t9[1] - t9[2] - taxed(249)) <= 2 &&
+      shownShares.join() === t9.map((c) => `$${(c / 100).toFixed(2)}`).join(),
+    JSON.stringify({ tenders: t9, shown: shownShares, total: t9Row.totalCents }),
+  );
 
   // --- Deep link and paid out --------------------------------------------------------------
   await page.goto(`${BASE}/pos?order=${online.id}`, { waitUntil: "networkidle" });

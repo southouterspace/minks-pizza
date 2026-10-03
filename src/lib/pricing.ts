@@ -196,6 +196,23 @@ export function splitEvenly(total: number, n: number): number[] {
   return allocate(total, Array.from({ length: n }, () => 1));
 }
 
+/**
+ * Each guest's share of `dueCents` when the check is split by who had what.
+ * A line with no guests listed is shared by everyone. Each line's cents go to
+ * its guests through `allocate`, then the balance (tax, fees and check
+ * discounts included) follows those item cents, so the shares are
+ * deterministic and always sum to the due.
+ */
+export function shareByItem(dueCents: number, guests: number, lines: readonly { cents: number; guests: readonly number[] }[]): number[] {
+  const everyone = Array.from({ length: guests }, (_, g) => g);
+  const weights = everyone.map(() => 0);
+  for (const l of lines) {
+    const who = l.guests.length > 0 ? l.guests : everyone;
+    allocate(l.cents, who.map(() => 1)).forEach((c, i) => (weights[who[i]] += c));
+  }
+  return weights.some((w) => w > 0) ? allocate(dueCents, weights) : splitEvenly(dueCents, guests);
+}
+
 export type ReorderLine = {
   itemId: number;
   name: string;

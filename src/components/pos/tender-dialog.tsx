@@ -4,7 +4,7 @@ import { useState } from "react";
 import { Banknote, CreditCard, Printer, Users } from "lucide-react";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import type { TenderInput } from "@/lib/orders";
-import { splitEvenly } from "@/lib/pricing";
+import { shareByItem, splitEvenly } from "@/lib/pricing";
 import { formatCents } from "@/lib/money";
 import { cn } from "@/lib/utils";
 import { Segmented, Tap } from "./touch";
@@ -22,10 +22,30 @@ type Method = "cash" | "card_external";
 
 export type TenderOutcome = { dueCents: number } | null;
 
+/** A check line as the split sees it: what it costs after its own comps and discounts. */
+export type SplitLine = { lineId: string; label: string; cents: number };
+
+/**
+ * `due` is the balance when the split started; shares are worked out against
+ * it and frozen into `base` once the first guest pays, so later guests owe
+ * what the screen showed them. `next` is the first guest who hasn't paid.
+ */
+type Split = { guests: number; due: number; byItem: Record<string, number[]>; base: number[] | null; next: number };
+
+function splitShares(split: Split, lines: readonly SplitLine[]): { guest: number; cents: number }[] {
+  const cents =
+    split.base ??
+    (lines.some((l) => (split.byItem[l.lineId] ?? []).length > 0)
+      ? shareByItem(split.due, split.guests, lines.map((l) => ({ cents: l.cents, guests: split.byItem[l.lineId] ?? [] })))
+      : splitEvenly(split.due, split.guests));
+  return cents.map((c, guest) => ({ guest, cents: c }));
+}
+
 /**
  * Takes payment against a balance: cash with quick bills and change due,
  * card on the external terminal (amount, tip, last 4), several tenders in a
- * row, and an even split into N shares. `onTender` applies one tender and
+ * row, and a split into N guests: even, or by item when `lines` is given, with
+ * any line shared by several guests. `onTender` applies one tender and
  * reports what is still due, or null if it failed (the caller has said why).
  */
 export function TenderDialog({
@@ -33,6 +53,7 @@ export function TenderDialog({
   title,
   dueCents,
   onTender,
+  lines,
   onPayLater,
   onReceipt,
   onClose,
@@ -40,13 +61,14 @@ export function TenderDialog({
   open: boolean;
   title: string;
   dueCents: number;
+  lines?: SplitLine[];
   onTender: (t: TenderInput) => Promise<TenderOutcome>;
   onPayLater?: () => void;
   onReceipt: () => void;
   onClose: () => void;
 }) {
   const [method, setMethod] = useState<Method>("cash");
-  const [split, setSplit] = useState<{ shares: number[]; paid: number } | null>(null);
+  const [split, setSplit] = useState<Split | null>(null);
   const [cashText, setCashText] = useState("");
   const [card, setCard] = useState({ amount: "", tip: "", last4: "" });
   const [busy, setBusy] = useState(false);
@@ -54,7 +76,9 @@ export function TenderDialog({
   const [due, setDue] = useState(dueCents);
   const [paidOff, setPaidOff] = useState(false);
 
-  const share = split && split.paid < split.shares.length ? split.shares[split.paid] : null;
+  const shares = split ? splitShares(split, lines ?? []) : null;
+  const turn = shares?.find((s) => s.cents > 0 && s.guest >= (split?.next ?? 0)) ?? null;
+  const share = turn?.cents ?? null;
   const applying = Math.min(due, share ?? due);
 
   const apply = async (t: Omit<TenderInput, "id">) => {
@@ -65,7 +89,7 @@ export function TenderDialog({
     setDue(out.dueCents);
     setCashText("");
     setCard({ amount: "", tip: "", last4: "" });
-    if (split) setSplit({ ...split, paid: split.paid + 1 });
+    if (split && turn) setSplit({ ...split, base: shares!.map((s) => s.cents), next: turn.guest + 1 });
     if (out.dueCents <= 0) setPaidOff(true);
   };
 
@@ -108,7 +132,7 @@ export function TenderDialog({
           <>
             <div className="flex items-end justify-between gap-4">
               <div>
-                <p className="text-sm text-muted-foreground">{share !== null ? `Guest ${split!.paid + 1} of ${split!.shares.length}` : "Balance due"}</p>
+                <p className="text-sm text-muted-foreground">{turn ? `Guest ${turn.guest + 1} of ${split!.guests}` : "Balance due"}</p>
                 <p className="text-4xl font-bold tabular-nums" data-testid="tender-due">
                   {formatCents(applying)}
                 </p>
@@ -122,10 +146,11 @@ export function TenderDialog({
                     key={n}
                     type="button"
                     data-split={n}
-                    onClick={() => setSplit(n === 1 ? null : { shares: splitEvenly(due, n), paid: 0 })}
+                    disabled={busy || (split?.next ?? 0) > 0}
+                    onClick={() => setSplit(n === 1 ? null : { guests: n, due, byItem: split?.byItem ?? {}, base: null, next: 0 })}
                     className={cn(
-                      "size-11 rounded-lg border text-base font-semibold",
-                      (split?.shares.length ?? 1) === n ? "border-primary bg-primary text-primary-foreground" : "hover:bg-muted",
+                      "size-11 rounded-lg border text-base font-semibold disabled:opacity-50",
+                      (split?.guests ?? 1) === n ? "border-primary bg-primary text-primary-foreground" : "hover:bg-muted",
                     )}
                     aria-label={n === 1 ? "No split" : `Split ${n} ways`}
                   >
@@ -134,6 +159,43 @@ export function TenderDialog({
                 ))}
               </div>
             </div>
+
+            {split && lines && lines.length > 0 && split.next === 0 && (
+              <div className="flex flex-col gap-1 rounded-xl border p-2" data-testid="split-by-item">
+                <p className="px-1 text-sm text-muted-foreground">Tap who had each item. Untapped items are shared by everyone.</p>
+                <ul className="max-h-48 divide-y overflow-y-auto">
+                  {lines.map((l) => {
+                    const who = split.byItem[l.lineId] ?? [];
+                    return (
+                      <li key={l.lineId} className="flex items-center gap-2 px-1 py-1">
+                        <span className="min-w-0 flex-1 truncate">{l.label}</span>
+                        <span className="text-sm text-muted-foreground tabular-nums">{who.length === 0 ? "shared" : formatCents(l.cents)}</span>
+                        {Array.from({ length: split.guests }, (_, g) => (
+                          <button
+                            key={g}
+                            type="button"
+                            aria-pressed={who.includes(g)}
+                            aria-label={`Guest ${g + 1} had ${l.label}`}
+                            onClick={() =>
+                              setSplit({
+                                ...split,
+                                byItem: { ...split.byItem, [l.lineId]: who.includes(g) ? who.filter((x) => x !== g) : [...who, g].sort() },
+                              })
+                            }
+                            className={cn("size-10 rounded-lg border text-sm font-semibold", who.includes(g) ? "border-primary bg-primary text-primary-foreground" : "hover:bg-muted")}
+                          >
+                            {g + 1}
+                          </button>
+                        ))}
+                      </li>
+                    );
+                  })}
+                </ul>
+                <p className="px-1 text-sm tabular-nums" data-testid="split-shares">
+                  {shares!.map((s) => `Guest ${s.guest + 1} ${formatCents(s.cents)}`).join(" · ")}
+                </p>
+              </div>
+            )}
 
             <Segmented<Method>
               value={method}

@@ -591,6 +591,7 @@ export function PosTerminal({
           open
           title={`Pay new ${isPhoneFirst(draft.mode) ? "phone" : draft.mode === "dine_in" ? "dine-in" : "walk-in"} order`}
           dueCents={draftTotal}
+          lines={draft.lines.map((l) => ({ lineId: l.lineId, label: `${l.quantity} × ${l.name}`, cents: l.unitPriceCents * l.quantity }))}
           onTender={async (t) => {
             const tenders = [...paying.tenders, t];
             const remaining = draftTotal - tenders.reduce((s, x) => s + x.amountCents, 0);

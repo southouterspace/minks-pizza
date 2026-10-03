@@ -336,6 +336,11 @@ export function OrderDetail({
           open
           title={`Pay #${order.number} · ${orderLabel(order)}`}
           dueCents={due}
+          lines={live.map((l) => ({
+            lineId: l.lineId,
+            label: `${l.quantity} × ${l.name}`,
+            cents: l.lineTotalCents - order.adjustments.filter((a) => a.lineId === l.lineId).reduce((s, a) => s + a.cents, 0),
+          }))}
           onTender={async (tender) => {
             const o = await mutate("Payment", { kind: "tender", tender });
             return o ? { dueCents: dueCents(o.totals) } : null;
