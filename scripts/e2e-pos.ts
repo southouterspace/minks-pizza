@@ -14,38 +14,21 @@
  * seeded menu, demo staff (manager 1234, cashier 5678), 8.25% tax and a
  * $5.00 discount threshold.
  */
-import { chromium, type Locator, type Page } from "playwright";
+import type { Locator, Page } from "playwright";
 import { and, eq, gte, isNull, type SQL } from "drizzle-orm";
 import { randomUUID } from "node:crypto";
-import { adjustments, customers, db, drawerEvents, employees, menuItems, modifierGroups, modifiers, orderItems, orders, pinAttempts, shifts, storeSettings, tenders } from "../src/db";
+import { adjustments, customers, db, drawerEvents, employees, menuItems, orderItems, orders, pinAttempts, shifts, storeSettings, tenders } from "../src/db";
 import type { KdsSnapshot } from "../src/lib/kds";
 import { normalizePhone } from "../src/lib/orders";
 import { submitOrder } from "../src/lib/orders-server/submit";
+import { BASE, check, eventually, launchBrowser, menuLookup, run, SHOT_DIR, signIn } from "./harness";
 
-const BASE = process.env.E2E_BASE_URL ?? "http://localhost:3000";
-const SHOT_DIR = process.env.E2E_SHOT_DIR ?? "/tmp";
-const EMAIL = "kitchen@minks.example";
-const PASSWORD = "pizza-test-1234";
+const KITCHEN = { name: "Kitchen", email: "kitchen@minks.example", password: "pizza-test-1234" };
 const CALLER = { name: "Rita Regular", phone: "(555) 010-7788" };
-
-let failures = 0;
-function check(label: string, ok: boolean, detail = "") {
-  console.log(`${ok ? "PASS" : "FAIL"}  ${label}${detail ? ` — ${detail}` : ""}`);
-  if (!ok) failures++;
-}
 
 /** True once `locator` is on screen, false if it never shows. */
 const shows = (locator: Locator, timeout = 5_000) => locator.waitFor({ timeout }).then(() => true, () => false);
 const gone = (locator: Locator, timeout = 10_000) => locator.waitFor({ state: "detached", timeout }).then(() => true, () => false);
-
-async function eventually(fn: () => Promise<boolean>, ms = 10_000): Promise<boolean> {
-  const until = Date.now() + ms;
-  while (Date.now() < until) {
-    if (await fn()) return true;
-    await new Promise((r) => setTimeout(r, 300));
-  }
-  return fn();
-}
 
 /** Waits out an enter animation: the box reads the same twice in a row. */
 async function settled(locator: Locator) {
@@ -61,23 +44,6 @@ async function settled(locator: Locator) {
 const orderRow = async (id: string) => (await db.select().from(orders).where(eq(orders.id, id)))[0];
 const linesOf = (id: string) => db.select().from(orderItems).where(eq(orderItems.orderId, id));
 const tendersOf = (id: string) => db.select().from(tenders).where(eq(tenders.orderId, id));
-
-async function signIn(page: Page) {
-  await page.goto(`${BASE}/pos`, { waitUntil: "networkidle" });
-  if (page.url().includes("/admin/setup")) {
-    await page.fill('input[name="name"]', "Kitchen");
-    await page.fill('input[name="email"]', EMAIL);
-    await page.fill('input[name="password"]', PASSWORD);
-    await page.click('button[type="submit"]');
-    await page.waitForURL(/\/admin$/);
-  } else if (page.url().includes("/admin/login")) {
-    await page.fill('input[name="email"]', EMAIL);
-    await page.fill('input[name="password"]', PASSWORD);
-    await page.click('button[type="submit"]');
-    await page.waitForURL(/\/admin$/);
-  }
-  await page.goto(`${BASE}/pos`, { waitUntil: "networkidle" });
-}
 
 const startedAt = new Date();
 
@@ -107,12 +73,7 @@ async function setup() {
     await db.update(orders).set({ status: "completed" }).where(eq(orders.status, status));
   }
 
-  const items = await db.select().from(menuItems);
-  const groups = await db.select().from(modifierGroups);
-  const mods = await db.select().from(modifiers);
-  const item = (name: string) => items.find((i) => i.name === name)!.id;
-  const pick = (group: string, name: string) =>
-    mods.find((m) => m.groupId === groups.find((g) => g.name === group)!.id && m.name === name)!.id;
+  const { item, pick } = await menuLookup();
   await db.update(menuItems).set({ isAvailable: true }).where(eq(menuItems.name, "Caesar Salad"));
 
   // A returning caller: one past delivery order with a pie and a salad.
@@ -176,7 +137,7 @@ async function main() {
   const storeClock = (at: Date, options: Intl.DateTimeFormatOptions) => new Intl.DateTimeFormat("en-US", { timeZone: tz, ...options }).format(at);
   const clock12 = (minutes: number) => `${((Math.floor(minutes / 60) + 11) % 12) + 1}:${String(minutes % 60).padStart(2, "0")} ${minutes >= 720 ? "PM" : "AM"}`;
 
-  const browser = await chromium.launch({ executablePath: process.env.CHROMIUM_PATH ?? "/opt/pw-browsers/chromium" });
+  const browser = await launchBrowser();
   // A browser zone that is neither the server's (UTC) nor the store's, so a
   // time formatted in the wrong zone can't pass by accident.
   const context = await browser.newContext({ viewport: { width: 1024, height: 768 }, timezoneId: "Asia/Tokyo" });
@@ -216,7 +177,7 @@ async function main() {
     for (const d of digits) await page.locator(`[data-pin-key="${d}"]`).last().click();
   };
 
-  await signIn(page);
+  await signIn(page, KITCHEN, "/pos");
   try {
     await flows();
   } catch (e) {
@@ -224,8 +185,6 @@ async function main() {
     throw e;
   }
   await browser.close();
-  console.log(failures === 0 ? "\nALL PASSED" : `\n${failures} FAILED`);
-  process.exit(failures === 0 ? 0 : 1);
 
   async function flows() {
 
@@ -233,10 +192,10 @@ async function main() {
   await page.getByTestId("lock-screen").waitFor();
   await shot("01-lock");
   await pin("9999");
-  check("a wrong PIN says so", await page.getByText("That PIN didn't match anyone.").waitFor().then(() => true, () => false));
+  check("a wrong PIN says so", await page.getByText("That PIN didn't match anyone.").waitFor().then(() => true, () => false), true);
   await page.keyboard.type("5678");
   await page.getByTestId("order-panel").waitFor();
-  check("cashier PIN (typed on the keyboard) unlocks the terminal", await page.getByText("Casey Cashier").isVisible());
+  check("cashier PIN (typed on the keyboard) unlocks the terminal", await page.getByText("Casey Cashier").isVisible(), true);
 
   // --- Shift open ------------------------------------------------------------
   await page.getByTestId("open-shift").waitFor();
@@ -245,7 +204,7 @@ async function main() {
   await page.getByTestId("open-shift").waitFor({ state: "detached" });
   const shift = await eventually(async () => (await db.select().from(shifts).where(isNull(shifts.closedAt))).length === 1);
   const [openShift] = await db.select().from(shifts).where(isNull(shifts.closedAt));
-  check("shift opens with a $150.00 bank", shift && openShift?.startingBankCents === 15000);
+  check("shift opens with a $150.00 bank", [shift, openShift?.startingBankCents], [true, 15000]);
 
   // --- Walk-in: 2 × half-and-half large, cash ---------------------------------
   await shot("02-menu");
@@ -259,19 +218,19 @@ async function main() {
   await tap(page.locator('[data-topping="Mushrooms"]'));
   await tap(page.getByRole("button", { name: "One more" }));
   const summary = await page.getByTestId("builder-summary").innerText();
-  check("builder line reads 2 × Large · L: Pepperoni · R: Mushrooms", summary === '2 × Large 14" · Hand Tossed · L: Pepperoni · R: Mushrooms', summary);
+  check("builder line reads 2 × Large · L: Pepperoni · R: Mushrooms", summary, '2 × Large 14" · Hand Tossed · L: Pepperoni · R: Mushrooms');
   await shot("03-builder");
   await tap(page.getByTestId("builder-add"));
   const total = await page.getByTestId("draft-total").innerText();
-  check("panel total is $40.31 before any network call", total === "$40.31", total);
+  check("panel total is $40.31 before any network call", total, "$40.31");
   await tap(page.getByTestId("pay"));
   await shot("04-tender");
   await tap(page.locator('[data-cash="50"]'));
   await page.getByTestId("change-due").waitFor();
   const change = await page.getByTestId("change-due").innerText();
-  check("change due on $50 is $9.69", change === "Change $9.69", change);
+  check("change due on $50 is $9.69", change, "Change $9.69");
   console.log(`      walk-in taps from menu to paid: ${taps}`);
-  check("walk-in half-and-half paid in 12 taps or fewer", taps <= 12, `${taps} taps`);
+  check("walk-in half-and-half paid in 12 taps or fewer", taps <= 12, true);
   await shot("05-change");
   await page.getByTestId("tender-done").click();
   const walkIn = await newestOrder(eq(orders.channel, "walk_in"));
@@ -280,28 +239,28 @@ async function main() {
   const placements = walkInLines[0].modifiers.flatMap((m) => (m.kind === "placed" ? [`${m.placement}:${m.modifierName}`] : []));
   check(
     "walk-in stored: 1 line × 2, halves as data, total $40.31, paid",
-    walkInLines.length === 1 && walkInLines[0].quantity === 2 && placements.join() === "left:Pepperoni,right:Mushrooms" && walkIn.totalCents === 4031 && walkIn.paidCents === 4031,
-    JSON.stringify({ placements, total: walkIn.totalCents, paid: walkIn.paidCents }),
+    { lines: walkInLines.length, quantity: walkInLines[0].quantity, placements: placements.join(), total: walkIn.totalCents, paid: walkIn.paidCents },
+    { lines: 1, quantity: 2, placements: "left:Pepperoni,right:Mushrooms", total: 4031, paid: 4031 },
   );
-  check("cash tender records $50 handed over", walkInTenders.length === 1 && walkInTenders[0].tenderedCents === 5000 && walkInTenders[0].amountCents === 4031);
-  check("walk-in went straight to the kitchen", walkIn.status === "new");
+  check("cash tender records $50 handed over", walkInTenders.map((t) => [t.tenderedCents, t.amountCents]), [[5000, 4031]]);
+  check("walk-in went straight to the kitchen", walkIn.status, "new");
 
   // --- Phone delivery: lookup → reorder → later --------------------------------
   await page.getByRole("radio", { name: "Delivery" }).click();
   await page.getByTestId("caller-panel").waitFor();
-  check("delivery puts the phone field first and focused", await page.getByLabel("Caller phone").evaluate((el) => el === document.activeElement));
+  check("delivery puts the phone field first and focused", await page.getByLabel("Caller phone").evaluate((el) => el === document.activeElement), true);
   await page.keyboard.type("5550107788");
   await page.getByTestId("recent-order").first().waitFor();
-  check("lookup fills the caller's name", (await page.getByLabel("Caller name").inputValue()) === CALLER.name);
-  check("lookup fills the saved address", (await page.getByLabel("Street address").inputValue()) === "42 Oak Lane");
+  check("lookup fills the caller's name", await page.getByLabel("Caller name").inputValue(), "Rita Regular");
+  check("lookup fills the saved address", await page.getByLabel("Street address").inputValue(), "42 Oak Lane");
   await shot("06-caller");
   await page.getByRole("button", { name: "Reorder" }).first().click();
   const flagged = page.getByText("Not added: tell the caller");
   await flagged.waitFor();
-  check("reorder flags the 86'd salad", (await page.getByRole("alert").filter({ hasText: "Caesar Salad" }).count()) === 1);
+  check("reorder flags the 86'd salad", await page.getByRole("alert").filter({ hasText: "Caesar Salad" }).count(), 1);
   const lineSummary = await page.getByTestId("line-summary").first().innerText();
-  check("reorder brings back the pie with its options", lineSummary === 'X-Large 16" · Thin Crust · Extra Bacon', lineSummary);
-  check("quote time shows while on the phone", /\d+ min/.test(await page.getByTestId("quote").innerText()));
+  check("reorder brings back the pie with its options", lineSummary, 'X-Large 16" · Thin Crust · Extra Bacon');
+  check("quote time shows while on the phone", /\d+ min/.test(await page.getByTestId("quote").innerText()), true);
   await shot("06b-reordered");
   await page.getByRole("radio", { name: "Later" }).click();
   await page.getByLabel("Ready at").fill("23:45");
@@ -313,23 +272,23 @@ async function main() {
   const boxes = await Promise.all([toast, page.locator("header"), page.getByTestId("send"), page.getByTestId("pay")].map((l) => l.boundingBox()));
   const [toastBox, ...covered] = boxes;
   const overlaps = (a: NonNullable<typeof toastBox>, b: NonNullable<typeof toastBox>) => a.x < b.x + b.width && b.x < a.x + a.width && a.y < b.y + b.height && b.y < a.y + a.height;
-  check("the sent toast covers neither the header nor Send and Pay", !!toastBox && covered.every((b) => !!b && !overlaps(toastBox, b)), JSON.stringify(boxes));
-  check("the toast sits above two wrapped rows of order-detail actions", !!toastBox && toastBox.y + toastBox.height <= 768 - 2 * 48 - 8 - 12, JSON.stringify(toastBox));
+  check("the sent toast covers neither the header nor Send and Pay", covered.map((b) => !toastBox || !b || overlaps(toastBox, b)), [false, false, false]);
+  check("the toast sits above two wrapped rows of order-detail actions", !!toastBox && toastBox.y + toastBox.height <= 768 - 2 * 48 - 8 - 12, true);
   await shot("07b-sent-toast");
   const phoneOrder = await eventually(async () => (await newestOrder(eq(orders.customerName, CALLER.name)))?.channel === "phone");
   const delivery = await newestOrder(eq(orders.customerName, CALLER.name));
   check(
     "phone delivery stored held with a fire time, address and fee",
-    phoneOrder && delivery.status === "held" && delivery.fireAt !== null && delivery.orderType === "delivery" && delivery.addressLine1 === "42 Oak Lane" && delivery.deliveryFeeCents >= 0,
-    JSON.stringify({ status: delivery.status, fireAt: delivery.fireAt, type: delivery.orderType }),
+    { phone: phoneOrder, status: delivery.status, fires: delivery.fireAt !== null, type: delivery.orderType, address: delivery.addressLine1, fee: delivery.deliveryFeeCents >= 0 },
+    { phone: true, status: "held", fires: true, type: "delivery", address: "42 Oak Lane", fee: true },
   );
   check(
     "Later 23:45 means 23:45 on the store's clock, within the next day",
-    delivery.promisedAt !== null && storeClock(delivery.promisedAt, { hour: "2-digit", minute: "2-digit", hourCycle: "h23" }) === "23:45" && delivery.promisedAt.getTime() - Date.now() < 86_400_000,
-    `${delivery.promisedAt?.toISOString()} in ${tz}`,
+    delivery.promisedAt && [storeClock(delivery.promisedAt, { hour: "2-digit", minute: "2-digit", hourCycle: "h23" }), delivery.promisedAt.getTime() - Date.now() < 86_400_000],
+    ["23:45", true],
   );
   const kds = (await (await context.request.get(`${BASE}/api/kds`)).json()) as KdsSnapshot;
-  check("scheduled delivery is not on the KDS", !kds.line.some((o) => o.id === delivery.id));
+  check("scheduled delivery is not on the KDS", kds.line.some((o) => o.id === delivery.id), false);
   await db.update(menuItems).set({ isAvailable: true }).where(eq(menuItems.name, "Caesar Salad"));
 
   // --- Collect on an online order -----------------------------------------------
@@ -337,13 +296,13 @@ async function main() {
   await page.getByTestId("board").waitFor();
   await page.locator(`[data-order="${delivery.orderNumber}"]`).waitFor();
   const heldRow = await page.locator(`[data-order="${delivery.orderNumber}"]`).innerText();
-  check("board shows the held delivery in the scheduled lane", heldRow.includes("HELD"));
+  check("board shows the held delivery in the scheduled lane", heldRow.includes("HELD"), true);
   const quoteMinutes = delivery.promisedAt && delivery.fireAt ? (delivery.promisedAt.getTime() - delivery.fireAt.getTime()) / 60_000 : NaN;
-  check("board shows the fire time, 23:45 less the quote, in the store's zone", heldRow.includes(`fires ${clock12(23 * 60 + 45 - quoteMinutes)}`), `${quoteMinutes} min quote: ${heldRow.replace(/\n/g, " | ")}`);
+  check("board shows the fire time, 23:45 less the quote, in the store's zone", heldRow.includes(`fires ${clock12(23 * 60 + 45 - quoteMinutes)}`), true);
   await page.locator(`[data-order="${online.number}"]`).waitFor();
   await shot("08-board");
   await page.getByLabel("Search open orders").fill("Olive");
-  check("search by name narrows the board", (await page.locator("[data-order]").count()) === 1);
+  check("search by name narrows the board", await page.locator("[data-order]").count(), 1);
   await page.locator(`[data-order="${online.number}"]`).click();
   await page.getByTestId("order-detail").waitFor();
   await page.getByTestId("order-pay").click();
@@ -357,7 +316,8 @@ async function main() {
   const onlineRow = await orderRow(online.id);
   check(
     "online order collected by card with tip and last 4",
-    onlineTender?.method === "card_external" && onlineTender.tipCents === 200 && onlineTender.last4 === "4242" && onlineRow.paidCents === onlineRow.totalCents,
+    { method: onlineTender?.method, tip: onlineTender?.tipCents, last4: onlineTender?.last4, paidInFull: onlineRow.paidCents === onlineRow.totalCents },
+    { method: "card_external", tip: 200, last4: "4242", paidInFull: true },
   );
 
   // --- Dine-in: send, then split three ways --------------------------------------
@@ -373,7 +333,7 @@ async function main() {
   await page.getByTestId("send").click();
   await eventually(async () => (await newestOrder(eq(orders.tableLabel, "4")))?.status === "new");
   const dine = await newestOrder(eq(orders.tableLabel, "4"));
-  check("dine-in check sent to the kitchen", dine.status === "new" && dine.orderType === "dine_in");
+  check("dine-in check sent to the kitchen", [dine.status, dine.orderType], ["new", "dine_in"]);
   await page.getByTestId("tab-board").click();
   await page.getByLabel("Search open orders").fill("");
   await page.locator(`[data-order="${dine.orderNumber}"]`).click();
@@ -391,28 +351,28 @@ async function main() {
   const shares = dineTenders.map((t) => t.amountCents).sort((a, b) => b - a);
   check(
     "dine-in split into 3 cash tenders that sum to the total",
-    shares.length === 3 && shares.reduce((a, b) => a + b, 0) === dinePaid.totalCents && shares[0] - shares[2] <= 1 && dinePaid.paidCents === dinePaid.totalCents,
-    JSON.stringify(shares),
+    { tenders: shares.length, sumIsTotal: shares.reduce((a, b) => a + b, 0) === dinePaid.totalCents, withinACent: shares[0] - shares[2] <= 1, paidInFull: dinePaid.paidCents === dinePaid.totalCents },
+    { tenders: 3, sumIsTotal: true, withinACent: true, paidInFull: true },
   );
 
   // --- Cashier void after send → manager PIN → KDS shows VOID ---------------------
   const knots = (await linesOf(dine.id)).find((l) => l.itemName === "Garlic Knots (6)")!;
   await page.getByRole("button", { name: "Void Garlic Knots (6)" }).click();
   await page.getByRole("button", { name: "Customer changed mind" }).click();
-  check("the void prompt says a sent line needs a manager", (await page.getByTestId("prompt-dialog").innerText()).includes("Already sent to the kitchen: a manager must approve."));
+  check("the void prompt says a sent line needs a manager", (await page.getByTestId("prompt-dialog").innerText()).includes("Already sent to the kitchen: a manager must approve."), true);
   await page.getByTestId("prompt-confirm").click();
-  check("voiding a sent line asks for a manager", await shows(page.getByTestId("manager-pin").getByText("Void Garlic Knots (6)")));
+  check("voiding a sent line asks for a manager", await shows(page.getByTestId("manager-pin").getByText("Void Garlic Knots (6)")), true);
   await pin("5678");
-  check("a cashier PIN can't approve", await page.getByTestId("manager-pin").getByText("That PIN isn't a manager's.").waitFor().then(() => true, () => false));
+  check("a cashier PIN can't approve", await page.getByTestId("manager-pin").getByText("That PIN isn't a manager's.").waitFor().then(() => true, () => false), true);
   await shot("10-manager-pin");
   await pin("1234");
   await page.getByTestId("manager-pin").waitFor({ state: "detached" });
   const voided = (await db.select().from(orderItems).where(eq(orderItems.id, knots.id)))[0];
-  check("void stored with the cashier as actor and the manager as approver", voided.voidedAt !== null && voided.voidedBy === cashier && voided.voidApprovedBy === manager);
+  check("void stored with the cashier as actor and the manager as approver", [voided.voidedAt !== null, voided.voidedBy, voided.voidApprovedBy], [true, cashier, manager]);
   const kitchen = await context.newPage();
   await kitchen.goto(`${BASE}/kitchen`, { waitUntil: "networkidle" });
   const kdsRow = kitchen.getByTestId(`kds-item-${knots.id}`);
-  check("KDS shows the voided line as VOID", await eventually(async () => (await kdsRow.getAttribute("data-stage").catch(() => null)) === "void"));
+  check("KDS shows the voided line as VOID", await eventually(async () => (await kdsRow.getAttribute("data-stage").catch(() => null)) === "void"), true);
   await kitchen.close();
 
   // --- Discount: under the threshold, then over it ----------------------------------
@@ -420,24 +380,24 @@ async function main() {
   await page.getByLabel("Amount").fill("2.00");
   await page.getByRole("button", { name: "Coupon" }).click();
   await page.getByTestId("prompt-confirm").click();
-  check("a $2 discount needs no manager", await eventually(async () => (await db.select().from(adjustments).where(eq(adjustments.orderId, dine.id))).length === 1));
+  check("a $2 discount needs no manager", await eventually(async () => (await db.select().from(adjustments).where(eq(adjustments.orderId, dine.id))).length === 1), true);
   await page.getByTestId("discount").click();
   await page.getByLabel("Amount").fill("6.00");
   await page.getByRole("button", { name: "Manager special" }).click();
   await page.getByTestId("prompt-confirm").click();
-  check("a $6 discount pops the manager PIN pad", await shows(page.getByTestId("manager-pin").getByText("Discount $6.00")));
+  check("a $6 discount pops the manager PIN pad", await shows(page.getByTestId("manager-pin").getByText("Discount $6.00")), true);
   await pin("1234");
   await page.getByTestId("manager-pin").waitFor({ state: "detached" });
   const discounts = await db.select().from(adjustments).where(and(eq(adjustments.orderId, dine.id), eq(adjustments.cents, 600)));
-  check("$6 discount stored with the manager's approval", discounts.length === 1 && discounts[0].approvedBy === manager);
+  check("$6 discount stored with the manager's approval", discounts.map((d) => d.approvedBy), [manager]);
   await page.getByRole("button", { name: "Log" }).click();
   const log = await page.getByTestId("activity-log").innerText();
   check(
     "activity log reads placed as dine-in, at the store's time",
     log.startsWith(`${storeClock(dine.placedAt, { hour: "numeric", minute: "2-digit" })} Placed (Dine-in, table 4)`),
-    log.split("\n")[0],
+    true,
   );
-  check("activity log names who voided and who approved", /Voided 2 × Garlic Knots.*Casey Cashier · approved by Morgan Manager/.test(log.replace(/\n/g, " ")), log.replace(/\n/g, " | "));
+  check("activity log names who voided and who approved", /Voided 2 × Garlic Knots.*Casey Cashier · approved by Morgan Manager/.test(log.replace(/\n/g, " ")), true);
   await shot("11-order-detail");
 
   // --- Offline submit → NOT SENT → replayed once ---------------------------------------
@@ -452,32 +412,32 @@ async function main() {
   await page.getByTestId("paid").waitFor();
   await page.getByTestId("tender-done").click();
   await page.getByTestId("not-sent-count").waitFor();
-  check("failed submit shows NOT SENT in the header", (await page.getByTestId("not-sent-count").innerText()).includes("1 NOT SENT"));
-  check("a fallback kitchen ticket was sent to the printer", (await prints()) === printsBefore + 1);
+  check("failed submit shows NOT SENT in the header", (await page.getByTestId("not-sent-count").innerText()).includes("1 NOT SENT"), true);
+  check("a fallback kitchen ticket was sent to the printer", await prints(), printsBefore + 1);
   await page.getByTestId("tab-board").click();
   await page.getByTestId("not-sent").waitFor();
   await shot("12-not-sent");
   const queued = await outboxKeys();
-  check("the order is saved in IndexedDB", queued.length === 1, JSON.stringify(queued));
-  check("nothing reached the database while offline", !(await orderRow(queued[0])));
+  check("the order is saved in IndexedDB", queued.length, 1);
+  check("nothing reached the database while offline", !!(await orderRow(queued[0])), false);
   await page.unroute("**/api/pos/orders");
-  check("replay lands the order once the connection is back", await eventually(async () => !!(await orderRow(queued[0])), 15_000));
-  check("NOT SENT clears after replay", await gone(page.getByTestId("not-sent")));
-  check("the replayed order leaves the device's queue, so nothing can send it again", await eventually(async () => (await outboxKeys()).length === 0));
+  check("replay lands the order once the connection is back", await eventually(async () => !!(await orderRow(queued[0])), 15_000), true);
+  check("NOT SENT clears after replay", await gone(page.getByTestId("not-sent")), true);
+  check("the replayed order leaves the device's queue, so nothing can send it again", await eventually(async () => (await outboxKeys()).length === 0), true);
   const replayedLines = await linesOf(queued[0]);
   const replayedTenders = await tendersOf(queued[0]);
-  check("one paper ticket for one failed order", (await prints()) === printsBefore + 1);
-  check("replayed exactly once: 1 line, 1 tender", replayedLines.length === 1 && replayedTenders.length === 1, `${replayedLines.length} lines, ${replayedTenders.length} tenders`);
+  check("one paper ticket for one failed order", await prints(), printsBefore + 1);
+  check("replayed exactly once: 1 line, 1 tender", [replayedLines.length, replayedTenders.length], [1, 1]);
 
   // --- Receipt reprint ------------------------------------------------------------------
   await page.getByLabel("Search open orders").fill(String(dine.orderNumber));
   await page.locator(`[data-order="${dine.orderNumber}"]`).click();
   const beforeReceipt = await prints();
   await page.getByRole("button", { name: "Receipt" }).click();
-  check("reprint sends a receipt to the printer", await eventually(async () => (await prints()) === beforeReceipt + 1, 3_000));
+  check("reprint sends a receipt to the printer", await eventually(async () => (await prints()) === beforeReceipt + 1, 3_000), true);
   const receiptText = await page.locator("#pos-print").innerText();
-  check("receipt shows the order and the discount", /Order #\d+[\s\S]*Discounts/.test(receiptText));
-  check("receipt prints the store's date and time", receiptText.includes(storeClock(dine.placedAt, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })), receiptText.split("\n").slice(0, 8).join(" | "));
+  check("receipt shows the order and the discount", /Order #\d+[\s\S]*Discounts/.test(receiptText), true);
+  check("receipt prints the store's date and time", receiptText.includes(storeClock(dine.placedAt, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })), true);
 
   // --- Dine-in hold → fire → split by item; a note on a plain line ------------------------
   await page.getByRole("button", { name: "New order" }).click();
@@ -489,18 +449,18 @@ async function main() {
   await page.getByTestId("draft-line").filter({ hasText: "Sparkling Water" }).getByRole("button", { name: /^Sparkling Water \$/ }).click();
   await page.getByPlaceholder("well done, cut in squares…").fill("no ice");
   await page.getByTestId("builder-add").click();
-  check("a plain line takes a note", (await page.getByTestId("draft-line").innerText()).includes("no ice"));
+  check("a plain line takes a note", (await page.getByTestId("draft-line").innerText()).includes("no ice"), true);
   await page.getByRole("tab", { name: "Sides & Salads" }).click();
   await page.locator('[data-item="Garlic Knots (6)"]').click();
   await page.getByTestId("send").click();
   await eventually(async () => !!(await newestOrder(eq(orders.tableLabel, "7"))));
   const table7 = await newestOrder(eq(orders.tableLabel, "7"));
-  check("Hold keeps the dine-in check off the kitchen", table7.status === "held");
+  check("Hold keeps the dine-in check off the kitchen", table7.status, "held");
   await page.getByTestId("tab-board").click();
   await page.getByLabel("Search open orders").fill("Table 7");
   await page.locator(`[data-order="${table7.orderNumber}"]`).click();
   await page.getByTestId("fire-all").click();
-  check("Fire sends the held lines", await eventually(async () => (await orderRow(table7.id)).status === "new"));
+  check("Fire sends the held lines", await eventually(async () => (await orderRow(table7.id)).status === "new"), true);
   await page.getByRole("button", { name: "Split by item" }).click();
   await page.getByLabel("Move Sparkling Water").check();
   await page.getByRole("button", { name: /Move 1 to new check/ }).click();
@@ -508,7 +468,7 @@ async function main() {
   const split = await eventually(async () => (await childrenOf()).length === 1);
   const children = await childrenOf();
   const movedLines = children[0] ? await linesOf(children[0].id) : [];
-  check("split by item moves the water to a new check on the same ticket", split && movedLines.length === 1 && movedLines[0].itemName === "Sparkling Water");
+  check("split by item moves the water to a new check on the same ticket", [split, movedLines.map((l) => l.itemName)], [true, ["Sparkling Water"]]);
 
   // --- One pizza shared by three guests, each paying their own share -----------------------
   await page.getByRole("button", { name: "New order" }).click();
@@ -543,19 +503,21 @@ async function main() {
   const taxed = (cents: number) => Math.round(cents * 1.0825);
   check(
     "pizza shared three ways: each guest pays a third of it plus their own drink, to the cent",
-    t9.length === 3 &&
-      t9.reduce((a, b) => a + b, 0) === t9Row.totalCents &&
-      t9Row.paidCents === t9Row.totalCents &&
-      Math.abs(t9[0] - t9[2] - taxed(399)) <= 2 &&
-      Math.abs(t9[1] - t9[2] - taxed(249)) <= 2 &&
-      shownShares.join() === t9.map((c) => `$${(c / 100).toFixed(2)}`).join(),
-    JSON.stringify({ tenders: t9, shown: shownShares, total: t9Row.totalCents }),
+    {
+      tenders: t9.length,
+      sumIsTotal: t9.reduce((a, b) => a + b, 0) === t9Row.totalCents,
+      paidInFull: t9Row.paidCents === t9Row.totalCents,
+      sodaOnGuest1: Math.abs(t9[0] - t9[2] - taxed(399)) <= 2,
+      waterOnGuest2: Math.abs(t9[1] - t9[2] - taxed(249)) <= 2,
+      shownIsCharged: shownShares.join() === t9.map((c) => `$${(c / 100).toFixed(2)}`).join(),
+    },
+    { tenders: 3, sumIsTotal: true, paidInFull: true, sodaOnGuest1: true, waterOnGuest2: true, shownIsCharged: true },
   );
 
   // --- Deep link and paid out --------------------------------------------------------------
   await page.goto(`${BASE}/pos?order=${online.id}`, { waitUntil: "networkidle" });
   await page.getByTestId("order-detail").waitFor();
-  check("/pos?order= opens that order", (await page.getByTestId("order-detail").innerText()).includes(`#${online.number}`));
+  check("/pos?order= opens that order", (await page.getByTestId("order-detail").innerText()).includes(`#${online.number}`), true);
   await page.getByTestId("staff-menu").click();
   await page.getByRole("menuitem", { name: "Paid out" }).click();
   await page.getByLabel("Amount").fill("5.00");
@@ -565,7 +527,7 @@ async function main() {
   await pin("1234");
   await page.getByTestId("manager-pin").waitFor({ state: "detached" });
   const paidOut = await eventually(async () => (await db.select().from(drawerEvents).where(and(eq(drawerEvents.shiftId, openShift.id), eq(drawerEvents.kind, "paid_out")))).length === 1);
-  check("paid out of the drawer needs and records a manager", paidOut && (await db.select().from(drawerEvents).where(eq(drawerEvents.shiftId, openShift.id)))[0].approvedBy === manager);
+  check("paid out of the drawer needs and records a manager", [paidOut, (await db.select().from(drawerEvents).where(eq(drawerEvents.shiftId, openShift.id)))[0]?.approvedBy], [true, manager]);
 
   // --- Shift close: counted vs expected ---------------------------------------------------
   await page.getByTestId("staff-menu").click();
@@ -575,11 +537,11 @@ async function main() {
   check(
     "expected cash: $150 bank + $40.31 + $31.36 + $4.32 + $25.41 cash − $5 paid out = $246.40",
     expectedText.startsWith("Expected cash\n$246.40"),
-    expectedText.split("\n").slice(0, 2).join(" "),
+    true,
   );
   await page.getByLabel("Counted cash").fill("244.90");
   await page.getByLabel("Card batch total").fill("15.00");
-  check("short by $1.50 shows before closing", (await page.getByTestId("shift-report").innerText()).includes("-$1.50"));
+  check("short by $1.50 shows before closing", (await page.getByTestId("shift-report").innerText()).includes("-$1.50"), true);
   await page.getByTestId("close-shift-confirm").click();
   await page.getByTestId("manager-pin").waitFor();
   await pin("1234");
@@ -587,14 +549,14 @@ async function main() {
   await page.getByTestId("manager-pin").waitFor({ state: "detached" });
   await shot("13-shift-closed");
   const [closedShift] = await db.select().from(shifts).where(eq(shifts.id, openShift.id));
-  check("shift closed with counted cash and the manager as closer", closedShift.closedAt !== null && closedShift.countedCashCents === 24490 && closedShift.closedBy === manager);
-  check("Z report links to the printable page", (await page.getByTestId("z-report").getAttribute("href")) === `/admin/reports/shift/${openShift.id}`);
+  check("shift closed with counted cash and the manager as closer", [closedShift.closedAt !== null, closedShift.countedCashCents, closedShift.closedBy], [true, 24490, manager]);
+  check("Z report links to the printable page", await page.getByTestId("z-report").getAttribute("href"), `/admin/reports/shift/${openShift.id}`);
 
   // --- Lock ---------------------------------------------------------------------------------
   await page.getByTestId("tender-done").click().catch(() => undefined);
   await page.keyboard.press("Escape");
   await page.getByTestId("lock").click();
-  check("one tap locks the terminal", await shows(page.getByTestId("lock-screen")));
+  check("one tap locks the terminal", await shows(page.getByTestId("lock-screen")), true);
 
   // --- 1366 × 768 layout -----------------------------------------------------------------------
   await page.setViewportSize({ width: 1366, height: 768 });
@@ -606,7 +568,7 @@ async function main() {
   await page.getByRole("menuitemcheckbox", { name: "Dark screen" }).click();
   await page.keyboard.press("Escape");
   await page.getByTestId("tab-board").click();
-  check("dark screen toggles the dark theme", await page.evaluate(() => document.documentElement.classList.contains("dark")));
+  check("dark screen toggles the dark theme", await page.evaluate(() => document.documentElement.classList.contains("dark")), true);
   await shot("15-dark");
   await page.getByTestId("staff-menu").click();
   await page.getByRole("menuitemcheckbox", { name: "Dark screen" }).click();
@@ -627,30 +589,30 @@ async function main() {
   const payPressedAt = new Date();
   await page.getByTestId("pay").click();
   await page.getByRole("button", { name: "Split 3 ways" }).click();
-  check("guest 1 of 3 owes $2.16 of the $6.48 knots", (await page.getByTestId("tender-due").innerText()) === "$2.16");
+  check("guest 1 of 3 owes $2.16 of the $6.48 knots", await page.getByTestId("tender-due").innerText(), "$2.16");
   await page.getByTestId("cash-exact").click();
   await page.getByText("Guest 2 of 3").waitFor();
   await page.clock.fastForward(130_000);
-  check("the idle timer locks the terminal mid-split", await page.getByTestId("lock-screen").waitFor({ timeout: 5_000 }).then(() => true, () => false));
+  check("the idle timer locks the terminal mid-split", await page.getByTestId("lock-screen").waitFor({ timeout: 5_000 }).then(() => true, () => false), true);
   const splitOrder = await eventually(async () => (await newestOrder(eq(orders.channel, "walk_in"), payPressedAt)) !== undefined);
   const knotsOrder = await newestOrder(eq(orders.channel, "walk_in"), payPressedAt);
   const takenBeforeLock = knotsOrder ? (await tendersOf(knotsOrder.id)).map((t) => t.amountCents) : [];
-  check("guest 1's $2.16 is on a recorded $6.48 order after the lock", splitOrder && knotsOrder.totalCents === 648 && takenBeforeLock.join() === "216", JSON.stringify(takenBeforeLock));
+  check("guest 1's $2.16 is on a recorded $6.48 order after the lock", [splitOrder, knotsOrder?.totalCents, takenBeforeLock.join()], [true, 648, "216"]);
   await page.keyboard.type("5678");
   await page.getByTestId("order-panel").waitFor();
-  check("unlocking starts a clean new order", (await page.getByTestId("draft-total").innerText()) === "$0.00");
+  check("unlocking starts a clean new order", await page.getByTestId("draft-total").innerText(), "$0.00");
   if (knotsOrder) {
     await page.getByTestId("tab-board").click();
     await page.getByLabel("Search open orders").fill(`#${knotsOrder.orderNumber}`);
     await page.locator(`[data-order="${knotsOrder.orderNumber}"]`).click();
     await page.getByTestId("order-pay").click();
-    check("the open order still owes the other $4.32", (await page.getByTestId("tender-due").innerText()) === "$4.32");
+    check("the open order still owes the other $4.32", await page.getByTestId("tender-due").innerText(), "$4.32");
     await page.getByTestId("cash-exact").click();
     await page.getByTestId("paid").waitFor();
     await page.getByTestId("tender-done").click();
     const settled = await orderRow(knotsOrder.id);
     const allTenders = (await tendersOf(knotsOrder.id)).map((t) => t.amountCents).sort((a, b) => a - b);
-    check("the rest is collected after unlock: $2.16 + $4.32 = $6.48 paid", settled.paidCents === 648 && allTenders.join() === "216,432", JSON.stringify(allTenders));
+    check("the rest is collected after unlock: $2.16 + $4.32 = $6.48 paid", [settled.paidCents, allTenders.join()], [648, "216,432"]);
   }
 
   // --- Auto-lock after idle -------------------------------------------------------------------
@@ -658,14 +620,11 @@ async function main() {
   try {
     await page.reload({ waitUntil: "networkidle" });
     await page.getByTestId("order-panel").waitFor();
-    check("the terminal locks itself after the idle time", await page.getByTestId("lock-screen").waitFor({ timeout: 8_000 }).then(() => true, () => false));
+    check("the terminal locks itself after the idle time", await page.getByTestId("lock-screen").waitFor({ timeout: 8_000 }).then(() => true, () => false), true);
   } finally {
     await db.update(storeSettings).set({ posLockSeconds: 120 }).where(eq(storeSettings.id, 1));
   }
   }
 }
 
-main().catch((e) => {
-  console.error(e);
-  process.exit(1);
-});
+run(main);
