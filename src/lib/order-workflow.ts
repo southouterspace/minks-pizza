@@ -104,6 +104,7 @@ export const ORDER_EVENT_TYPES = [
   "eta_changed",
   "payment_recorded",
   "note_added",
+  "discount",
 ] as const;
 export type OrderEventType = (typeof ORDER_EVENT_TYPES)[number];
 
@@ -133,6 +134,8 @@ export function describeEvent(e: {
       return "Payment recorded";
     case "note_added":
       return "Note";
+    case "discount":
+      return "Discount";
   }
 }
 

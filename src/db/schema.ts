@@ -1,5 +1,6 @@
 import {
   boolean,
+  check,
   index,
   integer,
   jsonb,
@@ -9,13 +10,20 @@ import {
   timestamp,
   uuid,
 } from "drizzle-orm/pg-core";
-import { relations } from "drizzle-orm";
+import { relations, sql } from "drizzle-orm";
 import { KITCHEN_STATIONS } from "../lib/kds";
 import {
   ORDER_EVENT_TYPES,
   ORDER_STATUSES,
   PAYMENT_METHODS,
 } from "../lib/order-workflow";
+import {
+  DISCOUNT_SOURCES,
+  DISCOUNT_TARGETS,
+  PROMOTION_TRIGGERS,
+  type PromotionReward,
+  type WeeklyWindow,
+} from "../lib/promotions";
 
 // ---------------------------------------------------------------------------
 // Enums
@@ -36,6 +44,12 @@ export const kitchenStationEnum = pgEnum("kitchen_station", KITCHEN_STATIONS);
 export const paymentMethodEnum = pgEnum("payment_method", PAYMENT_METHODS);
 
 export const orderEventTypeEnum = pgEnum("order_event_type", ORDER_EVENT_TYPES);
+
+export const promotionTriggerEnum = pgEnum("promotion_trigger", PROMOTION_TRIGGERS);
+
+export const discountTargetEnum = pgEnum("discount_target", DISCOUNT_TARGETS);
+
+export const discountSourceEnum = pgEnum("discount_source", DISCOUNT_SOURCES);
 
 export const paymentStatusEnum = pgEnum("payment_status", [
   "pending", // awaiting payment integration (Stripe) — v1 default
@@ -229,6 +243,8 @@ export const orders = pgTable("orders", {
   taxCents: integer("tax_cents").notNull(),
   deliveryFeeCents: integer("delivery_fee_cents").notNull().default(0),
   tipCents: integer("tip_cents").notNull().default(0),
+  /** Sum of this order's order_discounts rows; subtotalCents stays the gross item subtotal. */
+  discountCents: integer("discount_cents").notNull().default(0),
   totalCents: integer("total_cents").notNull(),
   paymentStatus: paymentStatusEnum("payment_status")
     .notNull()
@@ -303,6 +319,92 @@ export const orderEvents = pgTable(
 );
 
 // ---------------------------------------------------------------------------
+// Promotions
+// ---------------------------------------------------------------------------
+
+export const promotions = pgTable(
+  "promotions",
+  {
+    id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+    /** Customer-facing headline, e.g. "Tuesday 2-for-1 Larges". */
+    name: text("name").notNull(),
+    /** Terms shown to customers. */
+    description: text("description"),
+    trigger: promotionTriggerEnum("trigger").notNull(),
+    /** Validated by promotionRewardSchema on every write and parsed on read. */
+    reward: jsonb("reward").$type<PromotionReward>().notNull(),
+    minSubtotalCents: integer("min_subtotal_cents").notNull().default(0),
+    orderTypes: orderTypeEnum("order_types").array().notNull(),
+    startsAt: timestamp("starts_at", { withTimezone: true }),
+    /** Exclusive: the instant the offer stops. */
+    endsAt: timestamp("ends_at", { withTimezone: true }),
+    /** Null = any time; windows are on the store's clock. */
+    schedule: jsonb("schedule").$type<WeeklyWindow[]>(),
+    newCustomersOnly: boolean("new_customers_only").notNull().default(false),
+    perCustomerLimit: integer("per_customer_limit"),
+    totalLimit: integer("total_limit"),
+    stackable: boolean("stackable").notNull().default(false),
+    /** Shown in the storefront deals strip; off = a private code. */
+    advertised: boolean("advertised").notNull().default(true),
+    isActive: boolean("is_active").notNull().default(true),
+    archivedAt: timestamp("archived_at", { withTimezone: true }),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [check("promotions_order_types_check", sql`cardinality(${t.orderTypes}) > 0`)],
+);
+
+export const promotionCodes = pgTable(
+  "promotion_codes",
+  {
+    id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+    promotionId: integer("promotion_id")
+      .notNull()
+      .references(() => promotions.id, { onDelete: "cascade" }),
+    /** normalizeCode form, the one matching uses. */
+    code: text("code").notNull().unique(),
+    /** As the operator wrote or generated it: "MINK-7KQ2-X9". */
+    display: text("display").notNull(),
+    /** 1 for generated single-use codes; null = unlimited. */
+    maxUses: integer("max_uses"),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [index("promotion_codes_promotion_id_idx").on(t.promotionId)],
+);
+
+/**
+ * The redemption ledger: one row per promotion applied to an order, plus
+ * operator comps. Usage is derived by counting rows whose order isn't
+ * canceled, so a cancel gives the use back with no counter to drift.
+ */
+export const orderDiscounts = pgTable(
+  "order_discounts",
+  {
+    id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+    orderId: uuid("order_id")
+      .notNull()
+      .references(() => orders.id, { onDelete: "cascade" }),
+    promotionId: integer("promotion_id").references(() => promotions.id, { onDelete: "set null" }),
+    codeId: integer("code_id").references(() => promotionCodes.id, { onDelete: "set null" }),
+    /** Snapshot of the promotion name or comp reason, shown on the receipt forever. */
+    label: text("label").notNull(),
+    amountCents: integer("amount_cents").notNull(),
+    target: discountTargetEnum("target").notNull(),
+    customerKey: text("customer_key").notNull(),
+    source: discountSourceEnum("source").notNull(),
+    operatorId: integer("operator_id").references(() => operators.id, { onDelete: "set null" }),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    check("order_discounts_amount_check", sql`${t.amountCents} > 0`),
+    index("order_discounts_order_id_idx").on(t.orderId),
+    index("order_discounts_promotion_id_idx").on(t.promotionId),
+    index("order_discounts_code_id_idx").on(t.codeId),
+    index("order_discounts_customer_key_promotion_id_idx").on(t.customerKey, t.promotionId),
+  ],
+);
+
+// ---------------------------------------------------------------------------
 // Relations
 // ---------------------------------------------------------------------------
 
@@ -350,6 +452,25 @@ export const itemModifierGroupsRelations = relations(
 export const ordersRelations = relations(orders, ({ many }) => ({
   items: many(orderItems),
   events: many(orderEvents),
+  discounts: many(orderDiscounts),
+}));
+
+export const orderDiscountsRelations = relations(orderDiscounts, ({ one }) => ({
+  order: one(orders, {
+    fields: [orderDiscounts.orderId],
+    references: [orders.id],
+  }),
+}));
+
+export const promotionsRelations = relations(promotions, ({ many }) => ({
+  codes: many(promotionCodes),
+}));
+
+export const promotionCodesRelations = relations(promotionCodes, ({ one }) => ({
+  promotion: one(promotions, {
+    fields: [promotionCodes.promotionId],
+    references: [promotions.id],
+  }),
 }));
 
 export const orderEventsRelations = relations(orderEvents, ({ one }) => ({
