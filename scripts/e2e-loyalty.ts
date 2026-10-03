@@ -431,6 +431,13 @@ async function main() {
   await rita.getByRole("button", { name: "Save" }).click();
   await rita.getByTestId("birthday").waitFor();
   check("birthday becomes read-only once set", await rita.getByText("Contact the store to change it.").isVisible());
+  const monthName = new Date(2026, month - 1, 1).toLocaleString("en-US", { month: "long" });
+  check(
+    "a birthday set this month says the bonus comes next year",
+    (await rita.getByTestId("birthday-arrival").textContent()) ===
+      `Your 750 points arrive in ${monthName} 2027, as long as you've ordered in the past year.`,
+    (await rita.getByTestId("birthday-arrival").textContent()) ?? "",
+  );
   await rita.reload({ waitUntil: "networkidle" });
   check(
     "no birthday points for a birthday set this month",
@@ -444,6 +451,10 @@ async function main() {
   await rita.reload({ waitUntil: "networkidle" });
   const birthdays = (await entries(ritaMember.id)).filter((e) => e.kind === "birthday");
   check("birthday grant posts once", birthdays.length === 1 && birthdays[0].points === 750, JSON.stringify(birthdays.map((b) => b.points)));
+  check(
+    "member sees the bonus arrived",
+    (await rita.getByTestId("birthday-arrival").textContent()) === "This year's 750 points have arrived. Happy birthday!",
+  );
 
   await fillCart(rita, cartLine);
   await rita.goto(`${BASE}/checkout`, { waitUntil: "networkidle" });
@@ -568,6 +579,23 @@ async function main() {
   check(
     "adding it twice is refused",
     (await op.getByTestId("form-error").textContent()) === "That order already belongs to a member.",
+  );
+
+  // --- Operator-issued birthday bonus --------------------------------------
+  await op.goto(`${BASE}/admin/loyalty/members/${caraMember.id}`, { waitUntil: "networkidle" });
+  await op.getByRole("button", { name: /^Issue birthday bonus/ }).click();
+  await op.waitForURL(/saved=birthday-issued/);
+  const caraBirthday = (await entries(caraMember.id)).filter((e) => e.kind === "birthday");
+  check(
+    "operator issues a birthday bonus",
+    caraBirthday.length === 1 && caraBirthday[0].points === 750 && caraBirthday[0].operatorId === opRow.id,
+  );
+  await op.getByRole("button", { name: /^Issue birthday bonus/ }).click();
+  await op.getByTestId("form-error").waitFor();
+  check(
+    "a second issue in the same year is refused",
+    (await op.getByTestId("form-error").textContent()) === "This year's birthday bonus was already issued." &&
+      (await entries(caraMember.id)).filter((e) => e.kind === "birthday").length === 1,
   );
 
   // --- Price protection ----------------------------------------------------

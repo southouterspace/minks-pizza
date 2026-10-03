@@ -4,7 +4,13 @@ import { ArrowLeft } from "lucide-react";
 import { requireOperator } from "@/lib/auth";
 import { EXPIRY_RESTORE_DAYS, LEDGER_KIND_RULES, formatMultiplier, formatPhone } from "@/lib/loyalty";
 import { getLoyaltySettings, getMember, ledgerKey, memberLedger, memberStatus } from "@/lib/loyalty-server";
-import { addMissingOrder, adjustPoints, restoreExpired, saveMemberBirthday } from "../../actions";
+import {
+  addMissingOrder,
+  adjustPoints,
+  issueBirthdayBonus,
+  restoreExpired,
+  saveMemberBirthday,
+} from "../../actions";
 import { FormNotice } from "@/components/admin/form-notice";
 import { formatDateTime } from "@/components/admin/ui";
 import { Button } from "@/components/ui/button";
@@ -19,6 +25,7 @@ const SAVED: Record<string, string> = {
   adjusted: "Points adjusted.",
   claimed: "Order added and its points posted.",
   restored: "Expired points restored.",
+  "birthday-issued": "Birthday bonus issued.",
   birthday: "Birthday saved.",
 };
 
@@ -101,6 +108,13 @@ export default async function LoyaltyMemberPage({ params, searchParams }: PagePr
                 </Field>
               </div>
               <Button type="submit" variant="outline" className="h-9!">Save birthday</Button>
+            </form>
+            <form action={issueBirthdayBonus} className="mt-4 border-t border-border pt-4">
+              <input type="hidden" name="memberId" value={member.id} />
+              <Button type="submit" variant="outline" className="h-9!">
+                Issue birthday bonus ({settings.birthdayPoints} pts)
+              </Button>
+              <p className="mt-2 text-xs text-muted-foreground">Once a year, whether or not it arrived on its own.</p>
             </form>
           </CardContent>
         </Card>

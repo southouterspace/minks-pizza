@@ -13,7 +13,13 @@ import {
   loyaltySettings,
 } from "@/db";
 import { requireOperator } from "@/lib/auth";
-import { EXPIRY_RESTORE_DAYS, repriceReward, rewardEffectSchema, tiersSchema } from "@/lib/loyalty";
+import {
+  EXPIRY_RESTORE_DAYS,
+  localDate,
+  repriceReward,
+  rewardEffectSchema,
+  tiersSchema,
+} from "@/lib/loyalty";
 import {
   getLoyaltySettings,
   claimOrderByNumber,
@@ -313,6 +319,31 @@ export async function restoreExpired(formData: FormData): Promise<void> {
   ]);
   revalidateLoyalty();
   redirect(`/admin/loyalty/members/${entry.memberId}?saved=restored`);
+}
+
+/** Same key as the automatic grant, so it can't pay twice in a year. */
+export async function issueBirthdayBonus(formData: FormData): Promise<void> {
+  const operator = await requireOperator();
+  const memberId = z.coerce.number().int().positive().parse(text(formData, "memberId"));
+  const memberPath = `/admin/loyalty/members/${memberId}`;
+  const settings = await getLoyaltySettings();
+  const idemKey = ledgerKey.birthday(memberId, localDate(new Date(), settings.timezone).year);
+  const [already] = await db
+    .select({ id: loyaltyLedger.id })
+    .from(loyaltyLedger)
+    .where(eq(loyaltyLedger.idemKey, idemKey));
+  if (already) fail(memberPath, "This year's birthday bonus was already issued.");
+  await db.batch([
+    ledgerStatement({
+      kind: "birthday",
+      idemKey,
+      from: { memberId, points: settings.birthdayPoints },
+      note: "Issued by the store",
+      operatorId: operator.id,
+    }),
+  ]);
+  revalidateLoyalty();
+  redirect(`${memberPath}?saved=birthday-issued`);
 }
 
 const CLAIM_ERRORS = {

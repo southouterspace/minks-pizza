@@ -7,6 +7,7 @@ import {
   expiryDue,
   formatMultiplier,
   formatPhone,
+  nextBirthdayGrant,
   normalizePhone,
   pointsSafeUntil,
   rewardDiscount,
@@ -192,6 +193,32 @@ describe("birthdayGrantDue", () => {
     assert.equal(
       birthdayGrantDue({ ...member, lastCompletedOrderAt: new Date("2025-10-01T00:00:00Z") }, now, TZ),
       false,
+    );
+  });
+});
+
+describe("nextBirthdayGrant", () => {
+  const now = new Date("2026-10-15T17:00:00Z");
+  it("is this month when the birthday was set long enough ago", () => {
+    assert.deepEqual(
+      nextBirthdayGrant({ birthMonth: 10, birthdaySetAt: new Date("2026-08-01T00:00:00Z") }, now, TZ),
+      { month: 10, year: 2026 },
+    );
+  });
+  it("waits a year when the birthday month is now but it was just set", () => {
+    assert.deepEqual(
+      nextBirthdayGrant({ birthMonth: 10, birthdaySetAt: new Date("2026-10-10T00:00:00Z") }, now, TZ),
+      { month: 10, year: 2027 },
+    );
+  });
+  it("rolls past December", () => {
+    assert.deepEqual(
+      nextBirthdayGrant({ birthMonth: 2, birthdaySetAt: new Date("2026-10-15T00:00:00Z") }, now, TZ),
+      { month: 2, year: 2027 },
+    );
+    assert.deepEqual(
+      nextBirthdayGrant({ birthMonth: 12, birthdaySetAt: new Date("2026-10-15T00:00:00Z") }, now, TZ),
+      { month: 12, year: 2026 },
     );
   });
 });

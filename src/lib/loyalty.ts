@@ -338,6 +338,26 @@ export function birthdayGrantDue(
 }
 
 /**
+ * The month and year a birthday bonus can next arrive: the first birthday
+ * month that starts after now and at least 30 days after the birthday was set
+ * (or the current month, when both already hold).
+ */
+export function nextBirthdayGrant(
+  member: { birthMonth: number; birthdaySetAt: Date },
+  now: Date,
+  timezone: string,
+): { month: number; year: number } {
+  const earliest = new Date(Math.max(now.getTime(), member.birthdaySetAt.getTime() + 30 * DAY_MS));
+  const start = localDate(earliest, timezone);
+  if (start.month === member.birthMonth) return { month: start.month, year: start.year };
+  const monthsAhead = (member.birthMonth - start.month + 12) % 12;
+  return {
+    month: member.birthMonth,
+    year: start.year + (start.month + monthsAhead > 12 ? 1 : 0),
+  };
+}
+
+/**
  * When a balance expires without another completed order; null when it never
  * will. `lastActivityAt` is the last completed order (or enrollment).
  */

@@ -9,6 +9,7 @@ import {
   formatPhone,
   formatPriceIncrease,
   localDate,
+  nextBirthdayGrant,
   orderPointsStatus,
   pointsSafeUntil,
   PRICE_PROTECTION_DAYS,
@@ -19,6 +20,7 @@ import {
   currentPromotion,
   getLoyaltySettings,
   getMember,
+  ledgerKey,
   listRewards,
   memberLedger,
   memberOrders,
@@ -245,6 +247,11 @@ async function MemberView({
   ]);
   const year = localDate(new Date(), loyalty.timezone).year;
   const safeUntil = pointsSafeUntil(member, loyalty.expirationMonths);
+  const birthdayArrived = ledger.some((e) => e.idemKey === ledgerKey.birthday(member.id, year));
+  const birthdayNext =
+    member.birthMonth && member.birthdaySetAt
+      ? nextBirthdayGrant({ birthMonth: member.birthMonth, birthdaySetAt: member.birthdaySetAt }, new Date(), loyalty.timezone)
+      : null;
 
   return (
     <div className="space-y-8">
@@ -357,14 +364,24 @@ async function MemberView({
           </CardHeader>
           <CardContent>
             {member.birthMonth && member.birthDay ? (
-              <p className="text-sm" data-testid="birthday">
-                {MONTHS[member.birthMonth - 1]} {member.birthDay}
-                <span className="block text-xs text-muted-foreground">Contact the store to change it.</span>
-              </p>
+              <div className="space-y-2 text-sm" data-testid="birthday">
+                <p className="font-medium">
+                  {MONTHS[member.birthMonth - 1]} {member.birthDay}
+                </p>
+                <p className="text-muted-foreground" data-testid="birthday-arrival">
+                  {birthdayArrived
+                    ? `This year's ${loyalty.birthdayPoints} points have arrived. Happy birthday!`
+                    : birthdayNext
+                      ? `Your ${loyalty.birthdayPoints} points arrive in ${MONTHS[birthdayNext.month - 1]} ${birthdayNext.year}, as long as you've ordered in the past year.`
+                      : null}
+                </p>
+                <p className="text-xs text-muted-foreground">Contact the store to change it.</p>
+              </div>
             ) : (
               <form action={saveBirthday} className="space-y-3">
                 <p className="text-sm text-muted-foreground">
-                  Get {loyalty.birthdayPoints} points in your birthday month. You can set it once.
+                  Get {loyalty.birthdayPoints} points in your birthday month. It arrives once a year when your birthday
+                  was set at least 30 days before and you&apos;ve ordered in the past year. You can set it once.
                 </p>
                 <div className="flex gap-2">
                   <NativeSelect name="month" aria-label="Birth month" required defaultValue="">
