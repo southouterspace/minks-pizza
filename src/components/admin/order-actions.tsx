@@ -1,6 +1,6 @@
 "use client";
 
-import { useActionState, useEffect, useRef, useState, type ReactNode } from "react";
+import { useState, type ReactNode } from "react";
 import { useFormStatus } from "react-dom";
 import { Printer } from "lucide-react";
 import { toast } from "sonner";
@@ -21,9 +21,13 @@ import { Field, FieldGroup, FieldLabel } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import { NativeSelect, NativeSelectOption } from "@/components/ui/native-select";
 
-type OrderAction = (prev: OrderActionState, formData: FormData) => Promise<OrderActionState>;
+type OrderAction = (formData: FormData) => Promise<OrderActionState>;
 
-/** A form bound to an order action: failures surface as a toast, success can close a dialog. */
+/**
+ * A form bound to an order action. Feedback runs from the submit handler,
+ * not from component state: a successful move re-renders the board and
+ * remounts the card in another lane, which would drop that state.
+ */
 export function ActionForm({
   action,
   orderId,
@@ -37,18 +41,15 @@ export function ActionForm({
   className?: string;
   onSuccess?: () => void;
 }) {
-  const [state, formAction] = useActionState(action, {});
-  const onSuccessRef = useRef(onSuccess);
-  useEffect(() => {
-    onSuccessRef.current = onSuccess;
-  });
-  useEffect(() => {
-    if (!state.at) return;
-    if (state.error) toast.error(state.error);
-    else onSuccessRef.current?.();
-  }, [state]);
   return (
-    <form action={formAction} className={className}>
+    <form
+      className={className}
+      action={async (formData) => {
+        const result = await action(formData);
+        if (result.error) toast.error(result.error);
+        else onSuccess?.();
+      }}
+    >
       <input type="hidden" name="orderId" value={orderId} />
       {children}
     </form>

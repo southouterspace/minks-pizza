@@ -284,7 +284,7 @@ export async function changeOwnPassword(
 // Orders
 // ---------------------------------------------------------------------------
 
-export type OrderActionState = { error?: string; at?: number };
+export type OrderActionState = { error?: string };
 
 async function operatorActor(): Promise<Actor> {
   const operator = await requireOperator();
@@ -293,15 +293,12 @@ async function operatorActor(): Promise<Actor> {
 
 function orderActionState(result: OrderActionResult): OrderActionState {
   revalidatePath("/admin", "layout");
-  return result.ok ? { at: Date.now() } : { error: result.reason, at: Date.now() };
+  return result.ok ? {} : { error: result.reason };
 }
 
 const orderIdField = (fd: FormData) => z.uuid().parse(textField(fd, "orderId"));
 
-export async function moveOrder(
-  _prev: OrderActionState,
-  formData: FormData,
-): Promise<OrderActionState> {
+export async function moveOrder(formData: FormData): Promise<OrderActionState> {
   const actor = await operatorActor();
   const to = z.enum(ORDER_STATUSES).exclude(["canceled"]).parse(textField(formData, "to"));
   return orderActionState(
@@ -309,13 +306,10 @@ export async function moveOrder(
   );
 }
 
-export async function cancelOrder(
-  _prev: OrderActionState,
-  formData: FormData,
-): Promise<OrderActionState> {
+export async function cancelOrder(formData: FormData): Promise<OrderActionState> {
   const actor = await operatorActor();
   const reason = z.enum(CANCEL_REASONS).safeParse(textField(formData, "reason"));
-  if (!reason.success) return { error: "Pick a reason for canceling.", at: Date.now() };
+  if (!reason.success) return { error: "Pick a reason for canceling." };
   const detail = textField(formData, "detail").slice(0, 300);
   return orderActionState(
     await transitionOrder({
@@ -327,10 +321,7 @@ export async function cancelOrder(
   );
 }
 
-export async function adjustPromisedTimeAction(
-  _prev: OrderActionState,
-  formData: FormData,
-): Promise<OrderActionState> {
+export async function adjustPromisedTimeAction(formData: FormData): Promise<OrderActionState> {
   const actor = await operatorActor();
   const minutes = z.coerce.number().int().min(-60).max(120).parse(textField(formData, "minutes"));
   return orderActionState(
@@ -338,10 +329,7 @@ export async function adjustPromisedTimeAction(
   );
 }
 
-export async function recordPaymentAction(
-  _prev: OrderActionState,
-  formData: FormData,
-): Promise<OrderActionState> {
+export async function recordPaymentAction(formData: FormData): Promise<OrderActionState> {
   const actor = await operatorActor();
   const method = z.enum(PAYMENT_METHODS).parse(textField(formData, "method"));
   return orderActionState(
@@ -349,13 +337,10 @@ export async function recordPaymentAction(
   );
 }
 
-export async function addOrderNoteAction(
-  _prev: OrderActionState,
-  formData: FormData,
-): Promise<OrderActionState> {
+export async function addOrderNoteAction(formData: FormData): Promise<OrderActionState> {
   const actor = await operatorActor();
   const note = textField(formData, "note").slice(0, 500);
-  if (!note) return { error: "Write a note first.", at: Date.now() };
+  if (!note) return { error: "Write a note first." };
   return orderActionState(
     await addOrderNote({ orderId: orderIdField(formData), note, actor }),
   );
