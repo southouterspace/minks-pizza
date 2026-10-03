@@ -6,7 +6,7 @@
  * Money is integer cents, percentages are basis points (2000 = 20%).
  */
 import { z } from "zod";
-import { DAY_NAMES, formatTime, zonedParts } from "./hours";
+import { DAY_NAMES, formatTime, zonedDayStart, zonedParts } from "./hours";
 import { formatCents } from "./money";
 import { normalizeCode } from "./promo-code";
 
@@ -76,6 +76,56 @@ export const weeklyWindowSchema = z
   .refine((w) => w.start !== w.end, "A time window needs different start and end times");
 /** `days`: 0 = Sunday. An end at or before the start runs past midnight. */
 export type WeeklyWindow = z.infer<typeof weeklyWindowSchema>;
+
+const day = z
+  .string()
+  .regex(/^\d{4}-\d{2}-\d{2}$/, "Pick a date")
+  .nullable();
+
+/** What the operator's form submits; dates are store-local days, both inclusive. */
+export const promotionInputSchema = z
+  .object({
+    name: z.string().trim().min(1, "Give the deal a name customers will see").max(80),
+    description: z.string().trim().max(500).nullable(),
+    trigger: z.enum(PROMOTION_TRIGGERS),
+    reward: promotionRewardSchema,
+    minSubtotalCents: z.number().int().min(0).max(1_000_000),
+    orderTypes: z.array(z.enum(ORDER_TYPES)).min(1, "Pick pickup, delivery or both").max(2),
+    startsOn: day,
+    endsOn: day,
+    schedule: z.array(weeklyWindowSchema).max(14),
+    newCustomersOnly: z.boolean(),
+    perCustomerLimit: z.number().int().min(1, "Limits must be at least 1").max(1000).nullable(),
+    totalLimit: z.number().int().min(1, "Limits must be at least 1").max(1_000_000).nullable(),
+    stackable: z.boolean(),
+    advertised: z.boolean(),
+  })
+  .refine((p) => !p.startsOn || !p.endsOn || p.endsOn >= p.startsOn, {
+    message: "The end date must be on or after the start date",
+    path: ["endsOn"],
+  })
+  .refine((p) => p.reward.type !== "free_delivery" || p.orderTypes.includes("delivery"), {
+    message: "Free delivery needs delivery orders",
+    path: ["orderTypes"],
+  });
+export type PromotionInput = z.infer<typeof promotionInputSchema>;
+
+/** Form input to stored columns: days become instants on the store's clock. */
+export function promotionColumns(input: PromotionInput, timezone: string) {
+  const { startsOn, endsOn, ...rest } = input;
+  const nextDay = (d: string) => {
+    const t = new Date(`${d}T00:00:00Z`);
+    t.setUTCDate(t.getUTCDate() + 1);
+    return t.toISOString().slice(0, 10);
+  };
+  return {
+    ...rest,
+    description: rest.description || null,
+    schedule: rest.schedule.length ? rest.schedule : null,
+    startsAt: startsOn ? zonedDayStart(startsOn, timezone) : null,
+    endsAt: endsOn ? zonedDayStart(nextDay(endsOn), timezone) : null,
+  };
+}
 
 /** Everything the evaluator reads about a promotion. */
 export type PromotionTerms = {
