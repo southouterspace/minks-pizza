@@ -30,7 +30,7 @@ run(async () => {
   const menuRes = await fetch(`${BASE}/api/pos/menu`, { headers: locked });
   const menu = (await menuRes.json()) as PosMenu;
   check("menu loads on the operator session alone", menuRes.status, 200);
-  check("menu carries the half rule", menu.policy, { halfToppingRule: "average", extraToppingBps: 20_000 });
+  check("menu carries the half rule", menu.policy, { halfToppingRule: "average", halfToppingPriceBps: 5_000, extraToppingBps: 20_000 });
 
   const board = await fetch(`${BASE}/api/pos/board`, { headers: locked });
   check("board loads", board.status, 200);
