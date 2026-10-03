@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import {
   activePromotion,
   birthdayGrantDue,
+  birthdaySchema,
   earnPoints,
   expiryDue,
   formatMultiplier,
@@ -194,6 +195,17 @@ describe("birthdayGrantDue", () => {
       birthdayGrantDue({ ...member, lastCompletedOrderAt: new Date("2025-10-01T00:00:00Z") }, now, TZ),
       false,
     );
+  });
+});
+
+describe("birthdaySchema", () => {
+  it("accepts a leap-day birthday", () => {
+    assert.deepEqual(birthdaySchema.parse({ month: "2", day: "29" }), { month: 2, day: 29 });
+  });
+
+  it("rejects a day the month doesn't have with a message", () => {
+    const result = birthdaySchema.safeParse({ month: "2", day: "31" });
+    assert.equal(result.success ? null : result.error.issues[0].message, "That date doesn't exist.");
   });
 });
 

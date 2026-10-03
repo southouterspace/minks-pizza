@@ -321,6 +321,21 @@ export function repriceReward(current: RewardPricing, newCost: number, now: Date
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
+export const MONTHS = [
+  "January", "February", "March", "April", "May", "June",
+  "July", "August", "September", "October", "November", "December",
+] as const;
+
+// February allows 29: a leap-day birthday is still a birthday.
+const DAYS_IN_MONTH = [31, 29, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+
+export const birthdaySchema = z
+  .object({
+    month: z.coerce.number().int().min(1).max(12),
+    day: z.coerce.number().int().min(1).max(31),
+  })
+  .refine((b) => b.day <= DAYS_IN_MONTH[b.month - 1], "That date doesn't exist.");
+
 /**
  * True during the member's birthday month for a member who ordered in the
  * last year, unless the birthday was set in the last 30 days (stops setting

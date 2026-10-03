@@ -9,6 +9,7 @@ import {
   formatPhone,
   formatPriceIncrease,
   localDate,
+  MONTHS,
   nextBirthdayGrant,
   orderPointsStatus,
   pointsSafeUntil,
@@ -31,24 +32,20 @@ import {
   type LoyaltySettings,
 } from "@/lib/loyalty-server";
 import { formatCents } from "@/lib/money";
-import { saveBirthday, signOut } from "./actions";
+import { signOut } from "./actions";
 import { ComingSoon } from "@/components/store/coming-soon";
+import { BirthdayForm } from "@/components/store/birthday-form";
 import { CopyLink } from "@/components/store/copy-link";
 import { DeleteAccountButton } from "@/components/store/delete-account-button";
 import { RewardsSignIn } from "@/components/store/rewards-sign-in";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { NativeSelect, NativeSelectOption } from "@/components/ui/native-select";
 import { cn } from "@/lib/utils";
 
 export const metadata: Metadata = { title: "Rewards" };
 export const dynamic = "force-dynamic";
 
-const MONTHS = [
-  "January", "February", "March", "April", "May", "June",
-  "July", "August", "September", "October", "November", "December",
-];
 
 function Progress({ fraction, label }: { fraction: number; label: string }) {
   return (
@@ -379,27 +376,7 @@ async function MemberView({
                 <p className="text-xs text-muted-foreground">Contact the store to change it.</p>
               </div>
             ) : (
-              <form action={saveBirthday} className="space-y-3">
-                <p className="text-sm text-muted-foreground">
-                  Get {loyalty.birthdayPoints} points in your birthday month. It arrives once a year when your birthday
-                  was set at least 30 days before and you&apos;ve ordered in the past year. You can set it once.
-                </p>
-                <div className="flex gap-2">
-                  <NativeSelect name="month" aria-label="Birth month" required defaultValue="">
-                    <NativeSelectOption value="" disabled>Month</NativeSelectOption>
-                    {MONTHS.map((m, i) => (
-                      <NativeSelectOption key={m} value={i + 1}>{m}</NativeSelectOption>
-                    ))}
-                  </NativeSelect>
-                  <NativeSelect name="day" aria-label="Birth day" required defaultValue="">
-                    <NativeSelectOption value="" disabled>Day</NativeSelectOption>
-                    {Array.from({ length: 31 }, (_, i) => (
-                      <NativeSelectOption key={i} value={i + 1}>{i + 1}</NativeSelectOption>
-                    ))}
-                  </NativeSelect>
-                  <Button type="submit" variant="outline" className="h-9!">Save</Button>
-                </div>
-              </form>
+              <BirthdayForm points={loyalty.birthdayPoints} />
             )}
           </CardContent>
         </Card>

@@ -14,6 +14,7 @@ import {
 } from "@/db";
 import { requireOperator } from "@/lib/auth";
 import {
+  birthdaySchema,
   localDate,
   repriceReward,
   rewardEffectSchema,
@@ -346,19 +347,12 @@ export async function addMissingOrder(formData: FormData): Promise<void> {
   redirect(`${memberPath}?saved=claimed`);
 }
 
-const birthdaySchema = z.object({
-  memberId: z.coerce.number().int().positive(),
-  month: z.coerce.number().int().min(1).max(12),
-  day: z.coerce.number().int().min(1).max(31),
-});
-
 export async function saveMemberBirthday(formData: FormData): Promise<void> {
   await requireOperator();
-  const { memberId, month, day } = birthdaySchema.parse({
-    memberId: text(formData, "memberId"),
-    month: text(formData, "month"),
-    day: text(formData, "day"),
-  });
+  const memberId = z.coerce.number().int().positive().parse(text(formData, "memberId"));
+  const birthday = birthdaySchema.safeParse({ month: text(formData, "month"), day: text(formData, "day") });
+  if (!birthday.success) fail(`/admin/loyalty/members/${memberId}`, birthday.error);
+  const { month, day } = birthday.data;
   await db
     .update(loyaltyMembers)
     .set({

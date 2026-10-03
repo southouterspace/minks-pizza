@@ -11,6 +11,7 @@ import {
   verifyLoginCode,
   type CodeRequestResult,
 } from "@/lib/member-auth";
+import { birthdaySchema } from "@/lib/loyalty";
 import { getLoyaltySettings } from "@/lib/loyalty-server";
 
 export async function sendCode(phone: string): Promise<CodeRequestResult> {
@@ -58,23 +59,20 @@ export async function deleteMyAccount(): Promise<void> {
   revalidatePath("/", "layout");
 }
 
-const DAYS_IN_MONTH = [31, 29, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
-
-const birthdaySchema = z
-  .object({ month: z.coerce.number().int().min(1).max(12), day: z.coerce.number().int().min(1).max(31) })
-  .refine((b) => b.day <= DAYS_IN_MONTH[b.month - 1], "That date doesn't exist.");
+/** On error, what was picked, so the form can show it again after React resets it. */
+export type BirthdayFormState = { error?: string; month?: string; day?: string };
 
 /** Customers set their birthday once; changes go through the store. */
-export async function saveBirthday(formData: FormData): Promise<void> {
+export async function saveBirthday(_prev: BirthdayFormState, formData: FormData): Promise<BirthdayFormState> {
   const memberId = await getCurrentMemberId();
-  if (memberId === null) return;
-  const { month, day } = birthdaySchema.parse({
-    month: formData.get("month"),
-    day: formData.get("day"),
-  });
+  if (memberId === null) return { error: "Sign in to save your birthday." };
+  const picked = { month: String(formData.get("month") ?? ""), day: String(formData.get("day") ?? "") };
+  const parsed = birthdaySchema.safeParse(picked);
+  if (!parsed.success) return { error: parsed.error.issues[0]?.message ?? "Pick a month and a day.", ...picked };
   await db
     .update(loyaltyMembers)
-    .set({ birthMonth: month, birthDay: day, birthdaySetAt: new Date() })
+    .set({ birthMonth: parsed.data.month, birthDay: parsed.data.day, birthdaySetAt: new Date() })
     .where(and(eq(loyaltyMembers.id, memberId), isNull(loyaltyMembers.birthMonth)));
   revalidatePath("/rewards");
+  return {};
 }
