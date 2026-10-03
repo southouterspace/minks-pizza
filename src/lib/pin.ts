@@ -1,7 +1,8 @@
 import { createHmac } from "node:crypto";
 import { and, eq, sql } from "drizzle-orm";
 import { db, employees, pinAttempts } from "@/db";
-import type { Actor } from "@/lib/orders";
+import { roleSatisfies, type Actor, type Approval, type Failure, type RequiredRole } from "@/lib/orders";
+import type { StaffContext } from "@/lib/staff";
 
 const MAX_FAILURES = 5;
 const FAILURE_WINDOW = "5 minutes";
@@ -66,4 +67,22 @@ export async function checkPin(pin: string, operatorId: number): Promise<PinChec
   }
   await db.delete(pinAttempts).where(eq(pinAttempts.operatorId, operatorId));
   return { ok: true, actor: employee };
+}
+
+/**
+ * Who approved a gated action: the actor when their own role suffices, else
+ * the manager whose PIN came with the request. Null when no gate applies.
+ */
+export async function authorize(
+  required: RequiredRole,
+  staff: StaffContext,
+  approval: Approval | undefined,
+): Promise<{ ok: true; approvedBy: number | null } | Failure> {
+  if (required === "cashier") return { ok: true, approvedBy: null };
+  if (roleSatisfies(staff.actor.role, required)) return { ok: true, approvedBy: staff.actor.employeeId };
+  if (!approval) return { ok: false, reason: "needs_manager" };
+  const check = await checkPin(approval.managerPin, staff.operatorId);
+  if (!check.ok) return { ok: false, reason: check.reason };
+  if (!roleSatisfies(check.actor.role, required)) return { ok: false, reason: "needs_manager" };
+  return { ok: true, approvedBy: check.actor.employeeId };
 }

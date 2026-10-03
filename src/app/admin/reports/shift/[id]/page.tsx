@@ -1,8 +1,8 @@
 import type { Metadata } from "next";
 import { notFound } from "next/navigation";
 import { requireOperator } from "@/lib/auth";
-import { getStoreBasics, getShiftReport } from "@/lib/orders-server";
-import { UUID_RE, getShift } from "@/lib/reports-server";
+import { getStoreBasics } from "@/lib/settings-server";
+import { getShift, shiftReportOf, UUID_RE } from "@/lib/reports-server";
 import { formatStoreDateTime, storeDateOf } from "@/lib/store-time";
 import { ReportDocument, type Paper } from "@/components/admin/report-document";
 import { ReportToolbar } from "@/components/admin/report-toolbar";
@@ -23,9 +23,10 @@ export default async function ShiftReportPage({
   const { id } = await params;
   if (!UUID_RE.test(id)) notFound();
   const paper: Paper = (await searchParams).paper === "receipt" ? "receipt" : "letter";
-  const [settings, row, report] = await Promise.all([getStoreBasics(), getShift(id), getShiftReport(id)]);
-  if (!row || !report) notFound();
+  const [settings, row] = await Promise.all([getStoreBasics(), getShift(id)]);
+  if (!row) notFound();
   const { shift, openedBy, closedBy } = row;
+  const report = await shiftReportOf(shift);
   const tz = settings.timezone;
 
   return (

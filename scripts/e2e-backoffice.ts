@@ -13,16 +13,11 @@ import bcrypt from "bcryptjs";
 import { eq } from "drizzle-orm";
 import { chromium, type Page } from "playwright";
 import { db, employees, operators, pinAttempts, storeSettings } from "../src/db";
-import {
-  closeShift,
-  getOpenShift,
-  getPosMenu,
-  getStoreBasics,
-  mutateOrder,
-  openShift,
-  recordDrawerEvent,
-  submitOrder,
-} from "../src/lib/orders-server";
+import { submitOrder } from "../src/lib/orders-server/submit";
+import { mutateOrder } from "../src/lib/orders-server/mutate";
+import { getStoreBasics } from "../src/lib/settings-server";
+import { getPosMenu } from "../src/lib/menu-server";
+import { closeShift, getOpenShift, openShift, recordDrawerEvent } from "../src/lib/shifts-server";
 import type { OrderMutation, OrderView, SubmitOrderRequest } from "../src/lib/orders";
 import { pinDigest } from "../src/lib/pin";
 import { storeDateOf } from "../src/lib/store-time";

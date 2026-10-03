@@ -1,7 +1,7 @@
 import type { Metadata } from "next";
 import { notFound } from "next/navigation";
 import { requireOperator } from "@/lib/auth";
-import { getStoreBasics } from "@/lib/orders-server";
+import { getStoreBasics } from "@/lib/settings-server";
 import { getDayReport } from "@/lib/reports-server";
 import { formatStoreDate, formatStoreDateTime, parseStoreDate } from "@/lib/store-time";
 import { ReportDocument, type Paper } from "@/components/admin/report-document";

@@ -1,7 +1,8 @@
 /**
  * Order domain: the types every screen renders and the pure rules over them
- * (payment state, role policy, activity log). No I/O; the server seam that
- * reads and writes these lives in orders-server.ts.
+ * (payment state, role policy, activity log) and the wire contract the POS
+ * and storefront share with the server. No I/O; the server seam that reads
+ * and writes these lives in orders-server/.
  */
 import type { KitchenStation } from "@/lib/kds";
 import type { LineModifier, MenuItem, PricingPolicy, Selection } from "@/lib/pricing";

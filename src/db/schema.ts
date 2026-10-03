@@ -21,7 +21,7 @@ import { DEFAULT_TIMEZONE } from "../lib/store-time";
 
 /**
  * Kitchen lifecycle, derived from line stamps by the status fold in
- * orders-server.ts. `held` = nothing fired yet (scheduled or a held check).
+ * orders-server/folds.ts. `held` = nothing fired yet (scheduled or a held check).
  */
 export const orderStatusEnum = pgEnum("order_status", [
   "held",
@@ -325,7 +325,7 @@ export const orders = pgTable(
     promisedAt: timestamp("promised_at", { withTimezone: true }),
     /** Set on a split-by-item check: the KDS keeps it on its parent's ticket. */
     ticketOrderId: uuid("ticket_order_id"),
-    // Money folds: written only by recomputeTotals in orders-server.ts.
+    // Money folds: written only by recomputeTotals in orders-server/folds.ts.
     subtotalCents: integer("subtotal_cents").notNull().default(0),
     discountCents: integer("discount_cents").notNull().default(0),
     taxCents: integer("tax_cents").notNull().default(0),

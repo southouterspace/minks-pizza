@@ -1,5 +1,5 @@
 import { getCurrentOperator } from "@/lib/auth";
-import { getBoard } from "@/lib/orders-server";
+import { getBoard } from "@/lib/orders-server/views";
 
 export const dynamic = "force-dynamic";
 

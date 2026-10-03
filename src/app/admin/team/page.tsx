@@ -10,7 +10,7 @@ import {
   ChangePasswordForm,
   ChangePinForm,
 } from "@/components/admin/team-forms";
-import { getStoreBasics } from "@/lib/orders-server";
+import { getStoreBasics } from "@/lib/settings-server";
 import { formatStoreDateTime } from "@/lib/store-time";
 import { Badge } from "@/components/ui/badge";
 import { Card } from "@/components/ui/card";

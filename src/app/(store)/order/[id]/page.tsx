@@ -4,7 +4,7 @@ import { notFound } from "next/navigation";
 import { eq } from "drizzle-orm";
 import { db, orderItems, orders } from "@/db";
 import { formatCents } from "@/lib/money";
-import { getSettings } from "@/lib/orders-server";
+import { getSettings } from "@/lib/settings-server";
 import { formatStoreTime } from "@/lib/store-time";
 import { dueCents, paymentState, type KitchenStatus } from "@/lib/orders";
 import { OrderAutoRefresh } from "@/components/store/order-auto-refresh";

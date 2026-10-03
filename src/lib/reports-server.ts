@@ -2,18 +2,21 @@
  * Back-office report reads: the shift list, day reports and CSV exports.
  * Every number comes from the same facts and folds as the shift close.
  */
-import { and, asc, desc, eq, gte, inArray, isNull, lt, or, type SQL } from "drizzle-orm";
-import { alias } from "drizzle-orm/pg-core";
-import { db, drawerEvents, employees, orderItems, orders, shifts, tenders } from "@/db";
+import { and, asc, desc, eq, gte, inArray, isNull, lt, or, sql, type SQL } from "drizzle-orm";
+import { alias, type PgColumn } from "drizzle-orm/pg-core";
+import { adjustments, db, drawerEvents, employees, orderItems, orders, shifts, tenders } from "@/db";
 import { modifierLabel } from "@/lib/orders";
 import {
   reconcileDrawer,
   salesReport,
+  shiftReport,
   type DrawerReconciliation,
+  type ReportFacts,
   type ReportScope,
   type SalesReport,
+  type ShiftReport,
 } from "@/lib/reports";
-import { loadReportFacts, reportOrderIds, tendersIn } from "@/lib/orders-server";
+import { staffNames, totalsOf } from "@/lib/orders-server/rows";
 import { formatStoreTimestamp, parseStoreDate, storeDateOf, storeDayRange, type StoreDate } from "@/lib/store-time";
 
 export type ShiftSummary = {
@@ -69,6 +72,132 @@ export async function getShift(id: string) {
   return row ?? null;
 }
 
+// ---------------------------------------------------------------------------
+// Report facts
+// ---------------------------------------------------------------------------
+
+/** [from, to), or open-ended while a shift is still open. */
+function within(col: PgColumn, scope: ReportScope) {
+  return and(gte(col, scope.from), scope.to ? lt(col, scope.to) : undefined);
+}
+
+/** The tenders a report counts. */
+export function tendersIn(scope: ReportScope) {
+  return scope.kind === "shift" ? eq(tenders.shiftId, scope.shiftId) : within(tenders.createdAt, scope);
+}
+
+/** Ids of every order a report covers: placed in the window, or paid or refunded in it. */
+export function reportOrderIds(scope: ReportScope) {
+  const tendered = db.select({ id: tenders.orderId }).from(tenders).where(tendersIn(scope));
+  return db
+    .select({ id: orders.id })
+    .from(orders)
+    .where(or(within(orders.placedAt, scope), inArray(orders.id, tendered)));
+}
+
+export async function loadReportFacts(scope: ReportScope): Promise<ReportFacts> {
+  const ref = { id: orders.id, number: orders.orderNumber };
+  const lineName = sql<string>`${orderItems.quantity} || ' × ' || ${orderItems.itemName}`;
+  const [tenderRows, drawerRows, adjustmentRows, voidRows, orderRows] = await Promise.all([
+    db
+      .select({ t: tenders, order: ref })
+      .from(tenders)
+      .innerJoin(orders, eq(orders.id, tenders.orderId))
+      .where(tendersIn(scope)),
+    db
+      .select()
+      .from(drawerEvents)
+      .where(scope.kind === "shift" ? eq(drawerEvents.shiftId, scope.shiftId) : within(drawerEvents.createdAt, scope)),
+    db
+      .select({ a: adjustments, order: ref, item: lineName })
+      .from(adjustments)
+      .innerJoin(orders, eq(orders.id, adjustments.orderId))
+      .leftJoin(orderItems, eq(orderItems.lineUid, adjustments.lineUid))
+      .where(within(adjustments.createdAt, scope)),
+    db
+      .select({ i: orderItems, order: ref, item: lineName })
+      .from(orderItems)
+      .innerJoin(orders, eq(orders.id, orderItems.orderId))
+      .where(within(orderItems.voidedAt, scope)),
+    db.select().from(orders).where(inArray(orders.id, reportOrderIds(scope))),
+  ]);
+
+  const staff = await staffNames([
+    ...tenderRows.flatMap(({ t }) => [t.employeeId, t.approvedBy]),
+    ...drawerRows.flatMap((e) => [e.employeeId, e.approvedBy]),
+    ...adjustmentRows.flatMap(({ a }) => [a.employeeId, a.approvedBy]),
+    ...voidRows.flatMap(({ i }) => [i.voidedBy, i.voidApprovedBy]),
+  ]);
+
+  return {
+    window: { from: scope.from.toISOString(), to: scope.to?.toISOString() ?? null },
+    staff,
+    tenders: tenderRows.map(({ t, order }) => ({
+      direction: t.direction,
+      method: t.method,
+      amountCents: t.amountCents,
+      tipCents: t.tipCents,
+      employeeId: t.employeeId,
+      approvedBy: t.approvedBy,
+      reason: t.reason,
+      at: t.createdAt.toISOString(),
+      order,
+    })),
+    adjustments: adjustmentRows.map(({ a, order, item }) => ({
+      kind: a.kind,
+      cents: a.cents,
+      employeeId: a.employeeId,
+      approvedBy: a.approvedBy,
+      reason: a.reason,
+      at: a.createdAt.toISOString(),
+      order,
+      item,
+    })),
+    voids: voidRows.map(({ i, order, item }) => ({
+      employeeId: i.voidedBy,
+      approvedBy: i.voidApprovedBy,
+      cents: i.lineTotalCents,
+      reason: i.voidReason,
+      at: i.voidedAt!.toISOString(),
+      order,
+      item,
+    })),
+    drawerEvents: drawerRows.map((e) => ({
+      kind: e.kind,
+      cents: e.cents,
+      employeeId: e.employeeId,
+      approvedBy: e.approvedBy,
+      reason: e.reason,
+      at: e.createdAt.toISOString(),
+    })),
+    orders: orderRows.map((o) => ({
+      id: o.id,
+      number: o.orderNumber,
+      status: o.status,
+      channel: o.channel,
+      orderType: o.orderType,
+      placedAt: o.placedAt.toISOString(),
+      customerName: o.customerName,
+      totals: totalsOf(o),
+    })),
+  };
+}
+
+type ShiftRow = typeof shifts.$inferSelect;
+
+function shiftScope(shift: ShiftRow): ReportScope {
+  return { kind: "shift", shiftId: shift.id, from: shift.openedAt, to: shift.closedAt };
+}
+
+export async function shiftReportOf(shift: ShiftRow): Promise<ShiftReport> {
+  return shiftReport(shift, await loadReportFacts(shiftScope(shift)));
+}
+
+export async function getShiftReport(shiftId: string): Promise<ShiftReport | null> {
+  const [shift] = await db.select().from(shifts).where(eq(shifts.id, shiftId));
+  return shift ? shiftReportOf(shift) : null;
+}
+
 export async function getDayReport(date: StoreDate, tz: string): Promise<SalesReport> {
   return salesReport(await loadReportFacts({ kind: "day", ...storeDayRange(date, tz) }));
 }
@@ -85,7 +214,7 @@ export async function resolveScope(
     if (!row) return null;
     const { shift } = row;
     return {
-      scope: { kind: "shift", shiftId: shift.id, from: shift.openedAt, to: shift.closedAt },
+      scope: shiftScope(shift),
       label: `shift-${storeDateOf(shift.openedAt, tz)}-${shift.id.slice(0, 8)}`,
     };
   }

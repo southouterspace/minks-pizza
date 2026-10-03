@@ -11,18 +11,13 @@
 import { randomUUID } from "node:crypto";
 import { count, eq } from "drizzle-orm";
 import { db, employees, operators, orderItems, orders, pinAttempts, storeSettings, tenders } from "../src/db";
-import {
-  closeShift,
-  fireDue,
-  getOpenShift,
-  getOrderView,
-  getPosMenu,
-  getSettings,
-  mutateOrder,
-  openShift,
-  recordDrawerEvent,
-  submitOrder,
-} from "../src/lib/orders-server";
+import { submitOrder } from "../src/lib/orders-server/submit";
+import { mutateOrder } from "../src/lib/orders-server/mutate";
+import { getSettings } from "../src/lib/settings-server";
+import { getPosMenu } from "../src/lib/menu-server";
+import { getOrderView } from "../src/lib/orders-server/views";
+import { fireDue } from "../src/lib/orders-server/folds";
+import { closeShift, getOpenShift, openShift, recordDrawerEvent } from "../src/lib/shifts-server";
 import {
   channelLabel,
   orderHistory,

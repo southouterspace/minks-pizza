@@ -1,5 +1,5 @@
 import { submitOrderSchema } from "@/lib/validation";
-import { submitOrder } from "@/lib/orders-server";
+import { submitOrder } from "@/lib/orders-server/submit";
 import { getStaff } from "@/lib/staff";
 
 export const dynamic = "force-dynamic";

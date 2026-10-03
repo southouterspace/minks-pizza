@@ -12,7 +12,8 @@ import { chromium, type Page } from "playwright";
 import { eq } from "drizzle-orm";
 import { randomUUID } from "node:crypto";
 import { db, employees, menuItems, modifierGroups, modifiers, operators, orderItems, orders, storeSettings } from "../src/db";
-import { mutateOrder, submitOrder } from "../src/lib/orders-server";
+import { submitOrder } from "../src/lib/orders-server/submit";
+import { mutateOrder } from "../src/lib/orders-server/mutate";
 import type { Fulfillment } from "../src/lib/orders";
 import { formatStoreTime } from "../src/lib/store-time";
 

@@ -8,7 +8,7 @@ import {
   type KdsOrder,
   type KdsSnapshot,
 } from "@/lib/kds";
-import { fireDue, syncStatus } from "@/lib/orders-server";
+import { fireDue, syncStatus } from "@/lib/orders-server/folds";
 
 const LINE_STATUSES = ["new", "preparing"] as const;
 const RECENT_WINDOW_MS = 2 * 60 * 60 * 1000;

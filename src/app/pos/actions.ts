@@ -1,14 +1,10 @@
 "use server";
 
 import { z } from "zod";
-import {
-  closeShift as closeShiftSeam,
-  getOrderView,
-  getShiftReport,
-  mutateOrder,
-  openShift as openShiftSeam,
-  recordDrawerEvent,
-} from "@/lib/orders-server";
+import { mutateOrder } from "@/lib/orders-server/mutate";
+import { getOrderView } from "@/lib/orders-server/views";
+import { getShiftReport } from "@/lib/reports-server";
+import { closeShift as closeShiftSeam, openShift as openShiftSeam, recordDrawerEvent } from "@/lib/shifts-server";
 import {
   rejected,
   type Actor,

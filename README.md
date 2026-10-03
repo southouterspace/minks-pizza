@@ -352,7 +352,7 @@ npx tsx --env-file=.env.local scripts/e2e-operator.ts     # also e2e-customer, e
 - Money is integer cents everywhere; `orders` carries a full breakdown
   (subtotal, discount, tax, delivery fee, tip, total) and the ledger folds
   `paid_cents` / `refunded_cents` over the `tenders` table.
-- `submitOrder()` in `src/lib/orders-server.ts` is the single seam: create a
+- `submitOrder()` in `src/lib/orders-server/submit.ts` is the single seam: create a
   PaymentIntent for the total after it, and record the captured payment as a
   `tenders` row (with no shift) from the Stripe webhook. `placeOrder` in
   `src/app/(store)/actions.ts` already returns a structured result to which a
@@ -365,9 +365,11 @@ src/
   db/            schema.ts (Drizzle), seed.ts, index.ts (client)
   lib/           menu.ts, auth.ts, validation.ts (zod at the boundaries),
                  pricing.ts (line pricing + half rule, pure),
-                 orders.ts (order domain: payment state, role policy, report folds, pure),
-                 orders-server.ts (submitOrder / mutateOrder seam, folds, reads),
-                 reports-server.ts (shift list, day report, CSV exports),
+                 orders.ts (order domain, role policy and POS wire contract, pure),
+                 orders-server/ (submit, mutate, folds, views: the order seam),
+                 settings-server.ts, menu-server.ts, shifts-server.ts,
+                 reports.ts (report folds, pure),
+                 reports-server.ts (report facts, shift list, day report, CSV exports),
                  store-time.ts (store-local days and times),
                  staff.ts + pin.ts (staff cookie, PIN lookup and lockout),
                  kds.ts (kitchen display rules, pure), kds-server.ts (queries + actions),

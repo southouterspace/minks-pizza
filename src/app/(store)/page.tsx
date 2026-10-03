@@ -1,5 +1,5 @@
 import { getPublicMenu } from "@/lib/menu";
-import { getSettings } from "@/lib/orders-server";
+import { getSettings } from "@/lib/settings-server";
 import { MenuBrowser } from "@/components/store/menu-browser";
 import { ComingSoon } from "@/components/store/coming-soon";
 import { StoreStatusBanner } from "@/components/store/status-banner";

@@ -1,5 +1,5 @@
 import type { NextRequest } from "next/server";
-import { lookupCustomer } from "@/lib/orders-server";
+import { lookupCustomer } from "@/lib/orders-server/views";
 import { getStaff } from "@/lib/staff";
 
 export const dynamic = "force-dynamic";

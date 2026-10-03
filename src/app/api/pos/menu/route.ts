@@ -1,5 +1,5 @@
 import { getCurrentOperator } from "@/lib/auth";
-import { getPosMenu } from "@/lib/orders-server";
+import { getPosMenu } from "@/lib/menu-server";
 
 export const dynamic = "force-dynamic";
 

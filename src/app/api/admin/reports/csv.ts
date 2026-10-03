@@ -1,6 +1,6 @@
 import { getCurrentOperator } from "@/lib/auth";
 import type { ReportScope } from "@/lib/reports";
-import { getStoreBasics } from "@/lib/orders-server";
+import { getStoreBasics } from "@/lib/settings-server";
 import { resolveScope } from "@/lib/reports-server";
 
 /** Operator-only CSV download for `?shift=<id>` or `?date=YYYY-MM-DD`. */

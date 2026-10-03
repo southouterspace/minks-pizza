@@ -3,7 +3,7 @@ import Link from "next/link";
 import { ChevronLeft, ChevronRight, Download, FileText } from "lucide-react";
 import { requireOperator } from "@/lib/auth";
 import { formatCents } from "@/lib/money";
-import { getStoreBasics } from "@/lib/orders-server";
+import { getStoreBasics } from "@/lib/settings-server";
 import { getDayReport, listShifts } from "@/lib/reports-server";
 import {
   addDays,
