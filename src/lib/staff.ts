@@ -38,13 +38,17 @@ export async function unlockStaff(
   if (operatorId === null) return { ok: false, reason: "signed_out" };
   const check = await checkPin(pin, operatorId);
   if (!check.ok) return check;
+  await setStaffCookie(check.actor.employeeId, operatorId);
+  return check;
+}
 
+async function setStaffCookie(employeeId: number, operatorId: number): Promise<void> {
   const [settings] = await db
     .select({ lockSeconds: storeSettings.posLockSeconds })
     .from(storeSettings)
     .where(eq(storeSettings.id, 1));
   const ttl = settings?.lockSeconds ?? 120;
-  const token = await new SignJWT({ sub: String(check.actor.employeeId), op: operatorId })
+  const token = await new SignJWT({ sub: String(employeeId), op: operatorId })
     .setProtectedHeader({ alg: "HS256" })
     .setIssuedAt()
     .setExpirationTime(`${ttl}s`)
@@ -56,7 +60,16 @@ export async function unlockStaff(
     path: "/",
     maxAge: ttl,
   });
-  return check;
+}
+
+/**
+ * Slides the lock window forward while someone is using the terminal, so the
+ * cookie expires after idle time rather than mid-order.
+ */
+export async function renewStaff(): Promise<StaffContext | null> {
+  const staff = await getStaff();
+  if (staff) await setStaffCookie(staff.actor.employeeId, staff.operatorId);
+  return staff;
 }
 
 export async function lockTerminal(): Promise<void> {

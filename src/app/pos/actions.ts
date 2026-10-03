@@ -1,8 +1,10 @@
 "use server";
 
-import type { z } from "zod";
+import { z } from "zod";
 import {
   closeShift as closeShiftSeam,
+  getOrderView,
+  getShiftReport,
   mutateOrder,
   openShift as openShiftSeam,
   recordDrawerEvent,
@@ -10,8 +12,8 @@ import {
   type MutationResult,
   type ShiftResult,
 } from "@/lib/orders-server";
-import type { Actor, ShiftReport } from "@/lib/orders";
-import { getStaff, lockTerminal as clearStaff, unlockStaff, type StaffContext } from "@/lib/staff";
+import type { Actor, OrderView, ShiftReport } from "@/lib/orders";
+import { getStaff, lockTerminal as clearStaff, renewStaff, unlockStaff, type StaffContext } from "@/lib/staff";
 import {
   closeShiftSchema,
   drawerEventSchema,
@@ -50,6 +52,21 @@ export async function switchEmployee(
 
 export async function lockTerminal(): Promise<void> {
   await clearStaff();
+}
+
+export async function keepUnlocked(): Promise<{ ok: true; actor: Actor } | Locked> {
+  const staff = await renewStaff();
+  return staff ? { ok: true, actor: staff.actor } : { ok: false, reason: "locked" };
+}
+
+/** One order, any status: deep links, reprints and orders already off the board. */
+export async function readOrder(orderId: unknown): Promise<{ ok: true; order: OrderView | null } | Locked | Invalid> {
+  return withStaff(z.uuid(), orderId, async (id) => ({ ok: true as const, order: await getOrderView(id) }));
+}
+
+/** The running shift report, before anyone counts the drawer. */
+export async function previewShift(shiftId: unknown): Promise<{ ok: true; report: ShiftReport | null } | Locked | Invalid> {
+  return withStaff(z.uuid(), shiftId, async (id) => ({ ok: true as const, report: await getShiftReport(id) }));
 }
 
 export async function mutateOrderAction(input: unknown): Promise<MutationResult | Locked | Invalid> {
