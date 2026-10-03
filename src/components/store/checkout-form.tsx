@@ -596,7 +596,7 @@ function LoyaltyPanel({
         className="mt-3 gap-0! divide-y divide-border rounded-xl border border-border"
       >
         <label className="flex cursor-pointer items-center gap-3 px-4 py-3 text-sm">
-          <RadioGroupItem value="none" aria-label="No reward" />
+          <RadioGroupItem value="none" />
           No reward this time
         </label>
         {(preview?.rewards ?? []).map((r) => {
@@ -609,7 +609,7 @@ function LoyaltyPanel({
                 disabled ? "cursor-not-allowed text-muted-foreground" : "cursor-pointer",
               )}
             >
-              <RadioGroupItem value={String(r.id)} disabled={disabled} aria-label={r.name} />
+              <RadioGroupItem value={String(r.id)} disabled={disabled} />
               <span className="min-w-0 flex-1">
                 <span className="block font-medium">{r.name}</span>
                 <span className="block text-xs text-muted-foreground">

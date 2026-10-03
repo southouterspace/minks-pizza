@@ -33,7 +33,7 @@ export default async function StoreLayout({ children }: LayoutProps<"/">) {
           <nav className="flex items-center gap-1">
             <Link
               href="/"
-              className="rounded-md px-3 py-2 text-sm text-muted-foreground transition-colors hover:text-foreground"
+              className="hidden rounded-md px-3 py-2 text-sm text-muted-foreground transition-colors hover:text-foreground sm:block"
             >
               Menu
             </Link>
