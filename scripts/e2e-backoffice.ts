@@ -11,7 +11,7 @@
 import { randomUUID } from "node:crypto";
 import bcrypt from "bcryptjs";
 import { eq } from "drizzle-orm";
-import { chromium, type Page } from "playwright";
+import type { Page } from "playwright";
 import { db, employees, operators, pinAttempts, storeSettings } from "../src/db";
 import { submitOrder } from "../src/lib/orders-server/submit";
 import { mutateOrder } from "../src/lib/orders-server/mutate";
@@ -19,21 +19,12 @@ import { getStoreBasics } from "../src/lib/settings-server";
 import { getPosMenu } from "../src/lib/menu-server";
 import { closeShift, getOpenShift, openShift, recordDrawerEvent } from "../src/lib/shifts-server";
 import type { OrderMutation, OrderView, SubmitOrderRequest } from "../src/lib/orders";
-import { pinDigest } from "../src/lib/pin";
+import { checkPin, pinDigest } from "../src/lib/pin";
 import { storeDateOf } from "../src/lib/store-time";
 import type { StaffContext } from "../src/lib/staff";
+import { BASE, check, launchBrowser, run, SHOT_DIR, signIn } from "./harness";
 
-const BASE = process.env.E2E_BASE_URL ?? "http://localhost:3000";
-const SHOT_DIR = process.env.E2E_SHOT_DIR ?? "/tmp";
-const EMAIL = "backoffice@minks.example";
-const PASSWORD = "pizza-test-1234";
-
-let failures = 0;
-function check(label: string, actual: unknown, expected: unknown) {
-  const ok = JSON.stringify(actual) === JSON.stringify(expected);
-  console.log(`${ok ? "PASS" : "FAIL"}  ${label}${ok ? "" : ` — expected ${JSON.stringify(expected)}, got ${JSON.stringify(actual)}`}`);
-  if (!ok) failures++;
-}
+const BACK_OFFICE = { email: "backoffice@minks.example", password: "pizza-test-1234", name: "Back Office" };
 
 /** RFC 4180: quoted cells may hold commas, quotes and newlines. */
 function parseCsv(text: string): string[][] {
@@ -62,22 +53,22 @@ function parseCsv(text: string): string[][] {
   return rows;
 }
 
-async function signIn(page: Page) {
+/** Its own operator account, so the run never depends on another script's password. */
+async function ensureOperator() {
   await db
     .insert(operators)
-    .values({ email: EMAIL, name: "Back Office", passwordHash: await bcrypt.hash(PASSWORD, 10) })
+    .values({ email: BACK_OFFICE.email, name: BACK_OFFICE.name, passwordHash: await bcrypt.hash(BACK_OFFICE.password, 10) })
     .onConflictDoNothing({ target: operators.email });
-  await page.goto(`${BASE}/admin/login`, { waitUntil: "networkidle" });
-  await page.fill('input[name="email"]', EMAIL);
-  await page.fill('input[name="password"]', PASSWORD);
-  await page.click('button[type="submit"]');
-  await page.waitForURL(/\/admin$/, { timeout: 20_000 });
+  const [operator] = await db.select().from(operators).where(eq(operators.email, BACK_OFFICE.email));
+  return operator;
 }
 
 async function settingsFlow(page: Page) {
   const [before] = await db.select().from(storeSettings).where(eq(storeSettings.id, 1));
   try {
     await page.goto(`${BASE}/admin/settings`, { waitUntil: "networkidle" });
+    const lockInput = page.locator('input[name="posLockSeconds"]');
+    check("the auto-lock input carries the server's bounds", [await lockInput.getAttribute("min"), await lockInput.getAttribute("max")], ["15", "3600"]);
     await page.getByText("Higher half", { exact: true }).click();
     await page.fill('input[name="extraToppingMultiplier"]', "1.5");
     await page.fill('input[name="discountApproval"]', "7.50");
@@ -121,7 +112,7 @@ async function freePin(): Promise<string> {
   }
 }
 
-async function staffFlow(page: Page) {
+async function staffFlow(page: Page, operatorId: number) {
   const name = `Riley Test ${Date.now() % 100_000}`;
   const [pin, newPin] = [await freePin(), await freePin()];
   await page.goto(`${BASE}/admin/team`, { waitUntil: "networkidle" });
@@ -143,7 +134,8 @@ async function staffFlow(page: Page) {
     ["password:"],
   );
   const [created] = await db.select().from(employees).where(eq(employees.name, name));
-  check("only the PIN's digest is stored", [created.pinDigest === pinDigest(pin), created.pinDigest.includes(pin)], [true, false]);
+  check("only a 64-hex-digit digest of the PIN is stored", [/^[0-9a-f]{64}$/.test(created.pinDigest), created.pinDigest.includes(pin)], [true, false]);
+  check("the new PIN unlocks the POS as the new cashier", await checkPin(pin, operatorId), { ok: true, actor: { employeeId: created.id, name, role: "cashier" } });
 
   await add("Duplicate Dana", "manager", pin);
   check("a PIN another active employee holds is refused", await addForm.locator("[data-slot=field-error]").innerText(), "That PIN belongs to someone else. Pick another.");
@@ -160,8 +152,9 @@ async function staffFlow(page: Page) {
   await pinForm.locator('input[name="pin"]').fill(newPin);
   await pinForm.locator("button[type=submit]").click();
   await page.waitForURL(/notice=pin-changed/, { timeout: 15_000 });
-  const [changed] = await db.select().from(employees).where(eq(employees.id, created.id));
-  check("Set PIN stores the new PIN's digest", changed.pinDigest, pinDigest(newPin));
+  check("after Set PIN the new PIN unlocks as the same employee", await checkPin(newPin, operatorId), { ok: true, actor: { employeeId: created.id, name, role: "cashier" } });
+  check("and the old PIN no longer does", await checkPin(pin, operatorId), { ok: false, reason: "bad_pin" });
+  await db.delete(pinAttempts).where(eq(pinAttempts.operatorId, operatorId));
 
   const deactivate = page.locator('[data-testid="employee-row"]', { hasText: name }).getByRole("button", { name: "Deactivate" });
   await deactivate.click();
@@ -191,7 +184,7 @@ async function staffFlow(page: Page) {
  * Medium Cheese is $13.99 and garlic knots $5.99 at 8.25% tax.
  */
 async function ringShift() {
-  const [operator] = await db.select().from(operators).where(eq(operators.email, EMAIL));
+  const [operator] = await db.select().from(operators).where(eq(operators.email, BACK_OFFICE.email));
   const staff = await db.select().from(employees);
   const as = (name: string): StaffContext => {
     const e = staff.find((r) => r.name === name && r.isActive);
@@ -343,7 +336,8 @@ async function reportsFlow(page: Page, shift: Awaited<ReturnType<typeof ringShif
   check("CSV needs an operator session", (await fetch(`${BASE}/api/admin/reports/lines?date=${today}`)).status, 401);
 
   await page.goto(`${BASE}/admin/reports/day/${today}`, { waitUntil: "networkidle" });
-  check("day report renders the same fold", (await doc.innerText()).includes("Day report"), true);
+  const day = await doc.innerText();
+  check("today's day report includes the shift's unpaid order", [day.includes("Day report"), day.includes(`#${shift.unpaid.number} Una Unpaid · New\n$15.14 due`)], [true, true]);
   await page.screenshot({ path: `${SHOT_DIR}/bo-day-report.png`, fullPage: true });
 }
 
@@ -370,24 +364,15 @@ async function inboxFlow(page: Page, shift: Awaited<ReturnType<typeof ringShift>
   await page.screenshot({ path: `${SHOT_DIR}/bo-inbox.png` });
 }
 
-async function main() {
-  const browser = await chromium.launch({
-    executablePath: process.env.CHROMIUM_PATH ?? "/opt/pw-browsers/chromium",
-  });
+run(async () => {
+  const operator = await ensureOperator();
+  const browser = await launchBrowser();
   const page = await browser.newPage({ viewport: { width: 1280, height: 900 } });
-  await signIn(page);
-  await staffFlow(page);
+  await signIn(page, BACK_OFFICE);
+  await staffFlow(page, operator.id);
   await settingsFlow(page);
   const shift = await ringShift();
   await reportsFlow(page, shift);
   await inboxFlow(page, shift);
   await browser.close();
-  console.log(failures === 0 ? "\nBACKOFFICE E2E PASSED" : `\n${failures} FAILED`);
-  process.exit(failures === 0 ? 0 : 1);
-}
-
-main().catch((e) => {
-  console.error(e);
-  process.exit(1);
 });
-

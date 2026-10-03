@@ -3,7 +3,7 @@
  * rules it applies to them (station routing, ticket timers, pizza-aware
  * modifier layout, all-day counts). Shared by server and client — no I/O.
  */
-import type { Channel, KitchenStatus } from "@/lib/orders";
+import type { Channel, Fulfillment, KitchenStatus } from "@/lib/orders";
 import type { LineModifier } from "@/lib/pricing";
 
 export const KITCHEN_STATIONS = ["pizza", "kitchen", "counter"] as const;
@@ -47,14 +47,12 @@ export type KdsOrder = {
   id: string;
   number: number;
   status: KitchenStatus;
-  type: "pickup" | "delivery" | "dine_in";
   channel: Channel;
-  table: string | null;
+  fulfillment: Fulfillment;
   fireAt: string | null;
   promisedAt: string | null;
   customerName: string;
   customerPhone: string;
-  address: string | null;
   notes: string | null;
   placedAt: string;
   readyAt: string | null;
@@ -82,10 +80,13 @@ export type KdsSnapshot = {
   avgTicketSeconds: number | null;
 };
 
-export type ItemStage = "queued" | "oven" | "done";
+/** A voided line stays on the ticket in the "void" stage, which no screen works on. */
+export type ItemStage = "queued" | "oven" | "done" | "void";
+/** The stages a cook can move a line to. */
+export type WorkStage = Exclude<ItemStage, "void">;
 
 export type KdsAction =
-  | { type: "item"; itemId: number; stage: ItemStage }
+  | { type: "item"; itemId: number; stage: WorkStage }
   | { type: "bump"; orderId: string; view: KdsView }
   | { type: "recall"; orderId: string }
   | { type: "handoff"; orderId: string };
@@ -94,15 +95,18 @@ export type KdsAction =
 // Item stages and routing
 // ---------------------------------------------------------------------------
 
-export function stageOf(item: Pick<KdsItem, "ovenAt" | "doneAt">): ItemStage {
+type Staged = Pick<KdsItem, "ovenAt" | "doneAt" | "voidedAt">;
+
+export function stageOf(item: Staged): ItemStage {
+  if (item.voidedAt !== null) return "void";
   if (item.doneAt !== null) return "done";
   if (item.ovenAt !== null) return "oven";
   return "queued";
 }
 
 /** Counter items and voided lines never hold an order back: nothing to cook. */
-export function needsKitchen(item: Pick<KdsItem, "station" | "voidedAt">): boolean {
-  return item.station !== "counter" && item.voidedAt === null;
+export function needsKitchen(item: Staged & Pick<KdsItem, "station">): boolean {
+  return item.station !== "counter" && stageOf(item) !== "void";
 }
 
 export function itemsFor(order: KdsOrder, view: KdsView): KdsItem[] {
@@ -119,7 +123,7 @@ export function itemsFor(order: KdsOrder, view: KdsView): KdsItem[] {
 }
 
 /** The stage a view's bump (or a tap on a waiting item) moves work to. */
-function targetStage(item: KdsItem, view: KdsView): ItemStage {
+function targetStage(item: KdsItem, view: KdsView): WorkStage {
   return item.station === "pizza" && (view === "make" || (view === "all" && stageOf(item) === "queued"))
     ? "oven"
     : "done";
@@ -127,7 +131,6 @@ function targetStage(item: KdsItem, view: KdsView): ItemStage {
 
 /** Whether a view still has work on this item. */
 export function isPending(item: KdsItem, view: KdsView): boolean {
-  if (item.voidedAt !== null) return false;
   const stage = stageOf(item);
   if (view === "make") return stage === "queued";
   if (view === "oven") return stage === "oven";
@@ -143,7 +146,7 @@ export function showsOnLine(order: KdsOrder, view: KdsView): boolean {
  * Tapping an item advances it one stage for this view; tapping it again
  * undoes that, so a mis-tap costs one more tap rather than a recall.
  */
-export function tapStage(item: KdsItem, view: KdsView): ItemStage {
+export function tapStage(item: KdsItem, view: KdsView): WorkStage {
   const stage = stageOf(item);
   if (view === "make") return stage === "queued" ? "oven" : "queued";
   if (view === "oven") return stage === "oven" ? "done" : "oven";
@@ -151,14 +154,17 @@ export function tapStage(item: KdsItem, view: KdsView): ItemStage {
   return targetStage(item, view);
 }
 
-export function bumpPlan(order: KdsOrder, view: KdsView): { item: KdsItem; stage: ItemStage }[] {
+/** The expo bump also finishes counter items, so the POS shows them done. */
+const expoPending = (i: KdsItem) => stageOf(i) === "queued" || stageOf(i) === "oven";
+
+export function bumpPlan(order: KdsOrder, view: KdsView): { item: KdsItem; stage: WorkStage }[] {
   return itemsFor(order, view)
-    .filter((i) => (view === "all" ? stageOf(i) !== "done" && i.voidedAt === null : isPending(i, view)))
+    .filter((i) => (view === "all" ? expoPending(i) : isPending(i, view)))
     .map((item) => ({ item, stage: view === "all" ? "done" : targetStage(item, view) }));
 }
 
 /** An order is ready once every item that needs cooking is finished. */
-export function kitchenComplete(items: Pick<KdsItem, "station" | "doneAt" | "voidedAt">[]): boolean {
+export function kitchenComplete(items: (Staged & Pick<KdsItem, "station">)[]): boolean {
   return items.every((i) => !needsKitchen(i) || i.doneAt !== null);
 }
 
@@ -262,7 +268,7 @@ export function allDay(orders: KdsOrder[], view: KdsView): AllDayRow[] {
 // Optimistic updates
 // ---------------------------------------------------------------------------
 
-function withStage(item: KdsItem, stage: ItemStage, nowIso: string): KdsItem {
+function withStage(item: KdsItem, stage: WorkStage, nowIso: string): KdsItem {
   if (stage === "queued") return { ...item, ovenAt: null, doneAt: null };
   if (stage === "oven") {
     return item.station === "pizza"
@@ -284,7 +290,7 @@ function settle(snapshot: KdsSnapshot, order: KdsOrder, nowIso: string): KdsSnap
       recent: [ready, ...snapshot.recent],
     };
   }
-  const touched = order.items.some((i) => stageOf(i) !== "queued");
+  const touched = order.items.some((i) => stageOf(i) === "oven" || stageOf(i) === "done");
   const status = touched && order.status !== "preparing" ? "preparing" : order.status;
   return {
     ...snapshot,
@@ -300,7 +306,7 @@ export function applyLocally(snapshot: KdsSnapshot, action: KdsAction, nowIso: s
   switch (action.type) {
     case "item": {
       const order = snapshot.line.find((o) =>
-        o.items.some((i) => i.id === action.itemId && i.voidedAt === null),
+        o.items.some((i) => i.id === action.itemId && stageOf(i) !== "void"),
       );
       if (!order) return snapshot;
       const items = order.items.map((i) =>

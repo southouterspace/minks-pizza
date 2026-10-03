@@ -30,6 +30,7 @@ import {
   type KdsSnapshot,
   type KdsView,
 } from "@/lib/kds";
+import { formatAddress, type Fulfillment } from "@/lib/orders";
 import { formatStoreClock, formatStoreTime } from "@/lib/store-time";
 import { usePersistentPrefs } from "@/lib/use-persistent-prefs";
 import { useNow, useServerSnapshot } from "@/lib/use-server-snapshot";
@@ -38,7 +39,7 @@ import { SizeCrust, Ticket, TypeChip } from "./ticket";
 
 type Screen = KdsView | "ready";
 
-const HANDOFF_LABEL: Record<KdsOrder["type"], string> = {
+const HANDOFF_LABEL: Record<Fulfillment["kind"], string> = {
   pickup: "Picked up",
   delivery: "Out for delivery",
   dine_in: "Served",
@@ -585,14 +586,16 @@ function ReadyCard({
             </kbd>
           ) : null}
           <span className="text-xl font-black tabular-nums">#{order.number}</span>
-          <TypeChip type={order.type} table={order.table} />
+          <TypeChip fulfillment={order.fulfillment} />
           <span className="ml-auto text-sm font-bold tabular-nums">waiting {formatElapsed(waiting)}</span>
         </div>
         <p className="mt-0.5 truncate text-lg font-black">{order.customerName}</p>
       </header>
       <div className="space-y-1 px-3 py-2 text-sm">
         <p className="text-zinc-300 tabular-nums">{order.customerPhone}</p>
-        {order.address ? <p className="font-semibold">{order.address}</p> : null}
+        {order.fulfillment.kind === "delivery" ? (
+          <p className="font-semibold">{formatAddress(order.fulfillment.address)}</p>
+        ) : null}
         <ul className="pt-1">
           {order.items.map((i) => {
             const { size, crust } = ticketLine(i.modifiers);
@@ -613,7 +616,7 @@ function ReadyCard({
         data-testid={`kds-handoff-${order.number}`}
         className="m-2 mt-auto h-12 rounded-md bg-zinc-50 text-lg font-black text-zinc-950 uppercase hover:bg-zinc-200"
       >
-        {HANDOFF_LABEL[order.type]}
+        {HANDOFF_LABEL[order.fulfillment.kind]}
       </button>
     </article>
   );
@@ -661,7 +664,7 @@ function RecallPanel({
                 <span className="min-w-0 flex-1">
                   <span className="flex items-center gap-2">
                     <span className="text-lg font-black tabular-nums">#{o.number}</span>
-                    <TypeChip type={o.type} table={o.table} />
+                    <TypeChip fulfillment={o.fulfillment} />
                   </span>
                   <span className="block truncate text-sm text-zinc-300">
                     {o.customerName} · bumped {formatElapsed(now - Date.parse(o.readyAt ?? o.placedAt))} ago

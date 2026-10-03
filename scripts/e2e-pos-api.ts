@@ -12,21 +12,13 @@ import { SignJWT } from "jose";
 import { count, eq } from "drizzle-orm";
 import { db, employees, operators, orders } from "../src/db";
 import type { PosMenu } from "../src/lib/orders";
-
-const BASE = process.env.E2E_BASE_URL ?? "http://localhost:3000";
-
-let failures = 0;
-function check(label: string, actual: unknown, expected: unknown) {
-  const ok = JSON.stringify(actual) === JSON.stringify(expected);
-  console.log(`${ok ? "PASS" : "FAIL"}  ${label}${ok ? "" : ` — expected ${JSON.stringify(expected)}, got ${JSON.stringify(actual)}`}`);
-  if (!ok) failures++;
-}
+import { BASE, check, run } from "./harness";
 
 const key = new TextEncoder().encode(process.env.SESSION_SECRET);
 const sign = (claims: Record<string, unknown>) =>
   new SignJWT(claims).setProtectedHeader({ alg: "HS256" }).setIssuedAt().setExpirationTime("10m").sign(key);
 
-async function main() {
+run(async () => {
   const [operator] = await db.select().from(operators).limit(1);
   const [cashier] = await db.select().from(employees).where(eq(employees.role, "cashier")).limit(1);
   if (!operator || !cashier) throw new Error("needs an operator and the demo staff (npm run db:seed)");
@@ -74,12 +66,4 @@ async function main() {
   check("one row in the database", rows.n, 1);
   const bad = await post(unlocked, "{}");
   check("a malformed body is a 400", bad.status, 400);
-
-  console.log(failures === 0 ? "\nALL PASSED" : `\n${failures} FAILED`);
-  process.exit(failures === 0 ? 0 : 1);
-}
-
-main().catch((e) => {
-  console.error(e);
-  process.exit(1);
 });

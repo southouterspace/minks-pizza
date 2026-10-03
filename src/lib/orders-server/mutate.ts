@@ -82,12 +82,12 @@ const MUTATIONS: Handlers = {
       ),
     ]),
 
-  void_line: (m, { order, actor, approvedBy, now }) => {
+  void_line: (m, { order, actor, approvedBy }) => {
     if (!order.lines.some((l) => l.lineId === m.lineId)) return notOnOrder();
     return ok([
       db
         .update(orderItems)
-        .set(voidStamp(now, actor.employeeId, m.reason, approvedBy))
+        .set(voidStamp(actor.employeeId, m.reason, approvedBy))
         .where(and(eq(orderItems.orderId, order.id), eq(orderItems.lineUid, m.lineId))),
     ]);
   },
@@ -158,11 +158,11 @@ const MUTATIONS: Handlers = {
     ]);
   },
 
-  cancel: (m, { order, actor, approvedBy, now }) =>
+  cancel: (m, { order, actor, approvedBy }) =>
     ok([
       db
         .update(orderItems)
-        .set(voidStamp(now, actor.employeeId, m.reason, approvedBy))
+        .set(voidStamp(actor.employeeId, m.reason, approvedBy))
         .where(eq(orderItems.orderId, order.id)),
       cancel(order.id),
     ]),

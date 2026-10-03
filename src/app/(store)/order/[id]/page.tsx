@@ -1,12 +1,19 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { eq } from "drizzle-orm";
-import { db, orderItems, orders } from "@/db";
 import { formatCents } from "@/lib/money";
 import { getSettings } from "@/lib/settings-server";
 import { formatStoreTime } from "@/lib/store-time";
-import { dueCents, paymentState, type KitchenStatus } from "@/lib/orders";
+import {
+  dueCents,
+  FULFILLMENT_LABEL,
+  modifierLabel,
+  PAYMENT_LABEL,
+  paymentState,
+  type Fulfillment,
+  type KitchenStatus,
+} from "@/lib/orders";
+import { getOrderView } from "@/lib/orders-server/views";
 import { OrderAutoRefresh } from "@/components/store/order-auto-refresh";
 import { buttonVariants } from "@/components/ui/button";
 import {
@@ -22,6 +29,22 @@ export const metadata: Metadata = { title: "Order status" };
 export const dynamic = "force-dynamic";
 
 const PROGRESS_STEPS = ["new", "preparing", "ready"] as const;
+
+/** How many progress steps are filled; held and canceled orders fill none. */
+const STEPS_DONE: Record<KitchenStatus, number> = {
+  held: -1,
+  new: 0,
+  preparing: 1,
+  ready: 2,
+  completed: PROGRESS_STEPS.length,
+  canceled: -1,
+};
+
+const DUE_AT: Record<Fulfillment["kind"], string> = {
+  pickup: "due at pickup",
+  delivery: "due at delivery",
+  dine_in: "due at the table",
+};
 
 const STATUS_LABELS: Record<KitchenStatus, { title: string; blurb: string }> = {
   held: {
@@ -59,23 +82,14 @@ export default async function OrderPage({
 
   if (!/^[0-9a-f-]{36}$/i.test(id)) notFound();
 
-  const [order] = await db.select().from(orders).where(eq(orders.id, id));
+  const [order, settings] = await Promise.all([getOrderView(id), getSettings()]);
   if (!order) notFound();
 
-  const items = await db
-    .select()
-    .from(orderItems)
-    .where(eq(orderItems.orderId, order.id));
-  const settings = await getSettings();
-
-  const stepIndex =
-    order.status === "completed"
-      ? PROGRESS_STEPS.length
-      : PROGRESS_STEPS.indexOf(order.status as (typeof PROGRESS_STEPS)[number]);
+  const stepIndex = STEPS_DONE[order.status];
   const active = order.status !== "completed" && order.status !== "canceled";
   const label = STATUS_LABELS[order.status];
-  const payment = paymentState(order);
-  const pickupOrDelivery = order.orderType === "delivery" ? "delivery" : "pickup";
+  const t = order.totals;
+  const payment = paymentState(t);
   const readyBy = order.promisedAt
     ? formatStoreTime(order.promisedAt, settings.timezone)
     : null;
@@ -85,8 +99,8 @@ export default async function OrderPage({
       {active ? <OrderAutoRefresh /> : null}
 
       <p className="text-sm text-muted-foreground">
-        Order <span className="font-mono">#{order.orderNumber}</span> ·{" "}
-        {order.orderType === "delivery" ? "Delivery" : order.orderType === "dine_in" ? "Dine-in" : "Pickup"}
+        Order <span className="font-mono">#{order.number}</span> ·{" "}
+        {FULFILLMENT_LABEL[order.fulfillment.kind]}
       </p>
       <h1 className="mt-1 text-2xl font-bold tracking-tight">{label.title}</h1>
       <p className="mt-2 text-sm text-muted-foreground">
@@ -111,7 +125,7 @@ export default async function OrderPage({
         </ol>
       ) : null}
 
-      {order.orderType === "pickup" && settings.addressLine1 ? (
+      {order.fulfillment.kind === "pickup" && settings.addressLine1 ? (
         <Card className="mt-6">
           <CardContent className="text-sm">
             <p className="font-medium">Pickup at</p>
@@ -133,37 +147,31 @@ export default async function OrderPage({
         </CardHeader>
         <CardContent>
           <ul className="divide-y divide-border">
-            {items.filter((item) => item.voidedAt === null).map((item) => (
+            {order.lines.filter((line) => !line.voided).map((line) => (
               <li
-                key={item.id}
+                key={line.lineId}
                 className="flex justify-between gap-3 py-3 text-sm first:pt-0"
               >
                 <div className="min-w-0">
                   <p>
                     <span className="tabular-nums text-muted-foreground">
-                      {item.quantity}×
+                      {line.quantity}×
                     </span>{" "}
-                    <span className="font-medium">{item.itemName}</span>
+                    <span className="font-medium">{line.name}</span>
                   </p>
-                  {item.modifiers.length > 0 ? (
+                  {line.modifiers.length > 0 ? (
                     <p className="mt-0.5 text-xs text-muted-foreground">
-                      {item.modifiers
-                        .map((m) =>
-                          m.kind === "placed" && m.placement !== "whole"
-                            ? `${m.modifierName} (${m.placement} half)`
-                            : m.modifierName,
-                        )
-                        .join(" · ")}
+                      {line.modifiers.map(modifierLabel).join(" · ")}
                     </p>
                   ) : null}
-                  {item.notes ? (
+                  {line.notes ? (
                     <p className="mt-0.5 text-xs italic text-muted-foreground">
-                      “{item.notes}”
+                      “{line.notes}”
                     </p>
                   ) : null}
                 </div>
                 <span className="shrink-0 tabular-nums">
-                  {formatCents(item.lineTotalCents)}
+                  {formatCents(line.lineTotalCents)}
                 </span>
               </li>
             ))}
@@ -173,46 +181,44 @@ export default async function OrderPage({
           <dl className="w-full space-y-1.5 text-sm">
             <div className="flex justify-between">
               <dt className="text-muted-foreground">Subtotal</dt>
-              <dd className="tabular-nums">{formatCents(order.subtotalCents)}</dd>
+              <dd className="tabular-nums">{formatCents(t.subtotalCents)}</dd>
             </div>
-            {order.discountCents > 0 ? (
+            {t.discountCents > 0 ? (
               <div className="flex justify-between">
                 <dt className="text-muted-foreground">Discounts</dt>
-                <dd className="tabular-nums">−{formatCents(order.discountCents)}</dd>
+                <dd className="tabular-nums">−{formatCents(t.discountCents)}</dd>
               </div>
             ) : null}
-            {order.taxCents > 0 ? (
+            {t.taxCents > 0 ? (
               <div className="flex justify-between">
                 <dt className="text-muted-foreground">Tax</dt>
-                <dd className="tabular-nums">{formatCents(order.taxCents)}</dd>
+                <dd className="tabular-nums">{formatCents(t.taxCents)}</dd>
               </div>
             ) : null}
-            {order.deliveryFeeCents > 0 ? (
+            {t.deliveryFeeCents > 0 ? (
               <div className="flex justify-between">
                 <dt className="text-muted-foreground">Delivery fee</dt>
                 <dd className="tabular-nums">
-                  {formatCents(order.deliveryFeeCents)}
+                  {formatCents(t.deliveryFeeCents)}
                 </dd>
               </div>
             ) : null}
-            {order.tipCents > 0 ? (
+            {t.tipCents > 0 ? (
               <div className="flex justify-between">
                 <dt className="text-muted-foreground">Tip</dt>
-                <dd className="tabular-nums">{formatCents(order.tipCents)}</dd>
+                <dd className="tabular-nums">{formatCents(t.tipCents)}</dd>
               </div>
             ) : null}
             <div className="flex justify-between border-t border-border pt-2 text-base font-semibold">
               <dt>Total</dt>
-              <dd className="tabular-nums">{formatCents(order.totalCents)}</dd>
+              <dd className="tabular-nums">{formatCents(t.totalCents)}</dd>
             </div>
             <div className="flex justify-between pt-1">
               <dt className="text-muted-foreground">Payment</dt>
               <dd className="text-muted-foreground">
-                {payment === "paid"
-                  ? "Paid"
-                  : payment === "refunded"
-                    ? "Refunded"
-                    : `${formatCents(dueCents(order))} due at ${pickupOrDelivery}`}
+                {payment === "unpaid" || payment === "partial"
+                  ? `${formatCents(dueCents(t))} ${DUE_AT[order.fulfillment.kind]}`
+                  : PAYMENT_LABEL[payment]}
               </dd>
             </div>
           </dl>

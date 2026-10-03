@@ -35,20 +35,15 @@ import { checkPin } from "../src/lib/pin";
 import { storeDateOf, storeDayRange } from "../src/lib/store-time";
 import type { StaffContext } from "../src/lib/staff";
 import { cartLineSchema } from "../src/lib/validation";
+import { check, run } from "./harness";
 
-let failures = 0;
-function check(label: string, actual: unknown, expected: unknown) {
-  const ok = JSON.stringify(actual) === JSON.stringify(expected);
-  console.log(`${ok ? "PASS" : "FAIL"}  ${label}${ok ? "" : ` — expected ${JSON.stringify(expected)}, got ${JSON.stringify(actual)}`}`);
-  if (!ok) failures++;
-}
 
 function view(r: MutationResult): OrderView {
   if (!r.ok) throw new Error(`expected ok, got ${JSON.stringify(r)}`);
   return r.order;
 }
 
-async function main() {
+run(async () => {
   const settings = await getSettings();
   if (settings.taxRateBps !== 825 || settings.discountApprovalCents !== 500) {
     throw new Error("expects the seeded 8.25% tax rate and $5.00 discount threshold");
@@ -65,7 +60,6 @@ async function main() {
   const manager: StaffContext = { actor: actor("Morgan Manager"), operatorId: operator.id };
   await db.delete(pinAttempts).where(eq(pinAttempts.operatorId, operator.id));
 
-  // --- Pricing -------------------------------------------------------------
   const menu = await getPosMenu();
   const items = menu.categories.flatMap((c) => c.items);
   const item = (name: string) => items.find((i) => i.name === name)!;
@@ -139,7 +133,6 @@ async function main() {
     ],
   );
 
-  // --- Shift for tenders -----------------------------------------------------
   const stale = await getOpenShift();
   if (stale) {
     await closeShift({ shiftId: stale.id, countedCashCents: 0, cardBatchCents: 0, declaredCashTipsCents: 0, notes: "closed by test" }, manager);
@@ -169,7 +162,6 @@ async function main() {
     ...extra,
   });
 
-  // --- Replayable submit -----------------------------------------------------
   const twoPies = walkIn([line("Cheese Pizza", halfAndHalf, 2)], {
     tenders: [{ id: randomUUID(), method: "cash", amountCents: 4031, tenderedCents: 5000, tipCents: 0, last4: null }],
   });
@@ -184,7 +176,6 @@ async function main() {
   check("2 half-and-half larges: subtotal, tax, total", [first.totals.subtotalCents, first.totals.taxCents, first.totals.totalCents], [3724, 307, 4031]);
   check("fired walk-in is on the line and paid", [first.status, paymentState(first.totals)], ["new", "paid"]);
 
-  // --- Void after fire needs a manager -------------------------------------
   const knots = line("Garlic Knots (6)", []);
   const pieLine = line("Cheese Pizza", halfAndHalf);
   const dinner = view(await submitOrder(walkIn([pieLine, knots]), { kind: "pos", staff: cashier }));
@@ -200,14 +191,12 @@ async function main() {
   const replayVoid = view(await mutateOrder({ orderId: dinner.id, mutation: voidKnots, approval: { managerPin: "1234" } }, cashier));
   check("replayed void changes nothing", [replayVoid.totals.totalCents, replayVoid.lines.find((l) => l.lineId === knots.lineId)?.voided?.at], [2016, knotsView.voided?.at]);
 
-  // --- Discount threshold ---------------------------------------------------
   const bigDiscount: OrderMutation = { kind: "discount", id: randomUUID(), lineId: null, cents: 600, reason: "regular" };
   check("discount over $5.00 needs a manager", await mutateOrder({ orderId: dinner.id, mutation: bigDiscount }, cashier), { ok: false, reason: "needs_manager" });
   const discounted = view(await mutateOrder({ orderId: dinner.id, mutation: { kind: "discount", id: randomUUID(), lineId: null, cents: 300, reason: "late" } }, cashier));
   check("discount at or under $5.00 is the cashier's call; tax follows", [discounted.totals.discountCents, discounted.totals.taxCents, discounted.totals.totalCents], [300, 129, 1691]);
   check("comp always needs a manager", await mutateOrder({ orderId: dinner.id, mutation: { kind: "comp", id: randomUUID(), lineId: pieLine.lineId, reason: "burnt" } }, cashier), { ok: false, reason: "needs_manager" });
 
-  // --- Scheduled order is held, then fired by fireDue ------------------------
   const later = new Date(Date.now() + 60 * 60_000);
   const scheduled = view(
     await submitOrder(walkIn([line("Cheese Pizza", [sel('Small 10"'), sel("Hand Tossed")])], { channel: "phone", fire: { kind: "at", at: later.toISOString() } }), { kind: "pos", staff: cashier }),
@@ -223,7 +212,6 @@ async function main() {
   const fired = (await getOrderView(scheduled.id))!;
   check("fireDue after its time sends live lines to the kitchen", [fired.status, fired.lines.map((l) => l.firedAt !== null)], ["new", [true, false]]);
 
-  // --- Payment state across partial, paid, refund ----------------------------
   const tab = view(await submitOrder(walkIn([line("Caesar Salad", [sel2("Caesar Salad", "Caesar")])]), { kind: "pos", staff: cashier }));
   function sel2(itemName: string, modName: string): Selection {
     return { modifierId: mod(item(itemName), modName), placement: "whole", amount: "regular" };
@@ -244,7 +232,6 @@ async function main() {
   const refunded = view(await mutateOrder({ orderId: tab.id, mutation: refund, approval: { managerPin: "1234" } }, cashier));
   check("refund makes it refunded", [paymentState(refunded.totals), refunded.totals.refundedCents], ["refunded", 500]);
 
-  // --- Tax is snapshotted at submit ------------------------------------------
   const before = view(await submitOrder(walkIn([line("Caesar Salad", [sel2("Caesar Salad", "Caesar")])]), { kind: "pos", staff: cashier }));
   check("salad taxed at 8.25% when placed", [before.totals.taxCents, before.totals.totalCents], [70, 919]);
   await db.update(storeSettings).set({ taxRateBps: 1000 }).where(eq(storeSettings.id, 1));
@@ -257,7 +244,6 @@ async function main() {
     await db.update(storeSettings).set({ taxRateBps: 825 }).where(eq(storeSettings.id, 1));
   }
 
-  // --- Split by item keeps the kitchen ticket -------------------------------
   const wings = line("Chicken Wings (8)", [sel2("Chicken Wings (8)", "BBQ")]);
   const table = view(
     await submitOrder(walkIn([line("Cheese Pizza", [sel('Medium 12"'), sel("Hand Tossed")]), wings], { fulfillment: { kind: "dine_in", table: "4" } }), { kind: "pos", staff: cashier }),
@@ -274,7 +260,6 @@ async function main() {
   const [childRows] = await db.select({ n: count() }).from(orderItems).where(eq(orderItems.orderId, childId));
   check("replayed split moved nothing twice", childRows.n, 1);
 
-  // --- Kitchen status around ready ----------------------------------------
   await db.update(orderItems).set({ doneAt: new Date() }).where(eq(orderItems.orderId, table.id));
   const ready = view(await mutateOrder({ orderId: table.id, mutation: { kind: "fire", lineIds: "all" } }, cashier));
   check("a check whose fired lines are all done is ready", ready.status, "ready");
@@ -284,7 +269,6 @@ async function main() {
   const settled = view(await mutateOrder({ orderId: dinner.id, mutation: tender(1691, "cash") }, cashier));
   check("paying for an order completed before the POS leaves it completed", [settled.status, paymentState(settled.totals)], ["completed", "paid"]);
 
-  // --- Drawer and shift close ------------------------------------------------
   check("no-sale needs a manager", await recordDrawerEvent({ id: randomUUID(), kind: "no_sale", cents: 0, reason: null }, cashier), { ok: false, reason: "needs_manager" });
   check("paid-in is the cashier's call", await recordDrawerEvent({ id: randomUUID(), kind: "paid_in", cents: 200, reason: "change" }, cashier), { ok: true });
   check("paid-out with manager PIN", await recordDrawerEvent({ id: randomUUID(), kind: "paid_out", cents: 500, reason: "napkins", approval: { managerPin: "1234" } }, cashier), { ok: true });
@@ -324,24 +308,14 @@ async function main() {
   );
   check("orders still owing are listed", closed.report.unpaidOrders.map((o) => o.id).includes(scheduled.id), true);
 
-  // --- Store-local days ------------------------------------------------------
   const day = (d: string) => Object.values(storeDayRange(d, "America/Chicago")).map((x) => x.toISOString());
   check("a Chicago day starts at its own midnight", day("2026-10-03"), ["2026-10-03T05:00:00.000Z", "2026-10-04T05:00:00.000Z"]);
   check("spring-forward day is 23 hours", day("2026-03-08"), ["2026-03-08T06:00:00.000Z", "2026-03-09T05:00:00.000Z"]);
   check("fall-back day is 25 hours", day("2026-11-01"), ["2026-11-01T05:00:00.000Z", "2026-11-02T06:00:00.000Z"]);
   check("11:30 PM in Chicago is still that store date", storeDateOf(new Date("2026-10-04T04:30:00Z"), "America/Chicago"), "2026-10-03");
 
-  // --- PIN attempt limiting -------------------------------------------------
   for (let i = 0; i < 5; i++) await checkPin("0000", operator.id);
   check("five misses lock the device, even for a good PIN", await checkPin("1234", operator.id), { ok: false, reason: "locked_out" });
   await db.delete(pinAttempts).where(eq(pinAttempts.operatorId, operator.id));
   check("a good PIN unlocks once the lock is cleared", (await checkPin("1234", operator.id)).ok, true);
-
-  console.log(failures === 0 ? "\nALL PASSED" : `\n${failures} FAILED`);
-  process.exit(failures === 0 ? 0 : 1);
-}
-
-main().catch((e) => {
-  console.error(e);
-  process.exit(1);
 });

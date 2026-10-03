@@ -150,8 +150,8 @@ order tracker reflects both.
 which dough ball to grab. Toppings show as `+ Pepperoni`. Removals (`No …`)
 are red and uppercase, amount changes (`Extra …`, `Light …`) are amber, and
 item notes and order notes (allergies) sit in yellow boxes. Quantities above
-one are highlighted. The header shows the order number, PICKUP or DELIVERY,
-and a timer that turns amber and then red at the thresholds set in
+one are highlighted. The header shows the order number, PICKUP, DELIVERY or
+DINE-IN · TABLE 4, and a timer that turns amber and then red at the thresholds set in
 **Settings → Kitchen display**, which also sets the oven bake time.
 
 **During a rush.**
@@ -220,7 +220,7 @@ Receipts and fallback tickets print through the browser at 80mm width.
 **Rules the server enforces.**
 
 - **Staff and PINs.** A PIN switch sets a short `minks_staff` cookie. PINs
-  are stored as `HMAC-SHA256(SESSION_SECRET, pin)`, so rotating
+  are stored as `HMAC-SHA256(SESSION_SECRET, "pin:" + pin)` in hex, so rotating
   `SESSION_SECRET` means re-setting every PIN. Five wrong PINs in five
   minutes lock the device for the rest of the window. Staff are managed in
   **Team**; the demo PINs are under [Deploying](#deploying-and-migrating).
@@ -318,13 +318,17 @@ Then, in the back office:
 ## Tests
 
 Each script's header says what it covers and what it expects. The `e2e-*`
-scripts drive a running `npm run dev` on port 3000 and mutate the database
-in `.env.local`, so point it at a test branch and run them one at a time.
+scripts drive a running `npm run dev` (port 3000, or set `E2E_BASE_URL`) and
+mutate the database in `.env.local`, so point it at a test branch and run
+them one at a time. They share `scripts/harness.ts`: `check(label, actual,
+expected)` against a literal, `eventually`, sign-in, menu lookup, and the
+exit code.
 
 ```bash
 npx tsc --noEmit && npm run lint && npm run build
-npx tsx --env-file=.env.local scripts/test-pos-domain.ts   # pricing, folds, approvals, splits, labels
-npx tsx scripts/test-pos-client.ts                         # builder, draft, totals, store-time picker
+npm test                 # both suites below
+npm run test:unit        # test-pos-client: builder, draft, totals, store-time picker; no database
+npm run test:domain      # test-pos-domain: pricing, folds, approvals, splits, labels; uses .env.local
 npx tsx --env-file=.env.local scripts/e2e-pos.ts           # every terminal flow
 E2E_BASE_URL=http://localhost:3000 npx tsx --env-file=.env.local scripts/e2e-backoffice.ts
 npx tsx --env-file=.env.local scripts/e2e-kds.ts
@@ -364,10 +368,14 @@ npx tsx --env-file=.env.local scripts/e2e-operator.ts     # also e2e-customer, e
 src/
   db/            schema.ts (Drizzle), seed.ts, index.ts (client)
   lib/           menu.ts, auth.ts, validation.ts (zod at the boundaries),
+                 money.ts, hours.ts, utils.ts,
                  pricing.ts (line pricing + half rule, pure),
-                 orders.ts (order domain, role policy and POS wire contract, pure),
-                 orders-server/ (submit, mutate, folds, views: the order seam),
-                 settings-server.ts, menu-server.ts, shifts-server.ts,
+                 orders.ts (order domain, labels, roles, policy and POS wire contract, pure),
+                 orders-server/ (the order seam: submit.ts places orders, mutate.ts
+                   applies mutations, views.ts reads OrderView/board/quote,
+                   writes.ts and folds.ts build statements, rows.ts maps rows),
+                 settings.ts (POS setting limits, pure), settings-server.ts,
+                 menu-server.ts, shifts-server.ts,
                  reports.ts (report folds, pure),
                  reports-server.ts (report facts, shift list, day report, CSV exports),
                  store-time.ts (store-local days and times),
@@ -379,6 +387,8 @@ src/
   app/kitchen/   kitchen display (KDS); data via app/api/kds
   app/pos/       POS terminal + server actions; data via app/api/pos/*
   components/    cart context, storefront, admin, kitchen and pos UI
+scripts/         harness.ts (shared test runner), test-* and e2e-* suites,
+                 migrate-pos.sql + run-sql.ts, make-test-logo.ts
 ```
 
 ## Roadmap

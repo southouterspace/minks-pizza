@@ -9,7 +9,9 @@ import type { LineModifier, MenuItem, PricingPolicy, Selection } from "@/lib/pri
 
 export type KitchenStatus = "held" | "new" | "preparing" | "ready" | "completed" | "canceled";
 export type Channel = "online" | "walk_in" | "phone";
-export type EmployeeRole = "cashier" | "manager" | "owner";
+export const EMPLOYEE_ROLES = ["cashier", "manager", "owner"] as const;
+export type EmployeeRole = (typeof EMPLOYEE_ROLES)[number];
+export const ROLE_LABEL: Record<EmployeeRole, string> = { cashier: "Cashier", manager: "Manager", owner: "Owner" };
 export type TenderMethod = "cash" | "card_external";
 export type DrawerEventKind = "no_sale" | "paid_in" | "paid_out";
 
@@ -151,9 +153,25 @@ export function channelLabel(channel: Channel, kind: Fulfillment["kind"]): strin
   return SALES_CHANNEL_LABEL[salesChannel(channel, kind)];
 }
 
+/** "1 Main St, Apt 2, The Woodlands, 77354". */
+export function formatAddress(a: Address): string {
+  return [a.line1, a.line2, a.city, a.zip].filter(Boolean).join(", ");
+}
+
+export const FULFILLMENT_LABEL: Record<Fulfillment["kind"], string> = {
+  pickup: "Pickup",
+  delivery: "Delivery",
+  dine_in: "Dine-in",
+};
+
+/** "Pickup", "Delivery", "Dine-in · Table 4". */
+export function fulfillmentLabel(f: Fulfillment): string {
+  return f.kind === "dine_in" ? `${FULFILLMENT_LABEL.dine_in} · Table ${f.table}` : FULFILLMENT_LABEL[f.kind];
+}
+
 /** "Dine-in, table 4", "Phone, delivery", "Walk-in": where an order came from and how it leaves. */
 export function sourceLabel(channel: Channel, f: Fulfillment): string {
-  if (f.kind === "dine_in") return f.table ? `Dine-in, table ${f.table}` : "Dine-in";
+  if (f.kind === "dine_in") return `Dine-in, table ${f.table}`;
   return channel === "walk_in" && f.kind === "pickup" ? "Walk-in" : `${SALES_CHANNEL_LABEL[channel]}, ${f.kind}`;
 }
 

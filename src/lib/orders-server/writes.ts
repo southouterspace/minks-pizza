@@ -121,10 +121,14 @@ export function firing(plan: FirePlan, now: Date): { fireNow: boolean; fireAt: D
   }
 }
 
-/** Void columns for a line; a line voided twice keeps its first void. */
-export function voidStamp(now: Date, by: number, reason: string, approvedBy: number | null) {
+/**
+ * Void columns for a line; a line voided twice keeps its first void. Stamped
+ * by the database clock like fired_at, so the activity log never shows a
+ * void before the send it follows.
+ */
+export function voidStamp(by: number, reason: string, approvedBy: number | null) {
   return {
-    voidedAt: sql`coalesce(${orderItems.voidedAt}, ${now})`,
+    voidedAt: sql`coalesce(${orderItems.voidedAt}, now())`,
     voidedBy: sql`coalesce(${orderItems.voidedBy}, ${by})`,
     voidReason: sql`coalesce(${orderItems.voidReason}, ${reason})`,
     voidApprovedBy: sql`coalesce(${orderItems.voidApprovedBy}, ${approvedBy})`,

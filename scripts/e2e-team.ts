@@ -4,39 +4,25 @@
  * sign in → change own password → sign in with the new password → owner
  * removes the account → self-removal is not offered.
  *
- * Run: npx tsx --env-file=.env.e2e scripts/e2e-team.ts
- * Precondition: an operator exists with OWNER_EMAIL / OWNER_PASSWORD.
+ * Run: npx tsx --env-file=.env.local scripts/e2e-team.ts
+ * Precondition: an operator exists with E2E_OWNER_EMAIL / E2E_OWNER_PASSWORD.
  *
  * Point this at a throwaway database — it creates and deletes operator rows.
  */
-import { chromium, type Page } from "playwright";
+import type { Page } from "playwright";
+import { BASE, check, launchBrowser, run, SHOT_DIR, signIn } from "./harness";
 
-const BASE = process.env.E2E_BASE_URL ?? "http://localhost:3000";
-const SHOT_DIR = process.env.E2E_SHOT_DIR ?? "/tmp";
-const OWNER_EMAIL = process.env.E2E_OWNER_EMAIL ?? "owner@minks.example";
-const OWNER_PASSWORD = process.env.E2E_OWNER_PASSWORD ?? "pizza-test-1234";
-
-const STAFF_NAME = "Dana Staff";
-const STAFF_EMAIL = "dana@minks.example";
-const STAFF_PASSWORD = "temp-pass-9876";
+const OWNER = {
+  email: process.env.E2E_OWNER_EMAIL ?? "owner@minks.example",
+  password: process.env.E2E_OWNER_PASSWORD ?? "pizza-test-1234",
+  name: "Mink Operator",
+};
+const STAFF = { email: "dana@minks.example", password: "temp-pass-9876", name: "Dana Staff" };
 const STAFF_NEW_PASSWORD = "dana-picked-this-1";
-
-function check(condition: boolean, message: string): void {
-  if (!condition) throw new Error(`ASSERTION FAILED: ${message}`);
-  console.log(`  ok — ${message}`);
-}
 
 /** The operator row for one email. Rows carry data-testid="operator-row". */
 function row(page: Page, email: string) {
   return page.getByTestId("operator-row").filter({ hasText: email });
-}
-
-async function signIn(page: Page, email: string, password: string) {
-  await page.goto(`${BASE}/admin/login`, { waitUntil: "networkidle" });
-  await page.fill('input[name="email"]', email);
-  await page.fill('input[name="password"]', password);
-  await page.click('button[type="submit"]');
-  await page.waitForURL(/\/admin$/, { timeout: 20_000 });
 }
 
 async function signOut(page: Page) {
@@ -44,22 +30,23 @@ async function signOut(page: Page) {
   await page.waitForURL("**/admin/login**", { timeout: 15_000 });
 }
 
-async function main() {
-  const browser = await chromium.launch({
-    executablePath: process.env.CHROMIUM_PATH ?? "/opt/pw-browsers/chromium",
-  });
+/** Whether the page shows this exact message. */
+const shows = (page: Page, text: string) => page.getByText(text, { exact: true }).isVisible();
+
+run(async () => {
+  const browser = await launchBrowser();
   const page = await browser.newPage({ viewport: { width: 1280, height: 900 } });
   const shot = (name: string) =>
     page.screenshot({ path: `${SHOT_DIR}/${name}.png`, fullPage: false });
 
   // 1. Owner reaches the Team page from the nav.
-  await signIn(page, OWNER_EMAIL, OWNER_PASSWORD);
+  await signIn(page, OWNER);
   await page.click('a[href="/admin/team"]');
   await page.waitForURL("**/admin/team", { timeout: 15_000 });
   await page.waitForSelector("text=Add an operator", { timeout: 15_000 });
 
   // Start clean: a previous aborted run may have left the staff account behind.
-  const leftover = row(page, STAFF_EMAIL);
+  const leftover = row(page, STAFF.email);
   if (await leftover.count()) {
     await leftover.locator('button:has-text("Remove")').click();
     await leftover.locator('button:has-text("Confirm remove")').click();
@@ -70,57 +57,43 @@ async function main() {
 
   // 2. The signed-in operator is badged and has no Remove button — that guard
   //    is what keeps the store from ever reaching zero accounts.
-  const ownerRow = row(page, OWNER_EMAIL);
-  check(await ownerRow.isVisible(), "your own row is listed");
-  check(
-    (await ownerRow.getByText("You").count()) === 1,
-    "your own row carries the You badge",
-  );
-  check(
-    (await ownerRow.locator('button:has-text("Remove")').count()) === 0,
-    "no Remove button on your own row",
-  );
-  // Exactly one row — yours — is un-removable, whatever the team size.
+  const ownerRow = row(page, OWNER.email);
+  check("your own row is listed", await ownerRow.isVisible(), true);
+  check("your own row carries the You badge", await ownerRow.getByText("You").count(), 1);
+  check("no Remove button on your own row", await ownerRow.locator('button:has-text("Remove")').count(), 0);
+  // Exactly one row, yours, is un-removable, whatever the team size.
   const rowCount = await page.getByTestId("operator-row").count();
-  check(
-    (await page.locator('button:has-text("Remove")').count()) === rowCount - 1,
-    `every row but your own offers Remove (${rowCount} rows)`,
-  );
+  check(`every row but your own offers Remove (${rowCount} rows)`, await page.locator('button:has-text("Remove")').count(), rowCount - 1);
 
   // 3. Add an operator.
   // Scoped: Team also has an Add employee form with its own name field.
   const addOperator = page.locator('form:has(button:has-text("Add operator"))');
-  await addOperator.locator('input[name="name"]').fill(STAFF_NAME);
-  await addOperator.locator('input[name="email"]').fill(STAFF_EMAIL);
-  await addOperator.locator('input[name="password"]').fill(STAFF_PASSWORD);
+  await addOperator.locator('input[name="name"]').fill(STAFF.name);
+  await addOperator.locator('input[name="email"]').fill(STAFF.email);
+  await addOperator.locator('input[name="password"]').fill(STAFF.password);
   await addOperator.locator('button:has-text("Add operator")').click();
   await page.waitForSelector("text=Account created.", { timeout: 20_000 });
-  check(await row(page, STAFF_EMAIL).isVisible(), "new operator is listed");
-  check(
-    (await row(page, STAFF_EMAIL)
-      .locator('button:has-text("Remove")')
-      .count()) === 1,
-    "the other operator's row does offer Remove",
-  );
+  check("new operator is listed", await row(page, STAFF.email).isVisible(), true);
+  check("the other operator's row does offer Remove", await row(page, STAFF.email).locator('button:has-text("Remove")').count(), 1);
   await shot("t2-added");
 
   // 4. The same email a second time is refused rather than 500ing on the
   //    unique index.
   await addOperator.locator('input[name="name"]').fill("Impostor");
-  await addOperator.locator('input[name="email"]').fill(STAFF_EMAIL.toUpperCase());
+  await addOperator.locator('input[name="email"]').fill(STAFF.email.toUpperCase());
   await addOperator.locator('input[name="password"]').fill("another-pass-1");
   await addOperator.locator('button:has-text("Add operator")').click();
   await page.waitForSelector("text=That email already has an account.", {
     timeout: 20_000,
   });
-  check(true, "duplicate email rejected (and case-insensitively)");
+  check("duplicate email rejected (and case-insensitively)", await shows(page, "That email already has an account."), true);
   await shot("t3-duplicate");
 
   // 5. The new operator can sign in with the password the owner set.
   await page.goto(`${BASE}/admin/team`, { waitUntil: "networkidle" });
   await signOut(page);
-  await signIn(page, STAFF_EMAIL, STAFF_PASSWORD);
-  check(page.url().endsWith("/admin"), "new operator signed in");
+  await signIn(page, STAFF);
+  check("new operator signed in", new URL(page.url()).pathname, "/admin");
 
   // 6. …and can replace that password with one the owner doesn't know.
   await page.goto(`${BASE}/admin/team`, { waitUntil: "networkidle" });
@@ -130,9 +103,9 @@ async function main() {
   await page.waitForSelector("text=That's not your current password.", {
     timeout: 20_000,
   });
-  check(true, "wrong current password is refused");
+  check("wrong current password is refused", await shows(page, "That's not your current password."), true);
 
-  await page.fill('input[name="currentPassword"]', STAFF_PASSWORD);
+  await page.fill('input[name="currentPassword"]', STAFF.password);
   await page.fill('input[name="newPassword"]', STAFF_NEW_PASSWORD);
   await page.click('button:has-text("Update password")');
   await page.waitForSelector("text=Your password was updated.", {
@@ -141,39 +114,29 @@ async function main() {
   await shot("t4-password-changed");
 
   await signOut(page);
-  await signIn(page, STAFF_EMAIL, STAFF_NEW_PASSWORD);
-  check(page.url().endsWith("/admin"), "new password works");
+  await signIn(page, { ...STAFF, password: STAFF_NEW_PASSWORD });
+  check("new password works", new URL(page.url()).pathname, "/admin");
 
   // 7. Owner removes the account.
   await signOut(page);
-  await signIn(page, OWNER_EMAIL, OWNER_PASSWORD);
-  await page.goto(`${BASE}/admin/team`, { waitUntil: "networkidle" });
-  const staffRow = row(page, STAFF_EMAIL);
+  await signIn(page, OWNER, "/admin/team");
+  const staffRow = row(page, STAFF.email);
   await staffRow.locator('button:has-text("Remove")').click();
   await staffRow.locator('button:has-text("Confirm remove")').click();
   await page.waitForSelector("text=Account removed.", { timeout: 20_000 });
-  check(
-    (await row(page, STAFF_EMAIL).count()) === 0,
-    "removed operator is gone from the list",
-  );
+  check("removed operator is gone from the list", await row(page, STAFF.email).count(), 0);
   await shot("t5-removed");
 
   // 8. The removed operator can no longer sign in.
   await signOut(page);
   await page.goto(`${BASE}/admin/login`, { waitUntil: "networkidle" });
-  await page.fill('input[name="email"]', STAFF_EMAIL);
+  await page.fill('input[name="email"]', STAFF.email);
   await page.fill('input[name="password"]', STAFF_NEW_PASSWORD);
   await page.click('button[type="submit"]');
   await page.waitForSelector("text=Invalid email or password.", {
     timeout: 20_000,
   });
-  check(true, "removed operator can no longer sign in");
+  check("removed operator can no longer sign in", await shows(page, "Invalid email or password."), true);
 
   await browser.close();
-  console.log("TEAM E2E PASSED — screenshots in", SHOT_DIR);
-}
-
-main().catch((err) => {
-  console.error(err);
-  process.exit(1);
 });

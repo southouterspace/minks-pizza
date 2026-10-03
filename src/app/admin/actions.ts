@@ -26,8 +26,10 @@ import {
   verifyPassword,
 } from "@/lib/auth";
 import { KITCHEN_STATIONS, type KitchenStation } from "@/lib/kds";
+import { EMPLOYEE_ROLES } from "@/lib/orders";
 import { pinDigest } from "@/lib/pin";
 import { HALF_TOPPING_RULES } from "@/lib/pricing";
+import { POS_SETTING_LIMITS } from "@/lib/settings";
 import { isTimeZone } from "@/lib/store-time";
 
 export type AuthFormState = { error?: string };
@@ -280,22 +282,13 @@ const pinSchema = z.string().regex(/^\d{4}$/, "A PIN is exactly 4 digits.");
 
 const employeeSchema = z.object({
   name: z.string().trim().min(1, "Name is required").max(80),
-  role: z.enum(["cashier", "manager", "owner"], "Pick a role."),
+  role: z.enum(EMPLOYEE_ROLES, "Pick a role."),
   pin: pinSchema,
 });
 
-/** The active employee already using this PIN, other than `exceptId`. */
-async function pinHolder(pin: string, exceptId: number | null): Promise<boolean> {
-  const [row] = await db
-    .select({ id: employees.id })
-    .from(employees)
-    .where(and(eq(employees.pinDigest, pinDigest(pin)), eq(employees.isActive, true)));
-  return row !== undefined && row.id !== exceptId;
-}
-
 const PIN_TAKEN = "That PIN belongs to someone else. Pick another.";
 
-/** Postgres unique_violation: the partial index caught a PIN taken in a race. */
+/** Postgres unique_violation: the partial index on active PINs refused a taken PIN. */
 function isUniqueViolation(err: unknown): boolean {
   const cause = (err as { cause?: { code?: string } })?.cause;
   return (err as { code?: string })?.code === "23505" || cause?.code === "23505";
@@ -310,7 +303,6 @@ export async function addEmployee(_prev: StaffFormState, formData: FormData): Pr
   });
   const kept = { name: textField(formData, "name"), role: textField(formData, "role") };
   if (!parsed.success) return { error: parsed.error.issues[0]?.message ?? "Check the form.", ...kept };
-  if (await pinHolder(parsed.data.pin, null)) return { error: PIN_TAKEN, ...kept };
   try {
     await db.insert(employees).values({
       name: parsed.data.name,
@@ -330,7 +322,6 @@ export async function changeEmployeePin(_prev: StaffFormState, formData: FormDat
   const employeeId = idField(formData, "employeeId");
   const parsed = pinSchema.safeParse(textField(formData, "pin"));
   if (!parsed.success) return { error: parsed.error.issues[0]?.message };
-  if (await pinHolder(parsed.data, employeeId)) return { error: PIN_TAKEN };
   try {
     await db
       .update(employees)
@@ -798,25 +789,36 @@ function logoUrlOrNull(formData: FormData): string | null {
 
 const num = (fd: FormData, name: string) => Number(textField(fd, name) || NaN);
 
+const { extraToppingMultiplier: extra, discountApprovalDollars: discount, ovenCapacityPies: oven, makeMinutes: make, posLockSeconds: lock } =
+  POS_SETTING_LIMITS;
+
 const posSettingsSchema = z.object({
   halfToppingRule: z.enum(HALF_TOPPING_RULES, "Pick a half-topping rule."),
   extraToppingBps: z
     .number("Enter the extra-topping multiplier.")
     .int()
-    .min(10_000, "Extra toppings can't cost less than a regular portion (1×).")
-    .max(50_000, "Extra-topping multiplier tops out at 5×."),
+    .min(extra.min * 10_000, `Extra toppings can't cost less than a regular portion (${extra.min}×).`)
+    .max(extra.max * 10_000, `Extra-topping multiplier tops out at ${extra.max}×.`),
   discountApprovalCents: z
     .number("Enter a discount approval threshold.")
     .int()
-    .min(0, "The discount threshold can't be negative.")
-    .max(100_000, "The discount threshold tops out at $1,000."),
-  ovenCapacityPies: z.number("Enter oven capacity.").int().min(1, "Oven capacity is at least 1 pie.").max(50, "Oven capacity tops out at 50 pies."),
-  makeMinutes: z.number("Enter make time.").int().min(0, "Make time can't be negative.").max(60, "Make time tops out at 60 minutes."),
+    .min(discount.min * 100, "The discount threshold can't be negative.")
+    .max(discount.max * 100, `The discount threshold tops out at $${discount.max.toLocaleString("en-US")}.`),
+  ovenCapacityPies: z
+    .number("Enter oven capacity.")
+    .int()
+    .min(oven.min, `Oven capacity is at least ${oven.min} pie.`)
+    .max(oven.max, `Oven capacity tops out at ${oven.max} pies.`),
+  makeMinutes: z
+    .number("Enter make time.")
+    .int()
+    .min(make.min, "Make time can't be negative.")
+    .max(make.max, `Make time tops out at ${make.max} minutes.`),
   posLockSeconds: z
     .number("Enter the auto-lock time.")
     .int()
-    .min(15, "Auto-lock is at least 15 seconds.")
-    .max(3600, "Auto-lock tops out at 3600 seconds (an hour)."),
+    .min(lock.min, `Auto-lock is at least ${lock.min} seconds.`)
+    .max(lock.max, `Auto-lock tops out at ${lock.max} seconds (an hour).`),
   timezone: z.string().refine(isTimeZone, "Pick a timezone."),
 });
 
