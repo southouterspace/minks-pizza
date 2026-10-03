@@ -395,8 +395,8 @@ async function main() {
   await page.getByRole("button", { name: "Log" }).click();
   const log = await page.getByTestId("activity-log").innerText();
   check(
-    "activity log shows the store's time",
-    log.startsWith(`${formatStoreTime(dine.placedAt, tz)} Placed (`),
+    "activity log reads placed as dine-in, at the store's time",
+    log.startsWith(`${formatStoreTime(dine.placedAt, tz)} Placed (Dine-in, table 4)`),
     log.split("\n")[0],
   );
   check("activity log names who voided and who approved", /Voided 2 × Garlic Knots.*Casey Cashier · approved by Morgan Manager/.test(log.replace(/\n/g, " ")), log.replace(/\n/g, " | "));

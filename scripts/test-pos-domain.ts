@@ -25,7 +25,7 @@ import {
   type MutationResult,
   type SubmitOrderRequest,
 } from "../src/lib/orders-server";
-import { paymentState, type OrderMutation, type OrderView } from "../src/lib/orders";
+import { channelLabel, orderHistory, paymentState, sourceLabel, type Channel, type Fulfillment, type OrderMutation, type OrderView } from "../src/lib/orders";
 import { allocate, priceLine, splitEvenly, type MenuItem, type Selection } from "../src/lib/pricing";
 import { checkPin } from "../src/lib/pin";
 import { storeDateOf, storeDayRange } from "../src/lib/store-time";
@@ -103,6 +103,24 @@ async function main() {
     "allocate shares always sum to the total",
     [9999, 1, 1234, 100].map((t) => allocate(t, [3, 1, 7, 2]).reduce((a, b) => a + b, 0)),
     [9999, 1, 1234, 100],
+  );
+
+  const kinds: Fulfillment[] = [{ kind: "pickup" }, { kind: "delivery", address: { line1: "1 Main", line2: null, city: null, zip: "77380" } }, { kind: "dine_in", table: "4" }];
+  const channels: Channel[] = ["walk_in", "phone", "online"];
+  check(
+    "badge and placed label for every channel × fulfillment",
+    channels.flatMap((c) => kinds.map((f) => `${c}/${f.kind}: ${channelLabel(c, f.kind)} | ${sourceLabel(c, f)}`)),
+    [
+      "walk_in/pickup: Walk-in | Walk-in",
+      "walk_in/delivery: Walk-in | Walk-in, delivery",
+      "walk_in/dine_in: Dine-in | Dine-in, table 4",
+      "phone/pickup: Phone | Phone, pickup",
+      "phone/delivery: Phone | Phone, delivery",
+      "phone/dine_in: Dine-in | Dine-in, table 4",
+      "online/pickup: Online | Online, pickup",
+      "online/delivery: Online | Online, delivery",
+      "online/dine_in: Dine-in | Dine-in, table 4",
+    ],
   );
 
   // --- Shift for tenders -----------------------------------------------------
@@ -228,6 +246,7 @@ async function main() {
   const table = view(
     await submitOrder(walkIn([line("Cheese Pizza", [sel('Medium 12"'), sel("Hand Tossed")]), wings], { fulfillment: { kind: "dine_in", table: "4" } }), { kind: "pos", staff: cashier }),
   );
+  check("a dine-in check's log says it was placed dine-in at its table", orderHistory(table)[0].text, "Placed (Dine-in, table 4)");
   const childId = randomUUID();
   const split: OrderMutation = { kind: "split_by_item", lineIds: [wings.lineId], newOrderId: childId };
   const parent = view(await mutateOrder({ orderId: table.id, mutation: split }, cashier));

@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
-import { CHANNEL_LABEL, dueCents, type OrderView } from "@/lib/orders";
+import { channelLabel, dueCents, type OrderView } from "@/lib/orders";
 import type { PosMenu, SubmitOrderRequest } from "@/lib/orders-server";
 import { findItem, lineSummary } from "@/lib/pos-client/draft";
 import { formatCents } from "@/lib/money";
@@ -72,7 +72,7 @@ export function Receipt({ order, store }: { order: OrderView; store: StoreInfo }
         {store.phone && <div>{store.phone}</div>}
       </div>
       <Rule />
-      <Row left={<b>Order #{order.number}</b>} right={CHANNEL_LABEL[order.channel]} />
+      <Row left={<b>Order #{order.number}</b>} right={channelLabel(order.channel, order.fulfillment.kind)} />
       <div>{formatStoreDateTime(order.placedAt, store.timeZone)}</div>
       <Fulfillment order={order} />
       <Rule />

@@ -130,15 +130,30 @@ export const PAYMENT_LABEL: Record<PaymentState, string> = {
   refunded: "Refunded",
 };
 
-export const CHANNEL_LABEL: Record<Channel, string> = {
-  online: "Online",
+/** Dine-in is its own channel whatever rang it in: on badges, in the activity log and in reports. */
+export type SalesChannel = Channel | "dine_in";
+
+export const SALES_CHANNELS: readonly SalesChannel[] = ["walk_in", "phone", "dine_in", "online"];
+
+export const SALES_CHANNEL_LABEL: Record<SalesChannel, string> = {
   walk_in: "Walk-in",
   phone: "Phone",
+  dine_in: "Dine-in",
+  online: "Online",
 };
 
-/** Badge text: a dine-in check reads as dine-in whatever rang it in. */
-export function channelLabel(channel: Channel, orderType: Fulfillment["kind"]): string {
-  return orderType === "dine_in" ? "Dine-in" : CHANNEL_LABEL[channel];
+export function salesChannel(channel: Channel, kind: Fulfillment["kind"]): SalesChannel {
+  return kind === "dine_in" ? "dine_in" : channel;
+}
+
+export function channelLabel(channel: Channel, kind: Fulfillment["kind"]): string {
+  return SALES_CHANNEL_LABEL[salesChannel(channel, kind)];
+}
+
+/** "Dine-in, table 4", "Phone, delivery", "Walk-in": where an order came from and how it leaves. */
+export function sourceLabel(channel: Channel, f: Fulfillment): string {
+  if (f.kind === "dine_in") return f.table ? `Dine-in, table ${f.table}` : "Dine-in";
+  return channel === "walk_in" && f.kind === "pickup" ? "Walk-in" : `${SALES_CHANNEL_LABEL[channel]}, ${f.kind}`;
 }
 
 /** "Pepperoni (left half)", "extra Onions", "Size: Large 14\"". */
@@ -261,7 +276,7 @@ export function orderHistory(o: OrderView): HistoryEntry[] {
     const line = o.lines.find((l) => l.lineId === lineId);
     return line ? `${line.quantity} × ${line.name}` : "the check";
   };
-  const placed: HistoryEntry = { at: o.placedAt, who: name(o.createdBy), approvedBy: null, text: `Placed (${CHANNEL_LABEL[o.channel]})` };
+  const placed: HistoryEntry = { at: o.placedAt, who: name(o.createdBy), approvedBy: null, text: `Placed (${sourceLabel(o.channel, o.fulfillment)})` };
   const entries: HistoryEntry[] = [];
   const firedAt = [...new Set(o.lines.flatMap((l) => (l.firedAt ? [l.firedAt] : [])))];
   for (const at of firedAt) {
@@ -311,18 +326,6 @@ export function orderHistory(o: OrderView): HistoryEntry[] {
 // ---------------------------------------------------------------------------
 
 export type OrderRef = { id: string; number: number };
-
-/** Dine-in is its own sales line whatever rang it in, like the inbox badge. */
-export type SalesChannel = Channel | "dine_in";
-
-export const SALES_CHANNELS: readonly SalesChannel[] = ["walk_in", "phone", "dine_in", "online"];
-
-export const SALES_CHANNEL_LABEL: Record<SalesChannel, string> = {
-  walk_in: "Walk-in",
-  phone: "Phone",
-  dine_in: "Dine-in",
-  online: "Online",
-};
 
 export const TENDER_METHOD_LABEL: Record<TenderMethod, string> = {
   cash: "Cash",
@@ -481,7 +484,7 @@ export function salesReport(facts: ReportFacts): SalesReport {
   for (const o of facts.orders) {
     const { from, to } = facts.window;
     if (o.status === "canceled" || o.placedAt < from || (to !== null && o.placedAt >= to)) continue;
-    addSales(channels.get(o.orderType === "dine_in" ? "dine_in" : o.channel)!, o.totals);
+    addSales(channels.get(salesChannel(o.channel, o.orderType))!, o.totals);
     addSales(sales, o.totals);
   }
 
