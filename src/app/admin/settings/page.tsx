@@ -23,6 +23,10 @@ import {
   FieldSet,
 } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
+import { NativeSelect, NativeSelectOption } from "@/components/ui/native-select";
+
+/** Minutes column shown as hours in an input; null shows blank (rule off). */
+const asHours = (minutes: number | null) => (minutes === null ? "" : String(minutes / 60));
 
 export const dynamic = "force-dynamic";
 
@@ -51,6 +55,14 @@ const DEFAULTS = {
   deliveryFeeCents: 0,
   deliveryMinimumCents: 0,
   taxRateBps: 0,
+  timezone: "America/New_York",
+  weekStartsOn: 1,
+  otWeeklyMinutes: 2400,
+  otDailyMinutes: null as number | null,
+  dtDailyMinutes: null as number | null,
+  breakRequiredAfterMinutes: 360 as number | null,
+  clockGraceMinutes: 7,
+  earlyClockInMinutes: null as number | null,
   isPublished: false,
   isAcceptingOrders: true,
 };
@@ -402,6 +414,118 @@ export default async function SettingsPage({
                   defaultValue={settings.kdsOvenMinutes}
                   className="tabular-nums"
                 />
+              </Field>
+            </div>
+          </Card>
+        </FieldSet>
+
+        <FieldSet>
+          <FieldLegend className="w-full border-b border-border pb-2 text-sm!">
+            Staff &amp; payroll
+          </FieldLegend>
+          <FieldDescription>
+            Rules for the time clock, schedule and timesheets. Leave a field blank to turn that rule off.
+          </FieldDescription>
+          <Card>
+            <div className="grid gap-4 px-4 sm:grid-cols-2">
+              <Field>
+                <FieldLabel htmlFor="s-tz">Store timezone</FieldLabel>
+                <NativeSelect id="s-tz" name="timezone" defaultValue={settings.timezone} className="w-full">
+                  {[...new Set([settings.timezone, ...Intl.supportedValuesOf("timeZone")])].map((tz) => (
+                    <NativeSelectOption key={tz} value={tz}>
+                      {tz.replaceAll("_", " ")}
+                    </NativeSelectOption>
+                  ))}
+                </NativeSelect>
+                <FieldDescription>Every shift, day and payroll week uses this clock.</FieldDescription>
+              </Field>
+              <Field>
+                <FieldLabel htmlFor="s-week">Payroll week starts on</FieldLabel>
+                <NativeSelect id="s-week" name="weekStartsOn" defaultValue={String(settings.weekStartsOn)} className="w-full">
+                  {DAY_NAMES.map((name, day) => (
+                    <NativeSelectOption key={day} value={day}>
+                      {name}
+                    </NativeSelectOption>
+                  ))}
+                </NativeSelect>
+              </Field>
+              <Field>
+                <FieldLabel htmlFor="s-ot-weekly">Weekly overtime after (h)</FieldLabel>
+                <Input
+                  id="s-ot-weekly"
+                  name="otWeeklyHours"
+                  type="number"
+                  min="1"
+                  step="0.5"
+                  required
+                  defaultValue={asHours(settings.otWeeklyMinutes)}
+                  className="tabular-nums"
+                />
+                <FieldDescription>40 under federal law.</FieldDescription>
+              </Field>
+              <Field>
+                <FieldLabel htmlFor="s-break">Flag no meal break after (h)</FieldLabel>
+                <Input
+                  id="s-break"
+                  name="breakRequiredAfterHours"
+                  type="number"
+                  min="0"
+                  step="0.5"
+                  defaultValue={asHours(settings.breakRequiredAfterMinutes)}
+                  className="tabular-nums"
+                />
+                <FieldDescription>Flags the timesheet only; nothing is deducted.</FieldDescription>
+              </Field>
+              <Field>
+                <FieldLabel htmlFor="s-ot-daily">Daily overtime after (h)</FieldLabel>
+                <Input
+                  id="s-ot-daily"
+                  name="otDailyHours"
+                  type="number"
+                  min="0"
+                  step="0.5"
+                  defaultValue={asHours(settings.otDailyMinutes)}
+                  className="tabular-nums"
+                />
+                <FieldDescription>California: 8. Blank for none.</FieldDescription>
+              </Field>
+              <Field>
+                <FieldLabel htmlFor="s-dt-daily">Daily double time after (h)</FieldLabel>
+                <Input
+                  id="s-dt-daily"
+                  name="dtDailyHours"
+                  type="number"
+                  min="0"
+                  step="0.5"
+                  defaultValue={asHours(settings.dtDailyMinutes)}
+                  className="tabular-nums"
+                />
+                <FieldDescription>California: 12. Blank for none.</FieldDescription>
+              </Field>
+              <Field>
+                <FieldLabel htmlFor="s-grace">Late / early-out grace (min)</FieldLabel>
+                <Input
+                  id="s-grace"
+                  name="clockGraceMinutes"
+                  type="number"
+                  min="0"
+                  step="1"
+                  defaultValue={settings.clockGraceMinutes}
+                  className="tabular-nums"
+                />
+              </Field>
+              <Field>
+                <FieldLabel htmlFor="s-early">Block clock-in earlier than (min before shift)</FieldLabel>
+                <Input
+                  id="s-early"
+                  name="earlyClockInMinutes"
+                  type="number"
+                  min="0"
+                  step="1"
+                  defaultValue={settings.earlyClockInMinutes ?? ""}
+                  className="tabular-nums"
+                />
+                <FieldDescription>Blank lets staff clock in any time. Managers can always add the time.</FieldDescription>
               </Field>
             </div>
           </Card>

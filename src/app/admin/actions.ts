@@ -706,6 +706,17 @@ function logoUrlOrNull(formData: FormData): string | null {
   return /^https:\/\/\S+$/i.test(raw) ? raw : null;
 }
 
+/** Hours typed in a settings field → whole minutes; blank (or zero) turns the rule off. */
+function hoursToMinutesOrNull(formData: FormData, name: string): number | null {
+  const hours = Number.parseFloat(textField(formData, name));
+  return Number.isFinite(hours) && hours > 0 ? Math.round(hours * 60) : null;
+}
+
+function timezoneField(formData: FormData): string {
+  const tz = textField(formData, "timezone");
+  return Intl.supportedValuesOf("timeZone").includes(tz) || tz === "UTC" ? tz : "America/New_York";
+}
+
 export async function saveSettings(formData: FormData): Promise<void> {
   await requireOperator();
 
@@ -757,6 +768,14 @@ export async function saveSettings(formData: FormData): Promise<void> {
     deliveryFeeCents: dollarsToCents(formData, "deliveryFee"),
     deliveryMinimumCents: dollarsToCents(formData, "deliveryMinimum"),
     taxRateBps: Math.round(taxPercent * 100),
+    timezone: timezoneField(formData),
+    weekStartsOn: Math.min(6, intField(formData, "weekStartsOn", 1)),
+    otWeeklyMinutes: hoursToMinutesOrNull(formData, "otWeeklyHours") ?? 2400,
+    otDailyMinutes: hoursToMinutesOrNull(formData, "otDailyHours"),
+    dtDailyMinutes: hoursToMinutesOrNull(formData, "dtDailyHours"),
+    breakRequiredAfterMinutes: hoursToMinutesOrNull(formData, "breakRequiredAfterHours"),
+    clockGraceMinutes: intField(formData, "clockGraceMinutes", 7),
+    earlyClockInMinutes: intField(formData, "earlyClockInMinutes", 0) || null,
     updatedAt: new Date(),
   };
 
@@ -767,6 +786,7 @@ export async function saveSettings(formData: FormData): Promise<void> {
 
   revalidatePath("/");
   revalidatePath("/admin/settings");
+  revalidatePath("/admin/staff", "layout");
   redirect("/admin/settings?saved=1");
 }
 
