@@ -382,3 +382,8 @@ export function expiryDue(
 
 /** Operators can undo an expiry for this long. */
 export const EXPIRY_RESTORE_DAYS = 30;
+
+/** Expired points newer than this can still be restored by an operator. */
+export function expiryRestorableSince(now: Date): Date {
+  return new Date(now.getTime() - EXPIRY_RESTORE_DAYS * 24 * 60 * 60 * 1000);
+}

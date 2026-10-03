@@ -2,7 +2,7 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import { ArrowLeft } from "lucide-react";
 import { requireOperator } from "@/lib/auth";
-import { EXPIRY_RESTORE_DAYS, LEDGER_KIND_RULES, formatMultiplier, formatPhone } from "@/lib/loyalty";
+import { LEDGER_KIND_RULES, expiryRestorableSince, formatMultiplier, formatPhone } from "@/lib/loyalty";
 import { getLoyaltySettings, getMember, ledgerKey, memberLedger, memberStatus } from "@/lib/loyalty-server";
 import {
   addMissingOrder,
@@ -38,7 +38,7 @@ export default async function LoyaltyMemberPage({ params, searchParams }: PagePr
   const [settings, ledger] = await Promise.all([getLoyaltySettings(), memberLedger(member.id, 200)]);
   const status = await memberStatus(member, settings);
   const restored = new Set(ledger.map((e) => e.idemKey));
-  const restoreSince = Date.now() - EXPIRY_RESTORE_DAYS * 24 * 60 * 60 * 1000;
+  const restoreSince = expiryRestorableSince(new Date()).getTime();
 
   return (
     <div className="space-y-6">

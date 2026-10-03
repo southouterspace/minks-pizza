@@ -14,7 +14,7 @@ import {
 } from "@/db";
 import { requireOperator } from "@/lib/auth";
 import {
-  EXPIRY_RESTORE_DAYS,
+  expiryRestorableSince,
   localDate,
   repriceReward,
   rewardEffectSchema,
@@ -304,7 +304,7 @@ export async function restoreExpired(formData: FormData): Promise<void> {
       and(
         eq(loyaltyLedger.id, entryId),
         eq(loyaltyLedger.kind, "expire"),
-        gt(loyaltyLedger.createdAt, new Date(Date.now() - EXPIRY_RESTORE_DAYS * 24 * 60 * 60 * 1000)),
+        gt(loyaltyLedger.createdAt, expiryRestorableSince(new Date())),
       ),
     );
   if (!entry) return;

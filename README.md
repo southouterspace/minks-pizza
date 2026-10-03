@@ -156,6 +156,51 @@ update categories set station = 'counter' where name ilike '%drink%' or name ili
 
 Orders placed before the migration default to the Kitchen station.
 
+### Rewards (`/rewards`, `/admin/loyalty`)
+
+A points program the operator turns on in **Loyalty**. It is off until then.
+Research behind the defaults is in `docs/loyalty-research.md`, and the
+customer complaints it answers are in `docs/loyalty-complaints.md`.
+
+- **Earning.** 10 points per $1 of food and drink after any reward discount.
+  Tax, tip and the delivery fee don't earn. Points post when the order is
+  completed and are shown as Pending until then. Guests join by phone with a
+  checkbox at checkout, with no sign-in needed to earn.
+- **Spending.** Signed-in members pick a reward at checkout ($3 off at 300,
+  a free side at 700, a free large pizza at 1,500 by default). Totals come
+  from the server. A cancel returns the points.
+- **Sign-in.** A 6-digit code texted to the phone, with no passwords.
+  **Production needs `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN` and
+  `TWILIO_FROM_NUMBER`**. Without them, customers still earn but can't sign
+  in to spend, and the admin shows a warning. In development the code is
+  shown on screen.
+- **Bonuses.** Welcome bonus on the first completed order of $15+, a
+  birthday bonus, referral bonuses for both sides, and promotions such as
+  double points on Tuesdays.
+- **Trust rules.** A raised reward price keeps the old price for 60 days.
+  Points expire only after 12 months with no completed order, and the
+  rewards page shows the date. Balances never go below zero. Signing in
+  claims the member's phone-matched orders from the last 30 days. Members can
+  delete their account.
+- **Operators.** Members search, ledger, point adjustments with a reason,
+  restore of expired points, a missing-order claim, rewards and promotions
+  editors, tiers and program settings.
+
+Every balance change is one SQL statement that appends to `loyalty_ledger`
+and moves the cached balance together (`ledgerStatement` in
+`src/lib/loyalty-server.ts`). Each entry has a unique idempotency key, so
+replays do nothing, and a `CHECK (points_balance >= 0)` makes overspending
+fail the whole order transaction. `npx tsx --env-file=.env.local
+scripts/loyalty-audit.ts` confirms every balance equals its ledger sum.
+
+#### Deploying the rewards schema
+
+Checkout reads the new columns, so **migrate production before deploying**:
+
+```bash
+MINKS_DATABASE_URL=<production url> npm run db:push   # additive: new tables, enum and order columns with defaults
+```
+
 ### Customer (`/`)
 
 Menu browsing with category navigation → item customization dialog (sizes,
