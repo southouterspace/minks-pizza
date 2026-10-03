@@ -65,6 +65,7 @@ import {
   type ShiftTimes,
   type WeeklyAvailability,
 } from "../src/lib/timeclock";
+import { kioskReducer, PAD, type Screen } from "../src/components/timeclock/kiosk-flow";
 
 const NY = "America/New_York";
 let passed = 0;
@@ -631,6 +632,38 @@ test("staff rule fields: hours become minutes, blank or zero turns a rule off", 
   assert.equal(ruleInputValue(weekly, 2400), "40");
   assert.equal(ruleInputValue(weekly, null), "");
   assert.equal(ruleInputValue(grace, 7), "7");
+});
+test("kiosk flow: PIN pad, employee screens and back to the pad", () => {
+  const view = {
+    employee: { id: 1, name: "Dana Rivera", roles: ["cook" as const] },
+    state: { kind: "off" as const },
+    defaultRole: "cook" as const,
+    todayShifts: [],
+    upcoming: [],
+    week: { paidMinutes: 0, projectedMinutes: 0 },
+    current: null,
+    timeOff: [],
+  };
+  const typed = "1234567".split("").reduce<Screen>((s, digit) => kioskReducer(s, { type: "digit", digit }), PAD);
+  assert.deepEqual(typed, { kind: "pad", digits: "123456", error: null, shake: 0 });
+  const wrong = kioskReducer(typed, { type: "pin_result", pin: "123456", result: { ok: false, status: 401, error: "PIN not recognized." } });
+  assert.deepEqual(wrong, { kind: "pad", digits: "", error: "PIN not recognized.", shake: 1 });
+  assert.deepEqual(kioskReducer(wrong, { type: "digit", digit: "4" }), { kind: "pad", digits: "4", error: null, shake: 1 });
+  const ok = { ok: true as const, data: { view, message: null, tone: "info" as const, summary: null } };
+  const home = kioskReducer(typed, { type: "pin_result", pin: "1234", result: ok });
+  assert.deepEqual(home, { kind: "employee", pin: "1234", view, error: null });
+  const tips = kioskReducer(home, { type: "goto", to: "clock_out" });
+  assert.deepEqual(tips, { kind: "clock_out", pin: "1234", view });
+  const refused = kioskReducer(tips, {
+    type: "action_result",
+    pin: "1234",
+    result: { ok: true, data: { view, message: "End your break before clocking out.", tone: "error", summary: null } },
+  });
+  assert.deepEqual(refused, { kind: "employee", pin: "1234", view, error: "End your break before clocking out." });
+  const done = kioskReducer(home, { type: "action_result", pin: "1234", result: { ok: true, data: { view, message: "Clocked in 4:00 PM as Cook", tone: "success", summary: null } } });
+  assert.equal(done.kind, "done");
+  assert.deepEqual(kioskReducer(done, { type: "reset" }), PAD);
+  assert.deepEqual(kioskReducer(home, { type: "reset", error: "Can't reach the server." }), { ...PAD, error: "Can't reach the server." });
 });
 
 console.log(`\n${passed} passed`);
