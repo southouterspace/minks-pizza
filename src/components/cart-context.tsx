@@ -9,7 +9,8 @@ import {
   useState,
 } from "react";
 import { z } from "zod";
-import { DEFAULT_CHOICE, PLACEMENTS, PORTIONS, type Placement, type Portion } from "@/lib/toppings";
+import { DEFAULT_CHOICE, type Placement, type Portion } from "@/lib/toppings";
+import { cartModifierSchema } from "@/lib/validation";
 
 export type CartModifier = {
   id: number;
@@ -68,13 +69,10 @@ const storedLineSchema = z.object({
   unitPriceCents: z.number().int(),
   quantity: z.number().int().min(1),
   modifiers: z.array(
-    z.object({
-      id: z.number().int().positive(),
+    cartModifierSchema.extend({
       groupName: z.string(),
       modifierName: z.string(),
       priceDeltaCents: z.number().int(),
-      placement: z.enum(PLACEMENTS).optional(),
-      portion: z.enum(PORTIONS).optional(),
     }),
   ),
   notes: z.string().optional(),

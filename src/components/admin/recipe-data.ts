@@ -11,6 +11,7 @@ import {
   storeSettings,
 } from "@/db";
 import { recipeLineFromRow } from "@/lib/recipes";
+import { DEFAULT_PORTIONS } from "@/lib/toppings";
 import type {
   PlateContext,
   RecipeIngredient,
@@ -110,11 +111,13 @@ export async function itemRecipe(item: { id: number; basePriceCents: number }): 
       defaultModifierIds: defaultIds,
       modifierLines: defaultLines.map(recipeLineFromRow),
       sizeModifierIds: allSizes.map((s) => s.id),
-      settings: {
-        halfPortionBps: settings?.halfPortionBps ?? 5000,
-        lightPortionBps: settings?.lightPortionBps ?? 5000,
-        extraPortionBps: settings?.extraPortionBps ?? 15000,
-      },
+      settings: settings
+        ? {
+            halfPortionBps: settings.halfPortionBps,
+            lightPortionBps: settings.lightPortionBps,
+            extraPortionBps: settings.extraPortionBps,
+          }
+        : DEFAULT_PORTIONS,
       minMarginBps: settings?.minMarginBps ?? 7000,
     },
   };

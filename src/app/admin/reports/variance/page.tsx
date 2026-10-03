@@ -1,7 +1,7 @@
 import type { Metadata } from "next";
 import { ClipboardList } from "lucide-react";
 import { requireOperator } from "@/lib/auth";
-import { varianceReport, type CountSummary } from "@/lib/inventory-reports";
+import { formatBps, ratioBps, varianceReport, type CountSummary } from "@/lib/inventory-reports";
 import { formatCents } from "@/lib/money";
 import { getStoreTimezone } from "@/lib/order-queries";
 import { formatQty } from "@/lib/units";
@@ -70,7 +70,7 @@ export default async function VariancePage({ searchParams }: PageProps<"/admin/r
             label: "Variance",
             value: signedCents(report.varianceCents),
             tone: loss(report.varianceCents),
-            hint: report.usageCents ? `${((report.varianceCents / report.usageCents) * 100).toFixed(1)}% of usage` : undefined,
+            hint: report.usageCents ? `${formatBps(ratioBps(report.varianceCents, report.usageCents))} of usage` : undefined,
           },
         ]}
       />

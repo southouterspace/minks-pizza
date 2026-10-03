@@ -43,6 +43,13 @@ export type PortionSettings = {
   extraPortionBps: number;
 };
 
+/** The store_settings column defaults, for when the settings row is missing. */
+export const DEFAULT_PORTIONS: PortionSettings = {
+  halfPortionBps: 5000,
+  lightPortionBps: 5000,
+  extraPortionBps: 15000,
+};
+
 /** Round half up to a whole cent after a basis-point multiply. */
 function applyBps(cents: number, bps: number): number {
   return Math.floor((cents * bps + 5_000) / 10_000);

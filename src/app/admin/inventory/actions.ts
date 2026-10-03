@@ -12,6 +12,7 @@ import {
   recordMoves,
   type PriceChange,
 } from "@/lib/inventory";
+import { costToMillicents } from "@/lib/unit-entry";
 import { unitsFor, type UnitDef } from "@/lib/units";
 
 export type InventoryActionResult<T = object> = ({ ok: true } & T) | { ok: false; error: string };
@@ -133,8 +134,7 @@ export async function receiveDelivery(
     moves.push({
       ingredientId: line.ingredientId,
       qtyMilli: Math.round(line.qty * unit.baseQtyMilli),
-      // Dollars per entered unit → millicents per base unit (milli base units per unit / 1000).
-      unitCostMillicents: Math.round((line.cost * 100_000 * 1000) / unit.baseQtyMilli),
+      unitCostMillicents: costToMillicents(line.cost * 100, unit),
     });
   }
   const priceChanges = await recordDelivery({

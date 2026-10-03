@@ -32,16 +32,19 @@ import {
   type RecipeContext,
   type UsageLine,
 } from "@/lib/recipes";
+import { DEFAULT_PORTIONS } from "@/lib/toppings";
 
-const EMPTY_PAIRS = sql`select null::integer, null::integer where false`;
-
-/** `(values (a, b), (c, d))` with integer columns, or an empty relation. */
-function pairs(rows: readonly (readonly [number, number])[]): SQL {
-  if (rows.length === 0) return EMPTY_PAIRS;
-  return sql`values ${sql.join(
-    rows.map(([a, b]) => sql`(${a}::integer, ${b}::integer)`),
+/** Builds `(values (…), (…))` from rows of integer-or-null cells. */
+function intRows(rows: readonly (readonly (number | null)[])[]): SQL {
+  return sql`(values ${sql.join(
+    rows.map((cells) => sql`(${sql.join(cells.map((c) => sql`${c}::integer`), sql`, `)})`),
     sql`, `,
-  )}`;
+  )})`;
+}
+
+/** `intRows` for two columns, or an empty two-column relation. */
+function pairs(rows: readonly (readonly [number, number])[]): SQL {
+  return rows.length === 0 ? sql`(select null::integer, null::integer where false)` : intRows(rows);
 }
 
 async function portionSettings() {
@@ -53,7 +56,7 @@ async function portionSettings() {
     })
     .from(storeSettings)
     .where(eq(storeSettings.id, 1));
-  return row ?? { halfPortionBps: 5000, lightPortionBps: 5000, extraPortionBps: 15000 };
+  return row ?? DEFAULT_PORTIONS;
 }
 
 /** What an order would use and cost, computed once so the sync statement can be built synchronously. */
@@ -142,7 +145,7 @@ export function inventorySyncStatement({ orderId, usage, lineCosts }: OrderUsage
       for update
     ), target as (
       select u.ingredient_id, case when wanted.active then -u.qty_milli else 0 end as qty_milli
-      from (${pairs([...usage])}) as u(ingredient_id, qty_milli), wanted
+      from ${pairs([...usage])} as u(ingredient_id, qty_milli), wanted
     ), held as (
       select ingredient_id, sum(qty_milli) as qty_milli
       from ${inventoryMoves}
@@ -159,7 +162,7 @@ export function inventorySyncStatement({ orderId, usage, lineCosts }: OrderUsage
       returning ingredient_id, qty_milli
     ), costed as (
       update ${orderItems} set cost_cents = case when wanted.active then c.cost_cents else null end
-      from (${pairs(lineCosts)}) as c(id, cost_cents), wanted
+      from ${pairs(lineCosts)} as c(id, cost_cents), wanted
       where ${orderItems.id} = c.id
     )
     select ingredient_id, qty_milli from moved
@@ -426,14 +429,6 @@ export async function spotCountPreset(): Promise<{ ids: number[]; rule: SpotRule
     ids: rows.map((r) => r.id),
     rule: rows.some((r) => Number(r.usage) > 0) ? "usage" : "value",
   };
-}
-
-/** Builds `(values (…), (…))` from rows of integer-or-null cells. */
-function intRows(rows: readonly (readonly (number | null)[])[]): SQL {
-  return sql`(values ${sql.join(
-    rows.map((cells) => sql`(${sql.join(cells.map((c) => sql`${c}::integer`), sql`, `)})`),
-    sql`, `,
-  )})`;
 }
 
 /**

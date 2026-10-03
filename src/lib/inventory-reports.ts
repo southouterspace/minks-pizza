@@ -26,7 +26,7 @@ import {
   recipeLineFromRow,
   type RecipeContext,
 } from "@/lib/recipes";
-import type { ModifierGroupKind } from "@/lib/toppings";
+import { DEFAULT_PORTIONS, type ModifierGroupKind } from "@/lib/toppings";
 import type { BaseUnit } from "@/lib/units";
 
 export type ReportParams = URLSearchParams | Record<string, string | string[] | undefined>;
@@ -485,7 +485,7 @@ export async function marginReport(): Promise<MarginReport> {
   const ctx: RecipeContext = {
     book,
     sizeModifierIds: new Set(mods.filter((m) => sizeGroupIds.has(m.groupId)).map((m) => m.id)),
-    settings: settings ?? { halfPortionBps: 5000, lightPortionBps: 5000, extraPortionBps: 15000 },
+    settings: settings ?? DEFAULT_PORTIONS,
   };
   const unitCosts = new Map(costRows.map((r) => [r.id, r.cost]));
 
