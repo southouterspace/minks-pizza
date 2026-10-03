@@ -17,16 +17,16 @@ import type { KitchenStation } from "@/lib/kds";
 import { formatCents, taxFromBps } from "@/lib/money";
 import { loadCandidates, phoneKeySql } from "@/lib/promotion-queries";
 import { lostDealCopy, refusalCopy } from "@/lib/promotion-copy";
+import { normalizeCode } from "@/lib/promo-code";
+import type { TargetNames } from "@/lib/promotion-copy";
 import {
   customerKeyFromPhone,
   discountedTotals,
   evaluatePromotions,
-  normalizeCode,
   type AppliedDiscount,
   type Evaluation,
   type PromotionCandidate,
-  type TargetNames,
-} from "@/lib/promotions";
+} from "@/lib/promotion-engine";
 import type { CheckoutInput } from "@/lib/validation";
 
 export type PricedLine = {

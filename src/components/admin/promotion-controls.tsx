@@ -11,7 +11,8 @@ import {
   generateCodes,
   setPromotionActive,
 } from "@/app/admin/promotions/actions";
-import { PROMOTION_STATUS_LABEL, type PromotionStatus } from "@/lib/promotions";
+import { PROMOTION_STATUS_LABEL } from "@/lib/promotion-copy";
+import type { PromotionStatus } from "@/lib/promotion-engine";
 import { Badge } from "@/components/ui/badge";
 import { Button, buttonVariants } from "@/components/ui/button";
 import { Field, FieldLabel } from "@/components/ui/field";

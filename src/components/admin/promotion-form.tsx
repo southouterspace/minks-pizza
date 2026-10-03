@@ -4,20 +4,19 @@ import { useMemo, useState, useTransition } from "react";
 import { Plus, X } from "lucide-react";
 import { savePromotion } from "@/app/admin/promotions/actions";
 import type { MenuCatalog } from "@/lib/promotion-admin";
-import { EMPTY_DRAFT, type PromotionDraft } from "@/lib/promotion-draft";
+import { fromDraft, promotionTemplates, type PromotionDraft } from "@/lib/promotion-codec";
+import { describeOffer, describeTarget, type TargetNames } from "@/lib/promotion-copy";
 import {
-  ANY_ITEM,
-  describeOffer,
-  describeTarget,
   promotionColumns,
   promotionInputSchema,
-  type PromotionInput,
-  type PromotionReward,
+  REWARD_SPEC,
+  REWARD_TYPES,
+  type RewardField,
   type RewardType,
   type Target,
-  type TargetNames,
   type WeeklyWindow,
-} from "@/lib/promotions";
+} from "@/lib/promotion-schema";
+import { displayCode } from "@/lib/promo-code";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -27,95 +26,19 @@ import { NativeSelect, NativeSelectOption } from "@/components/ui/native-select"
 import { Textarea } from "@/components/ui/textarea";
 import { cn } from "@/lib/utils";
 
-const REWARD_LABEL: Record<RewardType, string> = {
-  order_percent: "Percent off the order",
-  order_amount: "Dollars off the order",
-  item_percent: "Percent off items",
-  item_amount: "Dollars off items",
-  item_price: "Deal price on items",
-  bogo: "Buy X, get Y",
-  free_delivery: "Free delivery",
+type NumberFieldKey = Exclude<RewardField, "target" | "getTarget">;
+
+const NUMBER_FIELD: Record<NumberFieldKey, { id: string; label: string; prefix?: string; suffix?: string; step?: string }> = {
+  percent: { id: "promo-percent", label: "Percent off", suffix: "%" },
+  maxDiscount: { id: "promo-max", label: "Up to (optional)", prefix: "$" },
+  amount: { id: "promo-amount", label: "Amount off", prefix: "$" },
+  price: { id: "promo-price", label: "Deal price each", prefix: "$" },
+  maxUnits: { id: "promo-units", label: "Max items per order (optional)", step: "1" },
+  buyQty: { id: "promo-buy", label: "Buy", step: "1" },
+  getQty: { id: "promo-get", label: "Get", step: "1" },
+  getPercent: { id: "promo-get-percent", label: "Off the cheapest (100 = free)", suffix: "%" },
+  maxApplications: { id: "promo-apps", label: "Max times per order (optional)", step: "1" },
 };
-
-const cents = (s: string) => Math.round(Number.parseFloat(s || "0") * 100);
-const intOrNull = (s: string) => (s.trim() === "" ? null : Number.parseInt(s, 10));
-const bps = (s: string) => Math.round(Number.parseFloat(s || "0") * 100);
-const centsOrNull = (s: string) => (s.trim() === "" ? null : cents(s));
-
-function rewardOf(d: PromotionDraft): PromotionReward {
-  switch (d.rewardType) {
-    case "order_percent":
-      return { type: "order_percent", percentBps: bps(d.percent), maxDiscountCents: centsOrNull(d.maxDiscount) };
-    case "order_amount":
-      return { type: "order_amount", amountCents: cents(d.amount) };
-    case "item_percent":
-      return { type: "item_percent", target: d.target, percentBps: bps(d.percent), maxUnits: intOrNull(d.maxUnits) };
-    case "item_amount":
-      return { type: "item_amount", target: d.target, amountCents: cents(d.amount), maxUnits: intOrNull(d.maxUnits) };
-    case "item_price":
-      return { type: "item_price", target: d.target, priceCents: cents(d.price), maxUnits: intOrNull(d.maxUnits) };
-    case "bogo":
-      return {
-        type: "bogo",
-        buy: { target: d.target, quantity: intOrNull(d.buyQty) ?? 0 },
-        get: {
-          target: d.getSameAsBuy ? d.target : d.getTarget,
-          quantity: intOrNull(d.getQty) ?? 0,
-          percentBps: bps(d.getPercent),
-        },
-        maxApplications: intOrNull(d.maxApplications),
-      };
-    case "free_delivery":
-      return { type: "free_delivery" };
-  }
-}
-
-function toInput(d: PromotionDraft): PromotionInput {
-  return {
-    name: d.name,
-    description: d.description.trim() || null,
-    trigger: d.trigger,
-    reward: rewardOf(d),
-    minSubtotalCents: cents(d.minSubtotal),
-    orderTypes: [...(d.pickup ? (["pickup"] as const) : []), ...(d.delivery ? (["delivery"] as const) : [])],
-    startsOn: d.startsOn || null,
-    endsOn: d.endsOn || null,
-    schedule: d.schedule,
-    newCustomersOnly: d.newCustomersOnly,
-    perCustomerLimit: intOrNull(d.perCustomerLimit),
-    totalLimit: intOrNull(d.totalLimit),
-    stackable: d.stackable,
-    advertised: d.advertised,
-  };
-}
-
-function templates(catalog: MenuCatalog): { label: string; draft: Partial<PromotionDraft> }[] {
-  const large = catalog.modifierGroups.flatMap((g) => g.modifiers).find((m) => /large/i.test(m.name) && !/x-?large/i.test(m.name));
-  const larges: Target = { ...ANY_ITEM, modifierIds: large ? [large.id] : [] };
-  return [
-    { label: "Percent off order", draft: { name: "10% off your order", trigger: "code", rewardType: "order_percent", percent: "10" } },
-    { label: "$ off order", draft: { name: "$5 off orders $25+", trigger: "code", rewardType: "order_amount", amount: "5", minSubtotal: "25" } },
-    {
-      label: "BOGO",
-      draft: { name: "Buy one large, get one free", trigger: "automatic", rewardType: "bogo", target: larges, buyQty: "1", getQty: "1", getSameAsBuy: true, getPercent: "100" },
-    },
-    { label: "Item deal price", draft: { name: "Any large pizza $12", trigger: "automatic", rewardType: "item_price", target: larges, price: "12" } },
-    {
-      label: "Free delivery",
-      draft: { name: "Free delivery on $30+", trigger: "automatic", rewardType: "free_delivery", minSubtotal: "30", pickup: false, delivery: true },
-    },
-    {
-      label: "Happy hour",
-      draft: {
-        name: "Happy hour: 20% off",
-        trigger: "automatic",
-        rewardType: "order_percent",
-        percent: "20",
-        schedule: [{ days: [1, 2, 3, 4, 5], start: "15:00", end: "17:00" }],
-      },
-    },
-  ];
-}
 
 export function PromotionForm({
   promotionId,
@@ -136,11 +59,12 @@ export function PromotionForm({
   const set = <K extends keyof PromotionDraft>(key: K, value: PromotionDraft[K]) =>
     setDraft((d) => ({ ...d, [key]: value }));
 
-  const parsed = useMemo(() => promotionInputSchema.safeParse(toInput(draft)), [draft]);
+  const parsed = useMemo(() => promotionInputSchema.safeParse(fromDraft(draft)), [draft]);
+  const templates = useMemo(() => promotionTemplates(catalog), [catalog]);
   const preview = parsed.success
     ? describeOffer(
         { ...parsed.data, ...promotionColumns(parsed.data, timezone) },
-        { timezone, code: draft.trigger === "code" ? draft.code.trim().toUpperCase() || null : null, names },
+        { timezone, code: draft.trigger === "code" ? displayCode(draft.code) || null : null, names },
       )
     : null;
 
@@ -157,8 +81,9 @@ export function PromotionForm({
     });
   };
 
-  const r = draft.rewardType;
-  const hasTarget = r === "item_percent" || r === "item_amount" || r === "item_price" || r === "bogo";
+  const fields: readonly RewardField[] = REWARD_SPEC[draft.rewardType].fields;
+  const numberFields = fields.filter((f): f is NumberFieldKey => f in NUMBER_FIELD);
+  const buyGet = fields.includes("getTarget");
 
   return (
     <form onSubmit={submit} className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_20rem]">
@@ -169,13 +94,13 @@ export function PromotionForm({
               <CardTitle>Start from a template</CardTitle>
             </CardHeader>
             <CardContent className="flex flex-wrap gap-2">
-              {templates(catalog).map((t) => (
+              {templates.map((t) => (
                 <Button
                   key={t.label}
                   type="button"
                   variant="outline"
                   size="sm"
-                  onClick={() => setDraft({ ...EMPTY_DRAFT, ...t.draft })}
+                  onClick={() => setDraft(t.draft)}
                 >
                   {t.label}
                 </Button>
@@ -244,52 +169,34 @@ export function PromotionForm({
                 <FieldLabel htmlFor="promo-reward">Type</FieldLabel>
                 <NativeSelect
                   id="promo-reward"
-                  value={r}
+                  value={draft.rewardType}
                   onChange={(e) => set("rewardType", e.target.value as RewardType)}
                   className="w-full"
                 >
-                  {(Object.keys(REWARD_LABEL) as RewardType[]).map((t) => (
+                  {REWARD_TYPES.map((t) => (
                     <NativeSelectOption key={t} value={t}>
-                      {REWARD_LABEL[t]}
+                      {REWARD_SPEC[t].label}
                     </NativeSelectOption>
                   ))}
                 </NativeSelect>
               </Field>
-              <div className="grid gap-4 sm:grid-cols-2">
-                {r === "order_percent" || r === "item_percent" ? (
-                  <NumberField id="promo-percent" label="Percent off" suffix="%" value={draft.percent} onChange={(v) => set("percent", v)} />
-                ) : null}
-                {r === "order_percent" ? (
-                  <NumberField id="promo-max" label="Up to (optional)" prefix="$" value={draft.maxDiscount} onChange={(v) => set("maxDiscount", v)} />
-                ) : null}
-                {r === "order_amount" || r === "item_amount" ? (
-                  <NumberField id="promo-amount" label="Amount off" prefix="$" value={draft.amount} onChange={(v) => set("amount", v)} />
-                ) : null}
-                {r === "item_price" ? (
-                  <NumberField id="promo-price" label="Deal price each" prefix="$" value={draft.price} onChange={(v) => set("price", v)} />
-                ) : null}
-                {r === "item_percent" || r === "item_amount" || r === "item_price" ? (
-                  <NumberField id="promo-units" label="Max items per order (optional)" value={draft.maxUnits} onChange={(v) => set("maxUnits", v)} step="1" />
-                ) : null}
-                {r === "bogo" ? (
-                  <>
-                    <NumberField id="promo-buy" label="Buy" value={draft.buyQty} onChange={(v) => set("buyQty", v)} step="1" />
-                    <NumberField id="promo-get" label="Get" value={draft.getQty} onChange={(v) => set("getQty", v)} step="1" />
-                    <NumberField id="promo-get-percent" label="Off the cheapest (100 = free)" suffix="%" value={draft.getPercent} onChange={(v) => set("getPercent", v)} />
-                    <NumberField id="promo-apps" label="Max times per order (optional)" value={draft.maxApplications} onChange={(v) => set("maxApplications", v)} step="1" />
-                  </>
-                ) : null}
-              </div>
-              {hasTarget ? (
+              {numberFields.length ? (
+                <div className="grid gap-4 sm:grid-cols-2">
+                  {numberFields.map((f) => (
+                    <NumberField key={f} {...NUMBER_FIELD[f]} value={draft[f]} onChange={(v) => set(f, v)} />
+                  ))}
+                </div>
+              ) : null}
+              {fields.includes("target") ? (
                 <TargetPicker
-                  label={r === "bogo" ? "Buy items" : "Which items"}
+                  label={buyGet ? "Buy items" : "Which items"}
                   catalog={catalog}
                   names={names}
                   value={draft.target}
                   onChange={(t) => set("target", t)}
                 />
               ) : null}
-              {r === "bogo" ? (
+              {buyGet ? (
                 <>
                   <CheckField id="promo-same" label="Get the same kind of item" checked={draft.getSameAsBuy} onChange={(v) => set("getSameAsBuy", v)} />
                   {!draft.getSameAsBuy ? (

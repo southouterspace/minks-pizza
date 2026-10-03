@@ -8,7 +8,8 @@ import { db, promotionCodes, promotions } from "@/db";
 import { requireOperator } from "@/lib/auth";
 import { getSettings } from "@/lib/orders";
 import { everUsed } from "@/lib/promotion-admin";
-import { normalizeCode, promotionColumns, promotionInputSchema } from "@/lib/promotions";
+import { normalizeCode } from "@/lib/promo-code";
+import { promotionColumns, promotionInputSchema } from "@/lib/promotion-schema";
 
 export type PromotionFormState = { error?: string; field?: string };
 

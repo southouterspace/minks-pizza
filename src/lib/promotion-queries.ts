@@ -9,15 +9,10 @@ import {
   promotionCodes,
   promotions,
 } from "@/db";
-import {
-  describeOffer,
-  formatLastDay,
-  normalizeCode,
-  promotionRewardSchema,
-  type PromotionCandidate,
-  type PromotionTerms,
-  type TargetNames,
-} from "@/lib/promotions";
+import { normalizeCode } from "@/lib/promo-code";
+import { describeOffer, formatLastDay, type TargetNames } from "@/lib/promotion-copy";
+import type { PromotionCandidate, PromotionTerms } from "@/lib/promotion-engine";
+import { promotionRewardSchema } from "@/lib/promotion-schema";
 
 export type PromotionRow = typeof promotions.$inferSelect;
 

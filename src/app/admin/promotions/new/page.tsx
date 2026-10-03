@@ -4,7 +4,7 @@ import { ArrowLeft } from "lucide-react";
 import { requireOperator } from "@/lib/auth";
 import { getSettings } from "@/lib/orders";
 import { catalogNames, getMenuCatalog } from "@/lib/promotion-admin";
-import { EMPTY_DRAFT } from "@/lib/promotion-draft";
+import { EMPTY_DRAFT } from "@/lib/promotion-codec";
 import { PromotionForm } from "@/components/admin/promotion-form";
 
 export const dynamic = "force-dynamic";

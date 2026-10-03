@@ -20,7 +20,6 @@ import {
   AdvanceButton,
   ApplyDiscountDialog,
   RemoveDiscountButton,
-  type DiscountPreset,
   CancelOrderDialog,
   EtaButtons,
   PrintButton,
@@ -49,7 +48,7 @@ export default async function OrderDetailPage({ params }: PageProps<"/admin/orde
   const { id } = await params;
   if (!/^[0-9a-f-]{36}$/i.test(id)) notFound();
 
-  const [order, timeZone, promos] = await Promise.all([getOrderDetail(id), getStoreTimezone(), compPresets()]);
+  const [order, timeZone, presets] = await Promise.all([getOrderDetail(id), getStoreTimezone(), compPresets()]);
   if (!order) notFound();
 
   const now = new Date();
@@ -58,13 +57,6 @@ export default async function OrderDetailPage({ params }: PageProps<"/admin/orde
   const open = NEXT_ACTION[order.status] || canTransition(order.status, "canceled");
   const discountable =
     order.paymentStatus === "pending" && order.status !== "canceled" && order.status !== "completed";
-  const presets: DiscountPreset[] = promos.flatMap((p): DiscountPreset[] =>
-    p.reward.type === "order_percent"
-      ? [{ promotionId: p.id, label: p.name, kind: "percent", value: p.reward.percentBps / 100 }]
-      : p.reward.type === "order_amount"
-        ? [{ promotionId: p.id, label: p.name, kind: "amount", value: p.reward.amountCents / 100 }]
-        : [],
-  );
 
   return (
     <div className="print:m-0">

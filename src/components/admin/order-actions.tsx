@@ -19,6 +19,7 @@ import {
   NEXT_ACTION,
   type OrderStatus,
 } from "@/lib/order-workflow";
+import type { DiscountPreset } from "@/lib/promotion-admin";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -211,8 +212,6 @@ export function PrintButton() {
   );
 }
 
-export type DiscountPreset = { promotionId: number; label: string; kind: "amount" | "percent"; value: number };
-
 /** An operator comp: dollars or percent off the items, with a reason the receipt shows. */
 export function ApplyDiscountDialog({
   orderId,
@@ -263,8 +262,8 @@ export function ApplyDiscountDialog({
                     variant={promotionId === p.promotionId ? "default" : "outline"}
                     size="sm"
                     onClick={() => {
-                      setKind(p.kind);
-                      setValue(String(p.value));
+                      setKind("cents" in p.amount ? "amount" : "percent");
+                      setValue(String(("cents" in p.amount ? p.amount.cents : p.amount.percentBps) / 100));
                       setReason(p.label);
                       setPromotionId(p.promotionId);
                     }}

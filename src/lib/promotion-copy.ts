@@ -1,19 +1,144 @@
 /**
- * Every sentence a customer reads about a refused deal, a nudge or a deal
- * lost to a race. The evaluator returns data; this module owns the words.
+ * Every sentence customers and operators read about a deal: offer
+ * summaries, refusals, nudges, a deal lost to a race, status labels. The
+ * evaluator returns data; this module owns the words.
  */
+import { DAY_NAMES, formatTime } from "./hours";
 import { formatCents } from "./money";
-import {
-  describeSchedule,
-  describeTarget,
-  formatDay,
-  formatLastDay,
-  sameTarget,
-  type Nudge,
-  type PromotionReward,
-  type Refusal,
-  type TargetNames,
-} from "./promotions";
+import type { Nudge, PromotionStatus, PromotionTerms, Refusal } from "./promotion-engine";
+import { REWARD_SPEC, sameTarget, type PromotionReward, type Target, type WeeklyWindow } from "./promotion-schema";
+
+/** Display names for target ids, for "Add a Large 14" Cheese Pizza to use this". */
+export type TargetNames = {
+  categories: Record<number, string>;
+  items: Record<number, string>;
+  modifiers: Record<number, string>;
+};
+
+/** "Oct 10" on the store's calendar. */
+export function formatDay(d: Date, timeZone: string): string {
+  return d.toLocaleDateString("en-US", { month: "short", day: "numeric", timeZone });
+}
+
+/** The last day an offer runs: endsAt is the exclusive instant it stops. */
+export function formatLastDay(endsAt: Date, timeZone: string): string {
+  return formatDay(new Date(endsAt.getTime() - 1), timeZone);
+}
+
+const SHORT_DAYS = DAY_NAMES.map((d) => d.slice(0, 3));
+
+function describeDays(days: number[]): string {
+  const sorted = [...new Set(days)].sort((a, b) => a - b);
+  if (sorted.length === 7) return "Daily";
+  const runs: number[][] = [];
+  for (const d of sorted) {
+    const run = runs.at(-1);
+    if (run && run.at(-1) === d - 1) run.push(d);
+    else runs.push([d]);
+  }
+  return runs
+    .flatMap((r) =>
+      r.length >= 3 ? [`${SHORT_DAYS[r[0]]}–${SHORT_DAYS[r.at(-1)!]}`] : r.map((d) => SHORT_DAYS[d]),
+    )
+    .join(", ");
+}
+
+/** "3–6 PM", "11 AM–2 PM". */
+function describeHours(start: string, end: string): string {
+  const a = formatTime(start);
+  const b = formatTime(end);
+  const suffix = a.slice(-2);
+  return suffix === b.slice(-2) ? `${a.slice(0, -3)}–${b}` : `${a}–${b}`;
+}
+
+/** "Tue 3–6 PM", "Mon–Fri 11 AM–2 PM, Sat 3–6 PM". */
+export function describeSchedule(schedule: WeeklyWindow[]): string {
+  return schedule.map((w) => `${describeDays(w.days)} ${describeHours(w.start, w.end)}`).join(", ");
+}
+
+function nameList(ids: number[], names: Record<number, string> | undefined): string[] {
+  return ids.map((i) => names?.[i]).filter((n): n is string => Boolean(n));
+}
+
+/**
+ * What a target covers, without an article: "Large 14" Cheese Pizza",
+ * "Large 14" item from Specialty Pizzas", "item". Lists join with "or".
+ */
+export function describeTarget(t: Target, names?: TargetNames): string {
+  const mods = nameList(t.modifierIds, names?.modifiers).join(" or ");
+  const items = nameList(t.itemIds, names?.items).join(" or ");
+  const cats = nameList(t.categoryIds, names?.categories).join(" or ");
+  const noun = items || (cats ? `item from ${cats}` : "item");
+  return mods ? `${mods} ${noun}` : noun;
+}
+
+function percentText(bps: number): string {
+  return `${Number((bps / 100).toFixed(2))}%`;
+}
+
+/** The reward in a few words: "20% off (up to $10)", "Buy 1 Large 14" item, get 1 free". */
+export function describeReward(reward: PromotionReward, names?: TargetNames): string {
+  switch (reward.type) {
+    case "order_percent":
+      return `${percentText(reward.percentBps)} off${reward.maxDiscountCents ? ` (up to ${formatCents(reward.maxDiscountCents)})` : ""}`;
+    case "order_amount":
+      return `${formatCents(reward.amountCents)} off`;
+    case "item_percent":
+      return `${percentText(reward.percentBps)} off any ${describeTarget(reward.target, names)}${limitText(reward.maxUnits)}`;
+    case "item_amount":
+      return `${formatCents(reward.amountCents)} off any ${describeTarget(reward.target, names)}${limitText(reward.maxUnits)}`;
+    case "item_price":
+      return `Any ${describeTarget(reward.target, names)} for ${formatCents(reward.priceCents)}${limitText(reward.maxUnits)}`;
+    case "bogo": {
+      const deal = reward.get.percentBps === 10_000 ? "free" : `${percentText(reward.get.percentBps)} off`;
+      const getWhat = sameTarget(reward.buy.target, reward.get.target)
+        ? `${reward.get.quantity}`
+        : `${reward.get.quantity} ${describeTarget(reward.get.target, names)}`;
+      const times = reward.maxApplications ? ` (up to ${reward.maxApplications}× per order)` : "";
+      return `Buy ${reward.buy.quantity} ${describeTarget(reward.buy.target, names)}, get ${getWhat} ${deal}${times}`;
+    }
+    case "free_delivery":
+      return "Free delivery";
+  }
+}
+
+function limitText(maxUnits: number | null): string {
+  return maxUnits ? ` (up to ${maxUnits})` : "";
+}
+
+/** "20% off orders $30+": the reward plus its minimum, for lists. */
+export function describePromotionShort(p: Pick<PromotionTerms, "reward" | "minSubtotalCents">, names?: TargetNames): string {
+  const reward = describeReward(p.reward, names);
+  if (p.minSubtotalCents <= 0) return reward;
+  const min = formatCents(p.minSubtotalCents).replace(/\.00$/, "");
+  return REWARD_SPEC[p.reward.type].scope === "order"
+    ? `${reward} orders ${min}+`
+    : `${reward} on orders ${min}+`;
+}
+
+/**
+ * The plain-English sentence a customer reads: reward, minimum, order type,
+ * schedule, dates, limits, and the code when there is one.
+ */
+export function describeOffer(
+  p: Omit<PromotionTerms, "id" | "name" | "isActive" | "archivedAt">,
+  opts: { timezone: string; code?: string | null; names?: TargetNames },
+): string {
+  const parts = [`${describePromotionShort(p, opts.names)}.`];
+  if (p.orderTypes.length === 1) parts.push(p.orderTypes[0] === "pickup" ? "Pickup orders only." : "Delivery orders only.");
+  if (p.schedule?.length) parts.push(`Valid ${describeSchedule(p.schedule)}.`);
+  if (p.startsAt && p.endsAt) {
+    parts.push(`${formatDay(p.startsAt, opts.timezone)} through ${formatLastDay(p.endsAt, opts.timezone)}.`);
+  } else if (p.startsAt) parts.push(`Starts ${formatDay(p.startsAt, opts.timezone)}.`);
+  else if (p.endsAt) parts.push(`Ends ${formatLastDay(p.endsAt, opts.timezone)}.`);
+  if (p.newCustomersOnly) parts.push("New customers only.");
+  if (p.perCustomerLimit) parts.push(p.perCustomerLimit === 1 ? "Once per customer." : `Up to ${p.perCustomerLimit} times per customer.`);
+  if (p.totalLimit) parts.push(`Limited to the first ${p.totalLimit} orders.`);
+  if (!p.stackable) parts.push("Can't be combined with other offers.");
+  if (p.trigger === "code") parts.push(opts.code ? `Use code ${opts.code}.` : "Requires a code.");
+  else parts.push("Applied automatically.");
+  return parts.join(" ");
+}
 
 function countOf(n: number, phrase: string): string {
   return n === 1 ? `a ${phrase}` : `${n} × ${phrase}`;
@@ -102,3 +227,12 @@ export function lostDealCopy(lost: { code: string | null; label: string }, refus
       return `${lost.code} is no longer available`;
   }
 }
+
+export const PROMOTION_STATUS_LABEL: Record<PromotionStatus, string> = {
+  active: "Active",
+  scheduled: "Scheduled",
+  expired: "Expired",
+  paused: "Paused",
+  used_up: "Used up",
+  archived: "Archived",
+};

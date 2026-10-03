@@ -1,131 +1,20 @@
 /**
- * Promotions: the reward union, the pure evaluator that turns a priced cart
- * plus candidate promotions into discounts, and the words customers and
- * operators read about them. Shared by server and client; no I/O.
- *
- * Money is integer cents, percentages are basis points (2000 = 20%).
+ * The pure promotions evaluator: a priced cart plus candidate promotions in,
+ * discounts, typed refusals and nudges out. Shared by server and client; no
+ * I/O and no English (promotion-copy.ts owns the words).
  */
-import { z } from "zod";
-import { DAY_NAMES, formatTime, zonedDayStart, zonedParts } from "./hours";
-import { formatCents } from "./money";
-import { normalizeCode } from "./promo-code";
-
-export const PROMOTION_TRIGGERS = ["automatic", "code"] as const;
-export type PromotionTrigger = (typeof PROMOTION_TRIGGERS)[number];
-
-export const ORDER_TYPES = ["pickup", "delivery"] as const;
-export type OrderType = (typeof ORDER_TYPES)[number];
-
-export const DISCOUNT_TARGETS = ["items", "delivery"] as const;
-export type DiscountTarget = (typeof DISCOUNT_TARGETS)[number];
-
-export const DISCOUNT_SOURCES = ["promotion", "comp"] as const;
-
-// ---------------------------------------------------------------------------
-// Shapes
-// ---------------------------------------------------------------------------
-
-const id = z.number().int().positive();
-const cents = z.number().int().min(1).max(1_000_000);
-const percentBps = z.number().int().min(100, "Percent must be 1–100").max(10_000, "Percent must be 1–100");
-const units = z.number().int().min(1).max(100).nullable();
-
-/**
- * A line qualifies when (categoryIds empty or its category is listed) and
- * (itemIds empty or its item is listed) and (modifierIds empty or it carries
- * one of them, e.g. the "Large" size). All empty means any item.
- */
-export const targetSchema = z.object({
-  categoryIds: z.array(id).max(100),
-  itemIds: z.array(id).max(500),
-  modifierIds: z.array(id).max(100),
-});
-export type Target = z.infer<typeof targetSchema>;
-
-export const ANY_ITEM: Target = { categoryIds: [], itemIds: [], modifierIds: [] };
-
-export const promotionRewardSchema = z.discriminatedUnion("type", [
-  z.object({ type: z.literal("order_percent"), percentBps, maxDiscountCents: cents.nullable() }),
-  z.object({ type: z.literal("order_amount"), amountCents: cents }),
-  z.object({ type: z.literal("item_percent"), target: targetSchema, percentBps, maxUnits: units }),
-  z.object({ type: z.literal("item_amount"), target: targetSchema, amountCents: cents, maxUnits: units }),
-  z.object({
-    type: z.literal("item_price"),
-    target: targetSchema,
-    priceCents: z.number().int().min(0).max(1_000_000),
-    maxUnits: units,
-  }),
-  z.object({
-    type: z.literal("bogo"),
-    buy: z.object({ target: targetSchema, quantity: z.number().int().min(1).max(20) }),
-    get: z.object({ target: targetSchema, quantity: z.number().int().min(1).max(20), percentBps }),
-    maxApplications: units,
-  }),
-  z.object({ type: z.literal("free_delivery") }),
-]);
-export type PromotionReward = z.infer<typeof promotionRewardSchema>;
-export type RewardType = PromotionReward["type"];
-
-const HHMM = /^([01]\d|2[0-3]):[0-5]\d$/;
-export const weeklyWindowSchema = z
-  .object({
-    days: z.array(z.number().int().min(0).max(6)).min(1, "Pick at least one day").max(7),
-    start: z.string().regex(HHMM),
-    end: z.string().regex(HHMM),
-  })
-  .refine((w) => w.start !== w.end, "A time window needs different start and end times");
-/** `days`: 0 = Sunday. An end at or before the start runs past midnight. */
-export type WeeklyWindow = z.infer<typeof weeklyWindowSchema>;
-
-const day = z
-  .string()
-  .regex(/^\d{4}-\d{2}-\d{2}$/, "Pick a date")
-  .nullable();
-
-/** What the operator's form submits; dates are store-local days, both inclusive. */
-export const promotionInputSchema = z
-  .object({
-    name: z.string().trim().min(1, "Give the deal a name customers will see").max(80),
-    description: z.string().trim().max(500).nullable(),
-    trigger: z.enum(PROMOTION_TRIGGERS),
-    reward: promotionRewardSchema,
-    minSubtotalCents: z.number().int().min(0).max(1_000_000),
-    orderTypes: z.array(z.enum(ORDER_TYPES)).min(1, "Pick pickup, delivery or both").max(2),
-    startsOn: day,
-    endsOn: day,
-    schedule: z.array(weeklyWindowSchema).max(14),
-    newCustomersOnly: z.boolean(),
-    perCustomerLimit: z.number().int().min(1, "Limits must be at least 1").max(1000).nullable(),
-    totalLimit: z.number().int().min(1, "Limits must be at least 1").max(1_000_000).nullable(),
-    stackable: z.boolean(),
-    advertised: z.boolean(),
-  })
-  .refine((p) => !p.startsOn || !p.endsOn || p.endsOn >= p.startsOn, {
-    message: "The end date must be on or after the start date",
-    path: ["endsOn"],
-  })
-  .refine((p) => p.reward.type !== "free_delivery" || p.orderTypes.includes("delivery"), {
-    message: "Free delivery needs delivery orders",
-    path: ["orderTypes"],
-  });
-export type PromotionInput = z.infer<typeof promotionInputSchema>;
-
-/** Form input to stored columns: days become instants on the store's clock. */
-export function promotionColumns(input: PromotionInput, timezone: string) {
-  const { startsOn, endsOn, ...rest } = input;
-  const nextDay = (d: string) => {
-    const t = new Date(`${d}T00:00:00Z`);
-    t.setUTCDate(t.getUTCDate() + 1);
-    return t.toISOString().slice(0, 10);
-  };
-  return {
-    ...rest,
-    description: rest.description || null,
-    schedule: rest.schedule.length ? rest.schedule : null,
-    startsAt: startsOn ? zonedDayStart(startsOn, timezone) : null,
-    endsAt: endsOn ? zonedDayStart(nextDay(endsOn), timezone) : null,
-  };
-}
+import { zonedParts } from "./hours";
+import {
+  REWARD_SPEC,
+  type DiscountTarget,
+  type OrderType,
+  type PromotionReward,
+  type PromotionTrigger,
+  type RewardScope,
+  type RewardType,
+  type Target,
+  type WeeklyWindow,
+} from "./promotion-schema";
 
 /** Everything the evaluator reads about a promotion. */
 export type PromotionTerms = {
@@ -174,13 +63,6 @@ export type EvalLine = {
   modifierIds: number[];
   quantity: number;
   unitPriceCents: number;
-};
-
-/** Display names for target ids, for "Add a Large 14" Cheese Pizza to use this". */
-export type TargetNames = {
-  categories: Record<number, string>;
-  items: Record<number, string>;
-  modifiers: Record<number, string>;
 };
 
 export type EvaluateInput = {
@@ -251,12 +133,6 @@ export type Evaluation = {
   nudges: Nudge[];
   discountCents: number;
 };
-
-// ---------------------------------------------------------------------------
-// Identity
-// ---------------------------------------------------------------------------
-
-export { normalizeCode };
 
 /** The customer identity limits are counted against: the phone's last 10 digits. */
 export function customerKeyFromPhone(phone: string | null | undefined): string | null {
@@ -389,157 +265,12 @@ function applyReward(reward: PromotionReward, s: PriceState, lines: EvalLine[]):
 }
 
 export function rewardTarget(reward: PromotionReward): DiscountTarget {
-  return reward.type === "free_delivery" ? "delivery" : "items";
+  return REWARD_SPEC[reward.type].scope === "delivery" ? "delivery" : "items";
 }
 
 /** Item-level rewards go first so order-level ones discount what is left. */
-function stage(reward: PromotionReward): number {
-  switch (reward.type) {
-    case "item_percent":
-    case "item_amount":
-    case "item_price":
-    case "bogo":
-      return 0;
-    case "order_percent":
-    case "order_amount":
-      return 1;
-    case "free_delivery":
-      return 2;
-  }
-}
-
-// ---------------------------------------------------------------------------
-// Words
-// ---------------------------------------------------------------------------
-
-/** "Oct 10" on the store's calendar. */
-export function formatDay(d: Date, timeZone: string): string {
-  return d.toLocaleDateString("en-US", { month: "short", day: "numeric", timeZone });
-}
-
-/** The last day an offer runs: endsAt is the exclusive instant it stops. */
-export function formatLastDay(endsAt: Date, timeZone: string): string {
-  return formatDay(new Date(endsAt.getTime() - 1), timeZone);
-}
-
-const SHORT_DAYS = DAY_NAMES.map((d) => d.slice(0, 3));
-
-function describeDays(days: number[]): string {
-  const sorted = [...new Set(days)].sort((a, b) => a - b);
-  if (sorted.length === 7) return "Daily";
-  const runs: number[][] = [];
-  for (const d of sorted) {
-    const run = runs.at(-1);
-    if (run && run.at(-1) === d - 1) run.push(d);
-    else runs.push([d]);
-  }
-  return runs
-    .flatMap((r) =>
-      r.length >= 3 ? [`${SHORT_DAYS[r[0]]}–${SHORT_DAYS[r.at(-1)!]}`] : r.map((d) => SHORT_DAYS[d]),
-    )
-    .join(", ");
-}
-
-/** "3–6 PM", "11 AM–2 PM". */
-function describeHours(start: string, end: string): string {
-  const a = formatTime(start);
-  const b = formatTime(end);
-  const suffix = a.slice(-2);
-  return suffix === b.slice(-2) ? `${a.slice(0, -3)}–${b}` : `${a}–${b}`;
-}
-
-/** "Tue 3–6 PM", "Mon–Fri 11 AM–2 PM, Sat 3–6 PM". */
-export function describeSchedule(schedule: WeeklyWindow[]): string {
-  return schedule.map((w) => `${describeDays(w.days)} ${describeHours(w.start, w.end)}`).join(", ");
-}
-
-function nameList(ids: number[], names: Record<number, string> | undefined): string[] {
-  return ids.map((i) => names?.[i]).filter((n): n is string => Boolean(n));
-}
-
-/**
- * What a target covers, without an article: "Large 14" Cheese Pizza",
- * "Large 14" item from Specialty Pizzas", "item". Lists join with "or".
- */
-export function describeTarget(t: Target, names?: TargetNames): string {
-  const mods = nameList(t.modifierIds, names?.modifiers).join(" or ");
-  const items = nameList(t.itemIds, names?.items).join(" or ");
-  const cats = nameList(t.categoryIds, names?.categories).join(" or ");
-  const noun = items || (cats ? `item from ${cats}` : "item");
-  return mods ? `${mods} ${noun}` : noun;
-}
-
-export function sameTarget(a: Target, b: Target): boolean {
-  return JSON.stringify(a) === JSON.stringify(b);
-}
-
-function percentText(bps: number): string {
-  return `${Number((bps / 100).toFixed(2))}%`;
-}
-
-/** The reward in a few words: "20% off (up to $10)", "Buy 1 Large 14" item, get 1 free". */
-export function describeReward(reward: PromotionReward, names?: TargetNames): string {
-  switch (reward.type) {
-    case "order_percent":
-      return `${percentText(reward.percentBps)} off${reward.maxDiscountCents ? ` (up to ${formatCents(reward.maxDiscountCents)})` : ""}`;
-    case "order_amount":
-      return `${formatCents(reward.amountCents)} off`;
-    case "item_percent":
-      return `${percentText(reward.percentBps)} off any ${describeTarget(reward.target, names)}${limitText(reward.maxUnits)}`;
-    case "item_amount":
-      return `${formatCents(reward.amountCents)} off any ${describeTarget(reward.target, names)}${limitText(reward.maxUnits)}`;
-    case "item_price":
-      return `Any ${describeTarget(reward.target, names)} for ${formatCents(reward.priceCents)}${limitText(reward.maxUnits)}`;
-    case "bogo": {
-      const deal = reward.get.percentBps === 10_000 ? "free" : `${percentText(reward.get.percentBps)} off`;
-      const getWhat = sameTarget(reward.buy.target, reward.get.target)
-        ? `${reward.get.quantity}`
-        : `${reward.get.quantity} ${describeTarget(reward.get.target, names)}`;
-      const times = reward.maxApplications ? ` (up to ${reward.maxApplications}× per order)` : "";
-      return `Buy ${reward.buy.quantity} ${describeTarget(reward.buy.target, names)}, get ${getWhat} ${deal}${times}`;
-    }
-    case "free_delivery":
-      return "Free delivery";
-  }
-}
-
-function limitText(maxUnits: number | null): string {
-  return maxUnits ? ` (up to ${maxUnits})` : "";
-}
-
-/** "20% off orders $30+": the reward plus its minimum, for lists. */
-export function describePromotionShort(p: Pick<PromotionTerms, "reward" | "minSubtotalCents">, names?: TargetNames): string {
-  const reward = describeReward(p.reward, names);
-  if (p.minSubtotalCents <= 0) return reward;
-  const min = formatCents(p.minSubtotalCents).replace(/\.00$/, "");
-  return p.reward.type === "order_percent" || p.reward.type === "order_amount"
-    ? `${reward} orders ${min}+`
-    : `${reward} on orders ${min}+`;
-}
-
-/**
- * The plain-English sentence a customer reads: reward, minimum, order type,
- * schedule, dates, limits, and the code when there is one.
- */
-export function describeOffer(
-  p: Omit<PromotionTerms, "id" | "name" | "isActive" | "archivedAt">,
-  opts: { timezone: string; code?: string | null; names?: TargetNames },
-): string {
-  const parts = [`${describePromotionShort(p, opts.names)}.`];
-  if (p.orderTypes.length === 1) parts.push(p.orderTypes[0] === "pickup" ? "Pickup orders only." : "Delivery orders only.");
-  if (p.schedule?.length) parts.push(`Valid ${describeSchedule(p.schedule)}.`);
-  if (p.startsAt && p.endsAt) {
-    parts.push(`${formatDay(p.startsAt, opts.timezone)} through ${formatLastDay(p.endsAt, opts.timezone)}.`);
-  } else if (p.startsAt) parts.push(`Starts ${formatDay(p.startsAt, opts.timezone)}.`);
-  else if (p.endsAt) parts.push(`Ends ${formatLastDay(p.endsAt, opts.timezone)}.`);
-  if (p.newCustomersOnly) parts.push("New customers only.");
-  if (p.perCustomerLimit) parts.push(p.perCustomerLimit === 1 ? "Once per customer." : `Up to ${p.perCustomerLimit} times per customer.`);
-  if (p.totalLimit) parts.push(`Limited to the first ${p.totalLimit} orders.`);
-  if (!p.stackable) parts.push("Can't be combined with other offers.");
-  if (p.trigger === "code") parts.push(opts.code ? `Use code ${opts.code}.` : "Requires a code.");
-  else parts.push("Applied automatically.");
-  return parts.join(" ");
-}
+const STAGE: Record<RewardScope, number> = { item: 0, order: 1, delivery: 2 };
+const stage = (reward: PromotionReward) => STAGE[REWARD_SPEC[reward.type].scope];
 
 // ---------------------------------------------------------------------------
 // Eligibility
@@ -583,7 +314,7 @@ function firstRefusal(c: PromotionCandidate, input: EvaluateInput): Refusal | nu
   }
   if (!inSchedule(p.schedule, now, timezone)) return { kind: "schedule", schedule: p.schedule ?? [] };
   if (!p.orderTypes.includes(input.orderType)) return { kind: "orderType", only: input.orderType === "pickup" ? "delivery" : "pickup" };
-  if (p.reward.type === "free_delivery") {
+  if (REWARD_SPEC[p.reward.type].scope === "delivery") {
     if (input.orderType === "pickup") return { kind: "orderType", only: "delivery" };
     if (input.deliveryFeeCents === 0) return { kind: "deliveryFree" };
   }
@@ -716,15 +447,6 @@ export function discountedTotals(args: {
 
 export const PROMOTION_STATUSES = ["active", "scheduled", "expired", "paused", "used_up", "archived"] as const;
 export type PromotionStatus = (typeof PROMOTION_STATUSES)[number];
-
-export const PROMOTION_STATUS_LABEL: Record<PromotionStatus, string> = {
-  active: "Active",
-  scheduled: "Scheduled",
-  expired: "Expired",
-  paused: "Paused",
-  used_up: "Used up",
-  archived: "Archived",
-};
 
 /** Derived from the data, never stored. */
 export function promotionStatus(

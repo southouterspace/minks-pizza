@@ -4,24 +4,28 @@
  */
 import assert from "node:assert/strict";
 import { zonedDayStart } from "../src/lib/hours";
+import { normalizeCode } from "../src/lib/promo-code";
+import { EMPTY_DRAFT, fromDraft, promotionTemplates, toDraft, type PromotionDraft } from "../src/lib/promotion-codec";
 import {
   customerKeyFromPhone,
-  describeOffer,
-  describePromotionShort,
-  describeSchedule,
   discountedTotals,
   evaluatePromotions,
   inSchedule,
-  normalizeCode,
   promotionStatus,
   type EvalLine,
   type EvaluateInput,
   type PromotionCandidate,
-  type PromotionReward,
   type PromotionTerms,
+} from "../src/lib/promotion-engine";
+import {
+  promotionColumns,
+  promotionInputSchema,
+  REWARD_TYPES,
+  type PromotionInput,
+  type PromotionReward,
   type Target,
-} from "../src/lib/promotions";
-import { lostDealCopy, nudgeCopy, refusalCopy } from "../src/lib/promotion-copy";
+} from "../src/lib/promotion-schema";
+import { describeOffer, describePromotionShort, describeSchedule, lostDealCopy, nudgeCopy, refusalCopy } from "../src/lib/promotion-copy";
 
 let passed = 0;
 function test(name: string, fn: () => void) {
@@ -433,6 +437,50 @@ test("status is derived from the data", () => {
   assert.equal(promotionStatus({ ...p, totalLimit: 5 }, { uses: 5 }, NOW), "used_up");
   assert.equal(promotionStatus({ ...p, isActive: false }, { uses: 0 }, NOW), "paused");
   assert.equal(promotionStatus({ ...p, isActive: false, archivedAt: NOW }, { uses: 0 }, NOW), "archived");
+});
+
+// --- Operator form codec -----------------------------------------------------
+
+const catalog = {
+  categories: [{ id: PIZZAS, name: "Pizzas" }],
+  items: [{ id: CHEESE, name: "Cheese Pizza", categoryId: PIZZAS }],
+  modifierGroups: [{ id: 1, name: "Size", modifiers: [{ id: MEDIUM, name: 'Medium 12"' }, { id: 102, name: 'X-Large 18"' }, { id: LARGE, name: 'Large 14"' }] }],
+};
+
+/** Saves the input the way the admin does, reads it back into a draft, and submits that draft again. */
+function roundTrip(input: PromotionInput): PromotionInput {
+  const stored = { id: 1, isActive: true, archivedAt: null, ...promotionColumns(input, TZ) };
+  return fromDraft(toDraft({ ...stored, description: stored.description, advertised: stored.advertised }, TZ));
+}
+
+test("templates fill the form with the reward they name", () => {
+  const byLabel = new Map(promotionTemplates(catalog).map((t) => [t.label, fromDraft(t.draft)]));
+  const larges = target({ modifierIds: [LARGE] });
+  assert.deepEqual(byLabel.get("BOGO")?.reward, {
+    type: "bogo",
+    buy: { target: larges, quantity: 1 },
+    get: { target: larges, quantity: 1, percentBps: 10_000 },
+    maxApplications: null,
+  });
+  assert.deepEqual(byLabel.get("Item deal price")?.reward, { type: "item_price", target: larges, priceCents: 1200, maxUnits: null });
+  assert.deepEqual(byLabel.get("$ off order")?.minSubtotalCents, 2500);
+  assert.deepEqual(byLabel.get("Free delivery")?.orderTypes, ["delivery"]);
+});
+
+test("every template and every reward type survives save and edit unchanged", () => {
+  const drafts: PromotionDraft[] = [
+    ...promotionTemplates(catalog).map((t) => t.draft),
+    { ...EMPTY_DRAFT, name: "Knots 30% off", rewardType: "item_percent", percent: "30", maxUnits: "2", target: target({ categoryIds: [SIDES] }) },
+    { ...EMPTY_DRAFT, name: "$3 off pizzas", rewardType: "item_amount", amount: "3.5", target: target({ categoryIds: [PIZZAS] }), startsOn: "2026-10-10", endsOn: "2026-10-31" },
+    { ...EMPTY_DRAFT, name: "Pizza, half-off knots", rewardType: "bogo", target: target({ categoryIds: [PIZZAS] }), getSameAsBuy: false, getTarget: target({ itemIds: [KNOTS] }), getPercent: "50", maxApplications: "2" },
+    { ...EMPTY_DRAFT, name: "12.5% up to $8", rewardType: "order_percent", percent: "12.5", maxDiscount: "8", perCustomerLimit: "1", totalLimit: "100", newCustomersOnly: true, stackable: true, advertised: false },
+  ];
+  assert.deepEqual([...new Set(drafts.map((d) => d.rewardType))].sort(), [...REWARD_TYPES].sort());
+  for (const d of drafts) {
+    const input = fromDraft(d);
+    assert.ok(promotionInputSchema.safeParse(input).success, d.name);
+    assert.deepEqual(roundTrip(input), input, d.name);
+  }
 });
 
 console.log(`\n${passed} tests passed`);

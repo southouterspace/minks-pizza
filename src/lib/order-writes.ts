@@ -3,7 +3,7 @@ import { and, eq, inArray, sql, type SQL } from "drizzle-orm";
 import { db, orderDiscounts, orderEvents, orders } from "@/db";
 import { formatCents } from "@/lib/money";
 import { getSettings } from "@/lib/orders";
-import { customerKeyFromPhone, discountedTotals } from "@/lib/promotions";
+import { customerKeyFromPhone, discountedTotals } from "@/lib/promotion-engine";
 import {
   canTransition,
   COOKING_STATUSES,

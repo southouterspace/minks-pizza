@@ -23,7 +23,7 @@ import {
   PROMOTION_TRIGGERS,
   type PromotionReward,
   type WeeklyWindow,
-} from "../lib/promotions";
+} from "../lib/promotion-schema";
 
 // ---------------------------------------------------------------------------
 // Enums

@@ -6,8 +6,8 @@ import { requireOperator } from "@/lib/auth";
 import { formatCents } from "@/lib/money";
 import { getSettings } from "@/lib/orders";
 import { catalogNames, everUsed, getMenuCatalog, getPromotion } from "@/lib/promotion-admin";
-import { toDraft } from "@/lib/promotion-draft";
-import { promotionStatus } from "@/lib/promotions";
+import { toDraft } from "@/lib/promotion-codec";
+import { promotionStatus } from "@/lib/promotion-engine";
 import { PromotionForm } from "@/components/admin/promotion-form";
 import {
   ArchiveButtons,

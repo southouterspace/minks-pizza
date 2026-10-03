@@ -2,8 +2,8 @@
 
 import { checkoutSchema, previewSchema } from "@/lib/validation";
 import { createOrder, OrderError, quoteCheckout } from "@/lib/orders";
-import { nudgeCopy, refusalCopy } from "@/lib/promotion-copy";
-import { formatLastDay, type DiscountTarget } from "@/lib/promotions";
+import { formatLastDay, nudgeCopy, refusalCopy } from "@/lib/promotion-copy";
+import type { DiscountTarget } from "@/lib/promotion-schema";
 
 export type QuoteView = {
   subtotalCents: number;

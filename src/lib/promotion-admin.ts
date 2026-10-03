@@ -12,7 +12,7 @@ import {
   promotions,
 } from "@/db";
 import { toTerms } from "@/lib/promotion-queries";
-import type { PromotionTerms } from "@/lib/promotions";
+import { isOrderReward } from "@/lib/promotion-schema";
 
 export type PromotionStats = {
   uses: number;
@@ -155,12 +155,19 @@ export function catalogNames(c: MenuCatalog) {
   };
 }
 
-/** Live promotions an operator can comp by hand: whole-order rewards only. */
-export async function compPresets(): Promise<(PromotionTerms & { id: number })[]> {
+/** A comp the operator can fill in with one tap: a live deal's whole-order reward. */
+export type DiscountPreset = { promotionId: number; label: string; amount: { cents: number } | { percentBps: number } };
+
+export async function compPresets(): Promise<DiscountPreset[]> {
   const rows = await db
     .select()
     .from(promotions)
-    .where(sql`${promotions.isActive} and ${promotions.archivedAt} is null and ${promotions.reward}->>'type' in ('order_percent', 'order_amount')`)
+    .where(sql`${promotions.isActive} and ${promotions.archivedAt} is null`)
     .orderBy(asc(promotions.id));
-  return rows.map(toTerms);
+  return rows.flatMap((row) => {
+    const { reward } = toTerms(row);
+    if (!isOrderReward(reward)) return [];
+    const amount = reward.type === "order_percent" ? { percentBps: reward.percentBps } : { cents: reward.amountCents };
+    return [{ promotionId: row.id, label: row.name, amount }];
+  });
 }
