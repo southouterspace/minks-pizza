@@ -778,6 +778,11 @@ function logoUrlOrNull(formData: FormData): string | null {
   return /^https:\/\/\S+$/i.test(raw) ? raw : null;
 }
 
+/** A percent field as basis points, refused outside [min, max] percent. */
+function percentBps(fd: FormData, name: string, min: number, max: number): number {
+  return Math.round(z.coerce.number().min(min).max(max).parse(textField(fd, name)) * 100);
+}
+
 export async function saveSettings(formData: FormData): Promise<void> {
   await requireOperator();
 
@@ -830,6 +835,11 @@ export async function saveSettings(formData: FormData): Promise<void> {
     deliveryMinimumCents: dollarsToCents(formData, "deliveryMinimum"),
     taxRateBps: Math.round(taxPercent * 100),
     timezone: timezoneField(formData),
+    halfToppingPriceBps: percentBps(formData, "halfToppingPricePct", 0, 100),
+    halfPortionBps: percentBps(formData, "halfPortionPct", 0, 100),
+    lightPortionBps: percentBps(formData, "lightPortionPct", 0, 100),
+    extraPortionBps: percentBps(formData, "extraPortionPct", 100, 300),
+    minMarginBps: percentBps(formData, "minMarginPct", 0, 100),
     updatedAt: new Date(),
   };
 
