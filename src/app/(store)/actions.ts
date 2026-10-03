@@ -64,6 +64,7 @@ export type CheckoutPreview =
         name: string;
         description: string | null;
         pointsCost: number;
+        increase: { cost: number; on: string } | null;
         pointsShort: number;
         fitsCart: boolean;
       }[];
@@ -87,8 +88,9 @@ export async function previewCheckout(input: unknown): Promise<CheckoutPreview> 
             id: r.id,
             name: r.name,
             description: r.description,
-            pointsCost: r.pointsCost,
-            pointsShort: Math.max(0, r.pointsCost - member.pointsBalance),
+            pointsCost: r.price.cost,
+            increase: r.price.increase && { cost: r.price.increase.cost, on: r.price.increase.on.toISOString() },
+            pointsShort: Math.max(0, r.price.cost - member.pointsBalance),
             fitsCart: rewardDiscount(r.effect, q.lines).ok,
           }))
         : [];

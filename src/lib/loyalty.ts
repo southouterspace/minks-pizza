@@ -246,6 +246,61 @@ export function rewardDiscount(effect: RewardEffect, lines: DiscountLine[]): Dis
 }
 
 // ---------------------------------------------------------------------------
+// Price protection
+// ---------------------------------------------------------------------------
+
+/** How long the old price holds after an operator raises a reward's cost. */
+export const PRICE_PROTECTION_DAYS = 60;
+
+export type RewardPricing = {
+  pointsCost: number;
+  previousPointsCost: number | null;
+  priceProtectedUntil: Date | null;
+};
+
+export type RewardPrice = {
+  /** What a customer pays today. */
+  cost: number;
+  /** A scheduled increase still inside its protection window. */
+  increase: { cost: number; on: Date } | null;
+};
+
+export function rewardPrice(r: RewardPricing, now: Date): RewardPrice {
+  const protectedPrice =
+    r.previousPointsCost !== null && r.priceProtectedUntil !== null && now < r.priceProtectedUntil
+      ? r.previousPointsCost
+      : null;
+  if (protectedPrice === null || protectedPrice >= r.pointsCost) {
+    return { cost: Math.min(r.pointsCost, protectedPrice ?? Infinity), increase: null };
+  }
+  return { cost: protectedPrice, increase: { cost: r.pointsCost, on: r.priceProtectedUntil! } };
+}
+
+export function formatPriceIncrease(
+  increase: { cost: number; on: Date },
+  timezone: string,
+): string {
+  const on = increase.on.toLocaleDateString("en-US", { month: "short", day: "numeric", timeZone: timezone });
+  return `Price going up to ${increase.cost.toLocaleString()} on ${on}`;
+}
+
+/**
+ * An operator's new cost. A raise keeps today's price for 60 days; a cut, or
+ * a change that stays at or below today's price, applies at once.
+ */
+export function repriceReward(current: RewardPricing, newCost: number, now: Date): RewardPricing {
+  const today = rewardPrice(current, now).cost;
+  if (newCost <= today) {
+    return { pointsCost: newCost, previousPointsCost: null, priceProtectedUntil: null };
+  }
+  return {
+    pointsCost: newCost,
+    previousPointsCost: today,
+    priceProtectedUntil: new Date(now.getTime() + PRICE_PROTECTION_DAYS * 24 * 60 * 60 * 1000),
+  };
+}
+
+// ---------------------------------------------------------------------------
 // Lazy grants
 // ---------------------------------------------------------------------------
 

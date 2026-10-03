@@ -480,6 +480,42 @@ async function main() {
   check("13 months without an order expires the balance once", expired.length === 1 && expired[0].points === -699);
   check("expired member has 0 points", (await member(BEN.digits)).pointsBalance === 0);
 
+  // --- Price protection ----------------------------------------------------
+  await op.goto(`${BASE}/admin/loyalty/rewards`, { waitUntil: "networkidle" });
+  const threeOffForm = op.getByTestId(`reward-form-${threeOff.id}`);
+  await threeOffForm.getByLabel("Points").fill("400");
+  check(
+    "operator is told the old price holds before saving a raise",
+    (await threeOffForm.getByTestId("price-note").textContent())?.startsWith("Customers keep paying 300 points for 60 days") === true,
+  );
+  await threeOffForm.getByRole("button", { name: "Save" }).click();
+  await op.waitForURL(/saved=1/);
+  const [raised] = await db.select().from(loyaltyRewards).where(eq(loyaltyRewards.id, threeOff.id));
+  const protectedDays = (raised.priceProtectedUntil!.getTime() - Date.now()) / 86_400_000;
+  check(
+    "a raise keeps the old cost for 60 days",
+    raised.pointsCost === 400 && raised.previousPointsCost === 300 && protectedDays > 59.9 && protectedDays <= 60,
+    `${raised.pointsCost}/${raised.previousPointsCost}, ${protectedDays.toFixed(2)} days`,
+  );
+  await rita.goto(`${BASE}/rewards`, { waitUntil: "networkidle" });
+  check(
+    "customers see the scheduled increase",
+    (await rita.getByTestId("price-increase").first().textContent())?.startsWith("Price going up to 400 on") === true,
+  );
+  const protectedOrder = await createOrder(racer, { memberId: ritaMember.id });
+  check("redeeming during protection costs the old 300", protectedOrder.loyaltyPointsRedeemed === 300);
+  await db.batch([
+    db.update(orders).set({ status: "canceled" }).where(eq(orders.id, protectedOrder.id)),
+    ...cancellationStatements(protectedOrder.id),
+  ]);
+  await op.goto(`${BASE}/admin/loyalty/rewards`, { waitUntil: "networkidle" });
+  await threeOffForm.getByLabel("Points").fill("250");
+  check("a cut is applied right away", (await threeOffForm.getByTestId("price-note").textContent()) === "Lower prices apply right away.");
+  await threeOffForm.getByRole("button", { name: "Save" }).click();
+  await op.waitForURL(/saved=1/);
+  const [cut] = await db.select().from(loyaltyRewards).where(eq(loyaltyRewards.id, threeOff.id));
+  check("a cut clears protection", cut.pointsCost === 250 && cut.previousPointsCost === null && cut.priceProtectedUntil === null);
+
   // --- Screenshots ----------------------------------------------------------
   const anonCtx = await browser.newContext();
   await shots(anonCtx, "/rewards", "rewards-signed-out");

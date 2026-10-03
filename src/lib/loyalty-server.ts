@@ -25,15 +25,19 @@ import {
   expiryDue,
   localDate,
   rewardEffectSchema,
+  rewardPrice,
   tierProgress,
   type LedgerKind,
   type RewardEffect,
+  type RewardPrice,
 } from "@/lib/loyalty";
 
 export type LoyaltySettings = typeof loyaltySettings.$inferSelect;
 export type LoyaltyMember = typeof loyaltyMembers.$inferSelect;
 export type LoyaltyReward = Omit<typeof loyaltyRewards.$inferSelect, "effect"> & {
   effect: RewardEffect;
+  /** What it costs a customer today; pointsCost is the operator's list price. */
+  price: RewardPrice;
 };
 
 export const INSUFFICIENT_POINTS = "You don't have enough points for that reward anymore.";
@@ -122,7 +126,7 @@ export async function getLoyaltySettings(): Promise<LoyaltySettings> {
 }
 
 function parseReward(row: typeof loyaltyRewards.$inferSelect): LoyaltyReward {
-  return { ...row, effect: rewardEffectSchema.parse(row.effect) };
+  return { ...row, effect: rewardEffectSchema.parse(row.effect), price: rewardPrice(row, new Date()) };
 }
 
 export async function listRewards({ activeOnly }: { activeOnly: boolean }) {
@@ -422,11 +426,11 @@ export function memberLedger(memberId: number, limit = 50) {
 export function centsPerPoint(rewards: LoyaltyReward[]): number | null {
   const cheapest = rewards
     .filter((r) => r.isActive)
-    .toSorted((a, b) => a.pointsCost - b.pointsCost)[0];
+    .toSorted((a, b) => a.price.cost - b.price.cost)[0];
   if (!cheapest) return null;
   const value =
     cheapest.effect.kind === "amount_off" ? cheapest.effect.amountOffCents : cheapest.effect.maxValueCents;
-  return value / cheapest.pointsCost;
+  return value / cheapest.price.cost;
 }
 
 export async function programStats() {

@@ -215,7 +215,7 @@ export async function quoteOrder(
       rewardError = "That reward is no longer available.";
     } else if (!member || !canRedeem) {
       rewardError = "Sign in to use your points.";
-    } else if (member.pointsBalance < reward.pointsCost) {
+    } else if (member.pointsBalance < reward.price.cost) {
       rewardError = INSUFFICIENT_POINTS;
     } else if (!applied?.ok) {
       rewardError = `Add a qualifying item to use "${reward.name}".`;
@@ -344,7 +344,7 @@ export async function createOrder(
           paymentStatus: "pending",
           loyaltyMemberId: orderMember?.id ?? null,
           loyaltyRewardName: reward?.name ?? null,
-          loyaltyPointsRedeemed: reward?.pointsCost ?? 0,
+          loyaltyPointsRedeemed: reward?.price.cost ?? 0,
           loyaltyPointsEarned: quote.loyalty?.pointsEarned ?? 0,
         })
         .returning(),
@@ -368,7 +368,7 @@ export async function createOrder(
               idemKey: ledgerKey.redeem(orderId),
               orderId,
               note: reward.name,
-              from: { memberId: orderMember.id, points: -reward.pointsCost },
+              from: { memberId: orderMember.id, points: -reward.price.cost },
             }),
           ]
         : []),

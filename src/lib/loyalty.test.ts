@@ -13,6 +13,8 @@ import {
   tierFor,
   tierProgress,
   tiersSchema,
+  rewardPrice,
+  repriceReward,
   type PromotionRule,
 } from "./loyalty";
 
@@ -201,5 +203,41 @@ describe("expiryDue", () => {
   it("never expires when the program says never, or with nothing to expire", () => {
     assert.equal(expiryDue({ pointsBalance: 120, lastActivityAt: new Date("2020-01-01T00:00:00Z") }, now, null), false);
     assert.equal(expiryDue({ pointsBalance: 0, lastActivityAt: new Date("2020-01-01T00:00:00Z") }, now, 12), false);
+  });
+});
+
+describe("price protection", () => {
+  const now = new Date("2026-10-01T12:00:00Z");
+  const unprotected = { pointsCost: 300, previousPointsCost: null, priceProtectedUntil: null };
+
+  it("keeps the old price for 60 days after a raise", () => {
+    const raised = repriceReward(unprotected, 400, now);
+    assert.deepEqual(raised, {
+      pointsCost: 400,
+      previousPointsCost: 300,
+      priceProtectedUntil: new Date("2026-11-30T12:00:00Z"),
+    });
+    assert.deepEqual(rewardPrice(raised, now), {
+      cost: 300,
+      increase: { cost: 400, on: new Date("2026-11-30T12:00:00Z") },
+    });
+  });
+  it("charges the new price once protection ends", () => {
+    const raised = repriceReward(unprotected, 400, now);
+    assert.deepEqual(rewardPrice(raised, new Date("2026-11-30T12:00:01Z")), { cost: 400, increase: null });
+  });
+  it("applies a cut immediately", () => {
+    const raised = repriceReward(unprotected, 400, now);
+    assert.deepEqual(repriceReward(raised, 250, now), {
+      pointsCost: 250,
+      previousPointsCost: null,
+      priceProtectedUntil: null,
+    });
+  });
+  it("protects from today's price when raising again during protection", () => {
+    const raised = repriceReward(unprotected, 400, now);
+    const again = repriceReward(raised, 500, new Date("2026-10-11T12:00:00Z"));
+    assert.equal(again.previousPointsCost, 300);
+    assert.equal(rewardPrice(again, new Date("2026-10-11T12:00:00Z")).cost, 300);
   });
 });

@@ -33,6 +33,12 @@ export default async function LoyaltyRewardsPage({ searchParams }: PageProps<"/a
             <CardTitle className="flex items-center gap-2 text-sm">
               {r.name}
               {r.isActive ? null : <Badge variant="outline">Inactive</Badge>}
+              {r.price.increase ? (
+                <span className="text-xs font-normal text-muted-foreground">
+                  Customers pay {r.price.cost.toLocaleString()} until{" "}
+                  {r.price.increase.on.toLocaleDateString("en-US", { month: "short", day: "numeric" })}
+                </span>
+              ) : null}
             </CardTitle>
             <form action={deleteReward}>
               <input type="hidden" name="id" value={r.id} />

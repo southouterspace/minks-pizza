@@ -12,9 +12,10 @@ import {
   loyaltySettings,
 } from "@/db";
 import { requireOperator } from "@/lib/auth";
-import { rewardEffectSchema, tiersSchema } from "@/lib/loyalty";
+import { repriceReward, rewardEffectSchema, tiersSchema } from "@/lib/loyalty";
 import {
   getLoyaltySettings,
+  getReward,
   isInsufficientPoints,
   ledgerKey,
   ledgerStatement,
@@ -168,8 +169,12 @@ export async function saveReward(formData: FormData): Promise<void> {
   }
 
   const id = Number.parseInt(text(formData, "id"), 10);
-  if (Number.isInteger(id) && id > 0) {
-    await db.update(loyaltyRewards).set(parsed.data).where(eq(loyaltyRewards.id, id));
+  const existing = Number.isInteger(id) && id > 0 ? await getReward(id) : null;
+  if (existing) {
+    await db
+      .update(loyaltyRewards)
+      .set({ ...parsed.data, ...repriceReward(existing, parsed.data.pointsCost, new Date()) })
+      .where(eq(loyaltyRewards.id, id));
   } else {
     await db.insert(loyaltyRewards).values(parsed.data);
   }

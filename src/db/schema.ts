@@ -311,6 +311,9 @@ export const loyaltyRewards = pgTable("loyalty_rewards", {
   name: text("name").notNull(),
   description: text("description"),
   pointsCost: integer("points_cost").notNull(),
+  /** While protected, customers pay min(points_cost, previous_points_cost). */
+  previousPointsCost: integer("previous_points_cost"),
+  priceProtectedUntil: timestamp("price_protected_until", { withTimezone: true }),
   effect: jsonb("effect").$type<RewardEffect>().notNull(),
   isActive: boolean("is_active").notNull().default(true),
   sortOrder: integer("sort_order").notNull().default(0),

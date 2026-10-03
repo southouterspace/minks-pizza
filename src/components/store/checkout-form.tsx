@@ -619,6 +619,12 @@ function LoyaltyPanel({
                       ? `Add a qualifying item to use this${r.description ? `: ${r.description}` : ""}`
                       : r.description}
                 </span>
+                {r.increase ? (
+                  <span className="block text-xs text-warning">
+                    Price going up to {r.increase.cost.toLocaleString()} on{" "}
+                    {new Date(r.increase.on).toLocaleDateString("en-US", { month: "short", day: "numeric" })}
+                  </span>
+                ) : null}
               </span>
               <span className="shrink-0 tabular-nums text-xs text-muted-foreground">
                 {r.pointsCost.toLocaleString()} pts

@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import type { RewardEffect } from "@/lib/loyalty";
+import { PRICE_PROTECTION_DAYS, type RewardEffect } from "@/lib/loyalty";
 import { saveReward } from "@/app/admin/loyalty/actions";
 import { centsToDollars } from "@/components/admin/ui";
 import { Button } from "@/components/ui/button";
@@ -18,6 +18,8 @@ export type RewardFormValue = {
   sortOrder: number;
   isActive: boolean;
   effect: RewardEffect;
+  /** What customers pay today, which may be a protected older price. */
+  price: { cost: number };
 };
 
 export function RewardForm({
@@ -30,6 +32,15 @@ export function RewardForm({
   submitLabel: string;
 }) {
   const [kind, setKind] = useState<RewardEffect["kind"]>(reward?.effect.kind ?? "amount_off");
+  const [cost, setCost] = useState(reward ? String(reward.pointsCost) : "");
+  const newCost = Number.parseInt(cost, 10);
+  const today = reward?.price.cost;
+  const costNote =
+    today === undefined || !Number.isInteger(newCost) || newCost === reward?.pointsCost
+      ? null
+      : newCost > today
+        ? `Customers keep paying ${today.toLocaleString()} points for ${PRICE_PROTECTION_DAYS} days after you save, then ${newCost.toLocaleString()}.`
+        : "Lower prices apply right away.";
   const effect = reward?.effect;
   const prefix = reward ? `r${reward.id}` : "new";
 
@@ -43,9 +54,22 @@ export function RewardForm({
         </Field>
         <Field>
           <FieldLabel htmlFor={`${prefix}-cost`}>Points</FieldLabel>
-          <Input id={`${prefix}-cost`} name="pointsCost" type="number" min={1} required defaultValue={reward?.pointsCost} />
+          <Input
+            id={`${prefix}-cost`}
+            name="pointsCost"
+            type="number"
+            min={1}
+            required
+            value={cost}
+            onChange={(e) => setCost(e.target.value)}
+          />
         </Field>
       </div>
+      {costNote ? (
+        <p className="text-sm text-warning" data-testid="price-note">
+          {costNote}
+        </p>
+      ) : null}
       <Field>
         <FieldLabel htmlFor={`${prefix}-desc`}>Description</FieldLabel>
         <Input id={`${prefix}-desc`} name="description" maxLength={200} defaultValue={reward?.description ?? ""} />

@@ -7,6 +7,7 @@ import {
   LEDGER_KIND_RULES,
   formatMultiplier,
   formatPhone,
+  formatPriceIncrease,
   localDate,
   SIGNUP_MIN_NET_CENTS,
 } from "@/lib/loyalty";
@@ -129,9 +130,12 @@ function PitchView({
                 {r.description ? (
                   <span className="block text-xs text-muted-foreground">{r.description}</span>
                 ) : null}
+                {r.price.increase ? (
+                  <span className="block text-xs text-warning">{formatPriceIncrease(r.price.increase, loyalty.timezone)}</span>
+                ) : null}
               </span>
               <span className="shrink-0 text-sm tabular-nums text-muted-foreground">
-                {r.pointsCost.toLocaleString()} pts
+                {r.price.cost.toLocaleString()} pts
               </span>
             </li>
           ))}
@@ -253,7 +257,8 @@ async function MemberView({
         <h2 className="text-sm font-semibold">Rewards</h2>
         <ul className="mt-3 divide-y divide-border rounded-xl border border-border" data-testid="reward-ladder">
           {rewards.map((r) => {
-            const ready = member.pointsBalance >= r.pointsCost;
+            const cost = r.price.cost;
+            const ready = member.pointsBalance >= cost;
             return (
               <li key={r.id} className="space-y-2 px-4 py-3">
                 <div className="flex items-center justify-between gap-4">
@@ -262,16 +267,21 @@ async function MemberView({
                     {r.description ? (
                       <span className="block text-xs text-muted-foreground">{r.description}</span>
                     ) : null}
+                    {r.price.increase ? (
+                      <span className="block text-xs text-warning" data-testid="price-increase">
+                        {formatPriceIncrease(r.price.increase, loyalty.timezone)}
+                      </span>
+                    ) : null}
                   </span>
                   <span className="shrink-0 text-sm tabular-nums text-muted-foreground">
-                    {r.pointsCost.toLocaleString()} pts
+                    {cost.toLocaleString()} pts
                   </span>
                 </div>
-                <Progress fraction={Math.min(1, member.pointsBalance / r.pointsCost)} label={`Progress to ${r.name}`} />
+                <Progress fraction={Math.min(1, member.pointsBalance / cost)} label={`Progress to ${r.name}`} />
                 <p className={cn("text-xs", ready ? "font-medium text-success" : "text-muted-foreground")}>
                   {ready
                     ? "Ready to redeem at checkout"
-                    : `${(r.pointsCost - member.pointsBalance).toLocaleString()} points to go`}
+                    : `${(cost - member.pointsBalance).toLocaleString()} points to go`}
                 </p>
               </li>
             );
