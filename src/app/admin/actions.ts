@@ -7,11 +7,14 @@ import { z } from "zod";
 import {
   categories,
   db,
+  ingredientPacks,
+  ingredients,
   itemModifierGroups,
   menuItems,
   modifierGroups,
   modifiers,
   operators,
+  recipeLines,
   storeLogo,
   storeSettings,
   type DayHours,
@@ -25,6 +28,8 @@ import {
   verifyPassword,
 } from "@/lib/auth";
 import { STORE_TIMEZONES } from "@/lib/hours";
+import { MODIFIER_GROUP_KINDS, type ModifierGroupKind } from "@/lib/toppings";
+import { unitFor } from "@/lib/unit-entry";
 import { KITCHEN_STATIONS, type KitchenStation } from "@/lib/kds";
 import {
   CANCEL_REASONS,
@@ -54,6 +59,15 @@ function textField(fd: FormData, name: string): string {
 function textOrNull(fd: FormData, name: string): string | null {
   const v = textField(fd, name);
   return v === "" ? null : v;
+}
+
+/** A JSON-encoded field; null when it doesn't parse, for the schema to refuse. */
+function jsonField(fd: FormData, name: string): unknown {
+  try {
+    return JSON.parse(textField(fd, name));
+  } catch {
+    return null;
+  }
 }
 
 function checkbox(fd: FormData, name: string): boolean {
@@ -585,6 +599,7 @@ export async function saveItem(formData: FormData): Promise<void> {
 
 function parseGroupFields(fd: FormData): {
   name: string;
+  kind: ModifierGroupKind;
   minSelect: number;
   maxSelect: number | null;
 } {
@@ -598,7 +613,8 @@ function parseGroupFields(fd: FormData): {
     maxSelect = null;
   }
   if (maxSelect !== null && maxSelect < minSelect) maxSelect = minSelect;
-  return { name, minSelect, maxSelect };
+  const kind = z.enum(MODIFIER_GROUP_KINDS).catch("choice").parse(textField(fd, "kind"));
+  return { name, kind, minSelect, maxSelect };
 }
 
 export async function createModifierGroup(formData: FormData): Promise<void> {
@@ -638,6 +654,12 @@ export async function deleteModifierGroup(formData: FormData): Promise<void> {
 // Modifiers
 // ---------------------------------------------------------------------------
 
+/** "Extra" price: only toppings modifiers offer one, and blank means extra isn't offered. */
+function extraPriceField(fd: FormData, kind: ModifierGroupKind): number | null {
+  if (kind !== "toppings" || textField(fd, "extraPrice") === "") return null;
+  return dollarsToCents(fd, "extraPrice");
+}
+
 /**
  * Default semantics: for single-select groups (maxSelect = 1) a default acts
  * like a radio — setting one clears the others in the group.
@@ -672,7 +694,7 @@ export async function createModifier(formData: FormData): Promise<void> {
   const isDefault = checkbox(formData, "isDefault");
 
   const [group] = await db
-    .select({ id: modifierGroups.id, maxSelect: modifierGroups.maxSelect })
+    .select({ id: modifierGroups.id, maxSelect: modifierGroups.maxSelect, kind: modifierGroups.kind })
     .from(modifierGroups)
     .where(eq(modifierGroups.id, groupId));
   if (!group) return;
@@ -693,6 +715,7 @@ export async function createModifier(formData: FormData): Promise<void> {
     groupId,
     name,
     priceDeltaCents,
+    extraPriceDeltaCents: extraPriceField(formData, group.kind),
     isDefault,
     sortOrder: (last?.sortOrder ?? -1) + 1,
   });
@@ -708,14 +731,15 @@ export async function updateModifier(formData: FormData): Promise<void> {
   const isDefault = checkbox(formData, "isDefault");
 
   const [modifier] = await db
-    .select({ id: modifiers.id, groupId: modifiers.groupId })
+    .select({ id: modifiers.id, groupId: modifiers.groupId, kind: modifierGroups.kind })
     .from(modifiers)
+    .innerJoin(modifierGroups, eq(modifierGroups.id, modifiers.groupId))
     .where(eq(modifiers.id, modifierId));
   if (!modifier) return;
 
   await db
     .update(modifiers)
-    .set({ name, priceDeltaCents })
+    .set({ name, priceDeltaCents, extraPriceDeltaCents: extraPriceField(formData, modifier.kind) })
     .where(eq(modifiers.id, modifierId));
   await applyDefault(modifier.groupId, modifierId, isDefault);
   revalidateModifiers();
@@ -759,6 +783,95 @@ export async function deleteModifier(formData: FormData): Promise<void> {
   const modifierId = idField(formData, "modifierId");
   await db.delete(modifiers).where(eq(modifiers.id, modifierId));
   revalidateModifiers();
+}
+
+// ---------------------------------------------------------------------------
+// Recipes
+// ---------------------------------------------------------------------------
+
+export type RecipeActionState = { error?: string };
+
+const recipeSchema = z.object({
+  owner: z.enum(["item", "modifier"]),
+  ownerId: z.coerce.number().int().positive(),
+  lines: z.array(
+    z.object({
+      ingredientId: z.number().int().positive(),
+      sizeModifierId: z.number().int().positive().nullable(),
+      qty: z.number().finite(),
+      unit: z.string(),
+    }),
+  ),
+});
+
+/**
+ * Replaces one owner's recipe. Quantities arrive in the units the grid
+ * showed and are converted here against the ingredient's own packs; only
+ * modifiers may carry negative (removal) lines.
+ */
+export async function saveRecipe(formData: FormData): Promise<RecipeActionState> {
+  await requireOperator();
+  const parsed = recipeSchema.safeParse({
+    owner: textField(formData, "owner"),
+    ownerId: textField(formData, "ownerId"),
+    lines: jsonField(formData, "lines"),
+  });
+  if (!parsed.success) return { error: "Every quantity must be a number." };
+  const { owner, ownerId, lines } = parsed.data;
+
+  const ids = [...new Set(lines.map((l) => l.ingredientId))];
+  const [found, packs, sizeIds] = await Promise.all([
+    ids.length ? db.select().from(ingredients).where(inArray(ingredients.id, ids)) : [],
+    ids.length
+      ? db.select().from(ingredientPacks).where(inArray(ingredientPacks.ingredientId, ids))
+      : [],
+    db
+      .select({ id: modifiers.id })
+      .from(modifiers)
+      .innerJoin(modifierGroups, eq(modifierGroups.id, modifiers.groupId))
+      .where(eq(modifierGroups.kind, "size")),
+  ]);
+  const byId = new Map(found.map((i) => [i.id, i]));
+  const sizes = new Set(sizeIds.map((s) => s.id));
+
+  const rows: (typeof recipeLines.$inferInsert)[] = [];
+  const seen = new Set<string>();
+  for (const line of lines) {
+    const ingredient = byId.get(line.ingredientId);
+    if (!ingredient) return { error: "An ingredient in this recipe no longer exists." };
+    const unit = unitFor(
+      line.unit,
+      ingredient.baseUnit,
+      packs.filter((p) => p.ingredientId === ingredient.id),
+    );
+    if (!unit) return { error: `${ingredient.name} can't be measured in ${line.unit}.` };
+    if (line.sizeModifierId !== null && !sizes.has(line.sizeModifierId)) {
+      return { error: "That size no longer exists." };
+    }
+    const qtyMilli = Math.round(line.qty * unit.baseQtyMilli);
+    if (qtyMilli === 0) continue;
+    if (qtyMilli < 0 && owner === "item") {
+      return { error: `${ingredient.name}: only options can remove an ingredient.` };
+    }
+    const key = `${line.ingredientId}:${line.sizeModifierId}`;
+    if (seen.has(key)) return { error: `${ingredient.name} is listed twice.` };
+    seen.add(key);
+    rows.push({
+      menuItemId: owner === "item" ? ownerId : null,
+      modifierId: owner === "modifier" ? ownerId : null,
+      sizeModifierId: line.sizeModifierId,
+      ingredientId: line.ingredientId,
+      qtyMilli,
+    });
+  }
+
+  const ownerColumn = owner === "item" ? recipeLines.menuItemId : recipeLines.modifierId;
+  await db.batch([
+    db.delete(recipeLines).where(eq(ownerColumn, ownerId)),
+    ...(rows.length ? [db.insert(recipeLines).values(rows)] : []),
+  ]);
+  revalidatePath(owner === "item" ? `/admin/menu/items/${ownerId}` : "/admin/modifiers");
+  return {};
 }
 
 // ---------------------------------------------------------------------------
