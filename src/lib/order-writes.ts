@@ -258,9 +258,9 @@ export async function applyDiscount(args: {
       if (cents <= 0) return { error: "Nothing left on the items to discount." };
       return {
         ledger: sql`
-          insert into ${orderDiscounts} (order_id, promotion_id, label, amount_cents, target, customer_key, source, operator_id)
-          select id, ${args.promotionId}::integer, ${args.label}, ${cents}::integer, 'items', ${order.customerKey},
-            'comp', ${args.actor.operatorId}::integer
+          insert into ${orderDiscounts} (order_id, promotion_id, label, amount_cents, target, source, operator_id)
+          select id, ${args.promotionId}::integer, ${args.label}, ${cents}::integer, 'items', 'comp',
+            ${args.actor.operatorId}::integer
           from prev
           returning id`,
         discounts: [...rows, { amountCents: cents, target: "items" as const }],

@@ -131,7 +131,6 @@ export async function createOrder(input: CheckoutInput) {
     const order = await insertOrder(
       {
         input,
-        customerKey,
         prepMinutes: input.orderType === "delivery" ? settings.deliveryPrepMinutes : settings.pickupPrepMinutes,
         lines: quote.lines,
         subtotalCents: quote.subtotalCents,

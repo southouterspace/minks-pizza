@@ -240,14 +240,14 @@ async function main() {
   );
   const firstLedger = await ledger(firstId);
   check(
-    "one ledger row: promotion, code, amount, phone key",
+    "one ledger row: promotion, code, amount; the order carries the phone key",
     firstLedger.length === 1 &&
       firstLedger[0].promotionId === codeDeal.id &&
       firstLedger[0].codeId === code.id &&
       firstLedger[0].amountCents === 719 &&
       firstLedger[0].target === "items" &&
       firstLedger[0].source === "promotion" &&
-      firstLedger[0].customerKey === PHONE_DIGITS,
+      first.customerKey === PHONE_DIGITS,
     JSON.stringify(firstLedger[0]),
   );
 

@@ -23,7 +23,7 @@ export const usesOf = (filter: SQL) => sql`(select count(*) from ${redemptions} 
 export async function promotionUsage(promotionIds: number[], customerKey: string | null) {
   if (promotionIds.length === 0) return new Map<number, { uses: number; customerUses: number }>();
   const { rows } = await db.execute<{ promotion_id: number; uses: string; customer_uses: string }>(sql`
-    select d.promotion_id, count(*) as uses, count(*) filter (where d.customer_key = ${customerKey}) as customer_uses
+    select d.promotion_id, count(*) as uses, count(*) filter (where o.customer_key = ${customerKey}) as customer_uses
     from ${redemptions} and d.promotion_id in ${promotionIds}
     group by d.promotion_id`);
   return new Map(rows.map((r) => [Number(r.promotion_id), { uses: Number(r.uses), customerUses: Number(r.customer_uses) }]));
@@ -55,7 +55,7 @@ export function redemptionCheck(applied: AppliedDiscount[], customerKey: string)
     sql`exists (select 1 from ${promotions} where id = ${promotionId} and is_active and archived_at is null)`,
     ...(limits.totalLimit !== null ? [sql`${usesOf(sql`d.promotion_id = ${promotionId}`)} < ${limits.totalLimit}`] : []),
     ...(limits.perCustomerLimit !== null
-      ? [sql`${usesOf(sql`d.promotion_id = ${promotionId} and d.customer_key = ${customerKey}`)} < ${limits.perCustomerLimit}`]
+      ? [sql`${usesOf(sql`d.promotion_id = ${promotionId} and o.customer_key = ${customerKey}`)} < ${limits.perCustomerLimit}`]
       : []),
     ...(limits.codeMaxUses !== null ? [sql`${usesOf(sql`d.code_id = ${codeId}`)} < ${limits.codeMaxUses}`] : []),
     ...(limits.newCustomersOnly ? [sql`not exists (select 1 from ${orders} where status <> 'canceled' and customer_key = ${customerKey})`] : []),

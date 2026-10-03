@@ -402,7 +402,6 @@ export const orderDiscounts = pgTable(
     label: text("label").notNull(),
     amountCents: integer("amount_cents").notNull(),
     target: discountTargetEnum("target").notNull(),
-    customerKey: text("customer_key").notNull(),
     source: discountSourceEnum("source").notNull(),
     operatorId: integer("operator_id").references(() => operators.id, { onDelete: "set null" }),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
@@ -412,7 +411,6 @@ export const orderDiscounts = pgTable(
     index("order_discounts_order_id_idx").on(t.orderId),
     index("order_discounts_promotion_id_idx").on(t.promotionId),
     index("order_discounts_code_id_idx").on(t.codeId),
-    index("order_discounts_customer_key_promotion_id_idx").on(t.customerKey, t.promotionId),
   ],
 );
 

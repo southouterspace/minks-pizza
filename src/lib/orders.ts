@@ -167,7 +167,6 @@ export async function priceCart(
 /** Everything an order row and its children are written from. */
 export type NewOrder = {
   input: CheckoutInput;
-  customerKey: string;
   prepMinutes: number;
   lines: PricedLine[];
   subtotalCents: number;
@@ -235,7 +234,6 @@ export async function insertOrder(o: NewOrder, check: RedemptionCheck): Promise<
               label: a.label,
               amountCents: a.amountCents,
               target: a.target,
-              customerKey: o.customerKey,
               source: "promotion" as const,
             })),
             placed,

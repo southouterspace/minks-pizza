@@ -417,7 +417,9 @@ complaints are in `docs/promotions-research.md`.
   the same push. The first cut wrote it at insert, which needed a nullable
   push, a backfill and a second push, with old code failing inserts in
   between. `customerKeyFromPhone` is the same rule for quotes made before
-  an order exists.
+  an order exists. The ledger kept its own copy until round 2 of review;
+  per-customer counts now read `o.customer_key` through the join every
+  usage query already makes, and the column never reached production.
 - **One totals renderer.** `TotalsList` with `orderTotals`/`quoteTotals`
   serves checkout, cart, tracker, admin detail and the print ticket in one
   row order; a zero fee, tax or tip is hidden everywhere (the ticket used to
