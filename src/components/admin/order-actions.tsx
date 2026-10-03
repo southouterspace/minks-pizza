@@ -6,8 +6,10 @@ import { Printer } from "lucide-react";
 import { toast } from "sonner";
 import {
   adjustPromisedTimeAction,
+  applyDiscountAction,
   cancelOrder,
   moveOrder,
+  removeDiscountAction,
   type OrderActionState,
 } from "@/app/admin/actions";
 import {
@@ -17,6 +19,7 @@ import {
   NEXT_ACTION,
   type OrderStatus,
 } from "@/lib/order-workflow";
+import type { DiscountPreset } from "@/lib/promotion-admin";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -206,5 +209,132 @@ export function PrintButton() {
       <Printer data-icon="inline-start" />
       Print ticket
     </Button>
+  );
+}
+
+/** An operator comp: dollars or percent off the items, with a reason the receipt shows. */
+export function ApplyDiscountDialog({
+  orderId,
+  presets,
+}: {
+  orderId: string;
+  presets: DiscountPreset[];
+}) {
+  const [open, setOpen] = useState(false);
+  const [kind, setKind] = useState<"amount" | "percent">("amount");
+  const [value, setValue] = useState("");
+  const [reason, setReason] = useState("");
+  const [promotionId, setPromotionId] = useState<number | null>(null);
+  const reset = () => {
+    setKind("amount");
+    setValue("");
+    setReason("");
+    setPromotionId(null);
+  };
+  return (
+    <Dialog
+      open={open}
+      onOpenChange={(o) => {
+        setOpen(o);
+        if (!o) reset();
+      }}
+    >
+      <DialogTrigger render={<Button variant="outline" size="sm" data-testid="apply-discount" />}>
+        Apply discount
+      </DialogTrigger>
+      <DialogContent className="sm:max-w-sm">
+        <ActionForm action={applyDiscountAction} orderId={orderId} onSuccess={() => setOpen(false)}>
+          <DialogHeader>
+            <DialogTitle>Apply discount</DialogTitle>
+            <DialogDescription>
+              Comes off the items; tax and the total update. Use it when a customer forgot their code.
+            </DialogDescription>
+          </DialogHeader>
+          <input type="hidden" name="kind" value={kind} />
+          <input type="hidden" name="promotionId" value={promotionId ?? ""} />
+          <FieldGroup className="my-4">
+            {presets.length ? (
+              <div className="flex flex-wrap gap-1.5">
+                {presets.map((p) => (
+                  <Button
+                    key={p.promotionId}
+                    type="button"
+                    variant={promotionId === p.promotionId ? "default" : "outline"}
+                    size="sm"
+                    onClick={() => {
+                      setKind("cents" in p.amount ? "amount" : "percent");
+                      setValue(String(("cents" in p.amount ? p.amount.cents : p.amount.percentBps) / 100));
+                      setReason(p.label);
+                      setPromotionId(p.promotionId);
+                    }}
+                  >
+                    {p.label}
+                  </Button>
+                ))}
+              </div>
+            ) : null}
+            <div className="grid grid-cols-2 gap-2">
+              {(["amount", "percent"] as const).map((k) => (
+                <Button
+                  key={k}
+                  type="button"
+                  variant="outline"
+                  aria-pressed={kind === k}
+                  onClick={() => setKind(k)}
+                  className={kind === k ? "border-foreground! bg-muted!" : undefined}
+                >
+                  {k === "amount" ? "$ off" : "% off items"}
+                </Button>
+              ))}
+            </div>
+            <Field>
+              <FieldLabel htmlFor={`discount-value-${orderId}`}>{kind === "amount" ? "Amount ($)" : "Percent"}</FieldLabel>
+              <Input
+                id={`discount-value-${orderId}`}
+                name="value"
+                type="number"
+                inputMode="decimal"
+                min="0.01"
+                max={kind === "percent" ? "100" : undefined}
+                step="0.01"
+                required
+                value={value}
+                onChange={(e) => {
+                  setValue(e.target.value);
+                  setPromotionId(null);
+                }}
+              />
+            </Field>
+            <Field>
+              <FieldLabel htmlFor={`discount-reason-${orderId}`}>Reason (on the receipt)</FieldLabel>
+              <Input
+                id={`discount-reason-${orderId}`}
+                name="reason"
+                required
+                maxLength={120}
+                placeholder="Late order"
+                value={reason}
+                onChange={(e) => setReason(e.target.value)}
+              />
+            </Field>
+          </FieldGroup>
+          <DialogFooter>
+            <DialogClose render={<Button variant="outline" type="button" />}>Close</DialogClose>
+            <SubmitButton data-testid="confirm-discount">Apply discount</SubmitButton>
+          </DialogFooter>
+        </ActionForm>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+export function RemoveDiscountButton({ orderId, discountId, label }: { orderId: string; discountId: number; label: string }) {
+  return (
+    <ActionForm action={removeDiscountAction} orderId={orderId}>
+      <input type="hidden" name="discountId" value={discountId} />
+      <SubmitButton variant="ghost" size="sm" aria-label={`Remove discount ${label}`}>
+        Remove
+      </SubmitButton>
+    </ActionForm>
   );
 }

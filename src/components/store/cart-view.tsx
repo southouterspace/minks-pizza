@@ -15,10 +15,12 @@ import {
   EmptyTitle,
 } from "@/components/ui/empty";
 import { Separator } from "@/components/ui/separator";
+import { PromoCodeField, QuoteTotals, useCheckoutQuote } from "@/components/store/promo-summary";
 import { cn } from "@/lib/utils";
 
 export function CartView({ loyalty }: { loyalty: CartLoyalty | null }) {
-  const { lines, subtotalCents, updateQuantity, removeLine, ready } = useCart();
+  const { lines, subtotalCents, updateQuantity, removeLine, removePromoCode, orderType, orderTypes, ready } = useCart();
+  const { quote, error } = useCheckoutQuote(orderType);
 
   if (!ready) {
     return <div className="mx-auto max-w-2xl px-4 py-16 sm:px-6" />;
@@ -119,23 +121,37 @@ export function CartView({ loyalty }: { loyalty: CartLoyalty | null }) {
         ))}
       </ul>
 
-      <div className="mt-6 flex items-center justify-between text-sm">
-        <span className="text-muted-foreground">Subtotal</span>
-        <span className="text-base font-semibold tabular-nums">
-          {formatCents(subtotalCents)}
-        </span>
+      <div className="mt-6 space-y-4">
+        <PromoCodeField quote={quote} />
+        {quote ? (
+          <QuoteTotals quote={quote} totalLabel="Total before tip" onRemoveCode={removePromoCode} />
+        ) : (
+          <div className="flex items-center justify-between text-sm">
+            <span className="text-muted-foreground">Subtotal</span>
+            <span className="text-base font-semibold tabular-nums">
+              {formatCents(subtotalCents)}
+            </span>
+          </div>
+        )}
+        {error ? (
+          <p role="alert" className="text-sm text-destructive">
+            {error}
+          </p>
+        ) : null}
+        <p className="text-xs text-muted-foreground">
+          {orderType === "pickup" && orderTypes.delivery
+            ? "Tip, and a delivery fee if you choose delivery, are added at checkout."
+            : "Tip is added at checkout."}
+        </p>
       </div>
-      <p className="mt-1 text-xs text-muted-foreground">
-        Tax, fees, and tip are calculated at checkout.
-      </p>
-      {loyalty ? <CartPoints lines={lines} loyalty={loyalty} /> : null}
+      {loyalty ? <CartPoints earn={quote?.loyalty?.pointsEarned ?? null} loyalty={loyalty} /> : null}
 
       <Separator className="mt-6" />
 
       <div className="mt-6 flex flex-col gap-3 sm:flex-row">
         <Link
           href="/checkout"
-          className={cn(buttonVariants({ size: "lg" }), "h-11! flex-1")}
+          className={cn(buttonVariants({ size: "lg" }), "h-11! sm:flex-1")}
         >
           Go to checkout
         </Link>

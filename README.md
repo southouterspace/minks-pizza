@@ -64,13 +64,16 @@ npm run dev
    [Kitchen display](#kitchen-display-kds) below.
 7. **Team** (`/admin/team`) — add or remove operator accounts, and change your
    own password. See [Operator accounts](#operator-accounts) below.
-8. **Staff** (`/admin/staff`) — employees, the weekly schedule, timesheets and
+8. **Promotions** (`/admin/promotions`) — automatic deals and promo codes. See
+   [Promotions](#promotions) below.
+9. **Staff** (`/admin/staff`) — employees, the weekly schedule, timesheets and
    time off, plus the shared time clock at `/timeclock`. See
    [Staff: scheduling and time clock](#staff-scheduling-and-time-clock) below.
 
 #### Order management
 
-**Orders board** (`/admin`). A strip of today's numbers (orders, net sales,
+**Orders board** (`/admin`). A strip of today's numbers (orders, net sales
+(item subtotal less item discounts),
 average ticket, average placed-to-ready time, orders late right now), then
 three lanes: **New**, **In kitchen** (confirmed and preparing) and **Ready**.
 Each card shows the order number, customer, type, items, total, how long ago
@@ -96,7 +99,8 @@ same rows (up to 5,000).
 **Order detail** (`/admin/orders/<id>`). Customer with tap-to-call, items with
 modifiers and notes, totals, and the promised time. From here you can
 advance or cancel, push the promised time (−5 to +15 min), record payment as
-cash, card or other, and add internal notes. The **timeline** lists
+cash, card or other, apply a discount (see [Promotions](#promotions)), and add
+internal notes. The **timeline** lists
 everything that happened to the order with who did it and when: the
 customer placing it, each operator action, and each status change the
 kitchen display made (shown as "Kitchen display · <operator>"). **Print
@@ -213,6 +217,100 @@ update categories set station = 'counter' where name ilike '%drink%' or name ili
 ```
 
 Orders placed before the migration default to the Kitchen station.
+
+### Promotions
+
+Built from operator and customer complaints about Toast, Square, Domino's and
+the delivery apps (see `docs/promotions-research.md`).
+
+**Creating a deal** (`/admin/promotions` → **New deal**). Start from a
+template (percent off the order, dollars off, BOGO, item deal price, free
+delivery, happy hour) and adjust. The right-hand card shows the sentence
+customers will read, for example "20% off orders $30+. Pickup orders only.
+Valid Tue 3–6 PM. Once per customer. Use code PIZZA10."
+
+| Setting | What it does |
+|---|---|
+| How customers get it | **Automatically** (applies itself when the cart qualifies) or **With a code** |
+| Reward | % or $ off the order (optional cap), % or $ off items, a deal price on items ("any large $12"), buy X get Y (the discounted units are always the cheapest qualifying ones), free delivery (delivery orders only) |
+| Which items | Any mix of categories, items and modifiers such as a size. Nothing picked means any item |
+| When it applies | Minimum item subtotal, pickup and/or delivery, first and last day, weekly time windows on the store's clock |
+| Limits | Uses per customer (by phone number), total uses, new customers only (no earlier order on that phone) |
+| Combines with other combinable deals | Off: the deal is exclusive. On: it stacks with every other combinable deal |
+| Show on the menu page | Off makes a private code for a mailer or partner |
+
+**Codes.** On a code deal's page, add a shared code such as `PIZZA10`, or
+generate up to 1,000 single-use codes (`MINK-7KQ2-X9`) and download them as
+CSV. Single-use codes are worthless on coupon sites. **Copy link** gives a
+`/?promo=PIZZA10` link that puts the code in the customer's cart. Codes match
+ignoring case, spaces and dashes. Deleting a code stops it working at once;
+orders that used it keep their discount.
+
+**Running a deal.** The switch pauses and resumes it. **Archive** retires a
+used deal; a deal no order used can be deleted. Editing a deal never changes
+orders already placed: each order keeps a snapshot of its discount lines. The
+list shows status (Active, Scheduled, Expired, Paused, Used up, Archived),
+uses against the limit, the total discounted and net sales from orders that
+used it. Uses count only orders that weren't canceled, so canceling an order
+gives its use back. Staff discounts made from a deal's preset count in its
+total discounted and net sales but never use up its limits.
+
+**Apply discount** on an order's page takes dollars or a percent off the
+items with a reason that prints on the receipt, or one tap on a live
+whole-order deal (for a customer who forgot their code). It works while
+payment is pending and the order is open, recomputes tax and total, and
+appears in the timeline. A staff discount can be removed the same way.
+
+**What customers see.** The menu page lists advertised deals with a copy
+button for the code. Cart and checkout have a **Have a promo code?** field,
+list each deal on its own line with the saving ("Applied automatically" for
+automatic ones), say exactly why a code doesn't apply ("Add $4.50 more to use
+PIZZA10", "Valid Tue 3–6 PM", "Already used with this phone number"), and show
+nudges such as "Add $3.20 more for free delivery". Codes stay with the cart
+through edits and refreshes; a code that stops qualifying stays attached and
+applies again when the cart qualifies. The confirmation shows each discount
+and "You saved $5.00".
+
+**Best deal and money rules.** The customer always gets the best legal
+combination: each exclusive deal on its own, or all combinable deals
+together, whichever saves more. A code that loses says "A better deal is
+already applied: …". Item discounts round half-up per unit and never take a
+unit below zero; order discounts apply to what is left. Tax is on items after
+discounts. Tips are a share of the pre-discount subtotal and never
+discounted. Totals are always the server's: cart and checkout ask the same
+function that places the order, and the order is refused, with the new total,
+if they ever differ. Limits hold when checkouts race: the last use goes to
+exactly one order and the other customer reads "PIZZA10 was just fully
+redeemed — your total is now $X."
+
+#### Deploying the promotions schema
+
+Additive: three enums, the `promotions`, `promotion_codes` and
+`order_discounts` tables, the generated `orders.customer_key` and a
+`discount` value on `order_event_type`. `orders.discount_cents` comes with
+the rewards schema. Checkout reads the new tables, so migrate before
+deploying the code, either with a push:
+
+```bash
+MINKS_DATABASE_URL=<production url> npm run db:push
+```
+
+or by running `migrations/2026-10-03-promotions.sql`, which also backfills
+the ledger: each earlier order with a reward discount gets a `loyalty` row in
+`order_discounts`, so `discount_cents` stays the sum of an order's rows. After
+a plain `db:push`, run the backfill statement at the end of that file once.
+
+`orders.customer_key` (the phone's last ten digits, which promotion limits
+count against) is a generated column, so Postgres fills it for existing
+orders during the same migration.
+
+#### Promotions and rewards together
+
+A member's reward stacks with deals. Deals apply first, and the reward comes
+off what is left of the items, never more. Tax is on the items after both,
+and points are earned on that amount. The reward is an `order_discounts` row
+with source `loyalty`. It never counts as a use of a deal, and staff can't
+remove it from the order page.
 
 ### Rewards (`/rewards`, `/admin/loyalty`)
 
@@ -343,7 +441,7 @@ minimums, and recomputes every price at order time.
 ## Stripe readiness
 
 - Money is integer cents everywhere; `orders` carries a full breakdown
-  (subtotal, tax, delivery fee, tip, total) and `payment_status`
+  (subtotal, discount, tax, delivery fee, tip, total) and `payment_status`
   (`pending`/`paid`/`refunded`).
 - `src/lib/orders.ts` → `createOrder()` is the single seam: create a
   PaymentIntent for `totalCents` there, store its id, and flip
@@ -398,19 +496,24 @@ so provider retries are harmless. A failed event keeps its error on that row.
 ```
 src/
   db/            schema.ts (Drizzle), seed.ts, index.ts (client)
-  lib/           menu.ts, orders.ts (pricing + creation), auth.ts, validation.ts,
+  lib/           menu.ts, orders.ts (pricing + the guarded order insert), auth.ts,
+                 validation.ts, checkout.ts (one quote: promotions + loyalty; createOrder),
                  order-workflow.ts (order lifecycle rules, pure),
                  order-writes.ts (logged status/ETA/payment/note writes),
                  order-queries.ts (board, history search, export, detail, day stats),
+                 promotion-engine.ts (reward union and best-deal evaluator, pure),
+                 promotion-queries.ts (candidates and usage from the ledger),
+                 promotion-admin.ts (operator list, stats, codes),
+                 loyalty.ts (program rules, pure), loyalty-server.ts (ledger + queries),
                  kds.ts (kitchen display rules, pure), kds-server.ts (queries + actions),
                  zoned.ts (store-timezone calendar math), timeclock.ts (staff rules and
                  payroll math, pure), delivery/ (courier providers and dispatch),
                  marketplace.ts (marketplace order seam)
   lib/staff/     staff server modules, one per feature: config, queries, employees,
                  kiosk, schedule, time-off, timesheets, overview; timesheet-csv.ts (pure)
-  app/(store)/   customer storefront (menu, cart, checkout, order status)
+  app/(store)/   customer storefront (menu, cart, checkout, order status, rewards)
   app/admin/     operator dashboard (orders board, history + detail, menu,
-                 modifiers, settings, team, staff); CSV export in app/api/admin/orders
+                 modifiers, promotions, loyalty, settings, team, staff); CSV exports in app/api/admin
   app/kitchen/   kitchen display (KDS); data via app/api/kds
   app/timeclock/ staff time clock kiosk; data via app/api/timeclock
   components/    cart context, storefront + admin UI
@@ -429,8 +532,11 @@ Informed by industry research (see `docs/RESEARCH.md`), roughly in order:
 6. **Allergen/dietary tags & item photos** (schema already has `imageUrl`)
 7. **Customer accounts with saved addresses & one-tap reorder** — optional,
    post-purchase (guest checkout stays the default)
-8. **Coupons/promo codes**; refunds (the `refunded` payment status exists but
-   nothing sets it yet)
+8. **Refunds** (the `refunded` payment status exists but nothing sets it
+   yet). Promotions shipped (see [Promotions](#promotions)); follow-ups:
+   customer identity beyond the phone number once accounts or Stripe card
+   fingerprints exist, a redemption velocity alert for leaked codes, and an
+   audit log of deal edits
 9. **KDS follow-ups** (from `docs/kds-research.md`): half-and-half pizzas end
    to end (ordering, pricing and a left/right ticket layout, the most-requested
    pizza KDS feature); a kitchen-only role so the display tablet doesn't carry

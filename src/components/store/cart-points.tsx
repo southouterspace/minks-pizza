@@ -1,9 +1,7 @@
 "use client";
 
 import { Gift } from "lucide-react";
-import type { CartLine } from "@/components/cart-context";
 import { ProgressBar } from "@/components/store/reward-row";
-import { useCheckoutPreview } from "@/components/store/use-checkout-preview";
 
 export type CartLoyalty = {
   balance: number | null;
@@ -11,11 +9,7 @@ export type CartLoyalty = {
 };
 
 /** "This order earns ~N points", and for members, progress to the next reward. */
-export function CartPoints({ lines, loyalty }: { lines: CartLine[]; loyalty: CartLoyalty }) {
-  const preview = useCheckoutPreview(lines, "pickup", null, { withRewards: false });
-  const quote = preview.status === "ok" ? preview.quote : preview.status === "loading" ? preview.previous : null;
-  const earn = quote?.pointsEarned ?? null;
-
+export function CartPoints({ earn, loyalty }: { earn: number | null; loyalty: CartLoyalty }) {
   if (earn === null) return null;
   const { balance, nextReward } = loyalty;
   const after = balance === null ? null : balance + earn;

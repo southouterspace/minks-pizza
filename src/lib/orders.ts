@@ -1,6 +1,7 @@
-import { randomUUID } from "node:crypto";
 import { cache } from "react";
-import { eq, inArray } from "drizzle-orm";
+import { eq, getTableColumns, inArray, sql, type Column, type SQL } from "drizzle-orm";
+import type { BatchItem } from "drizzle-orm/batch";
+import type { PgTable } from "drizzle-orm/pg-core";
 import {
   categories,
   db,
@@ -8,42 +9,23 @@ import {
   menuItems,
   modifierGroups,
   modifiers,
+  orderDiscounts,
   orderEvents,
   orderItems,
   orders,
   storeSettings,
   type OrderItemModifier,
 } from "@/db";
-
-type StoreSettings = typeof storeSettings.$inferSelect;
 import type { KitchenStation } from "@/lib/kds";
-import {
-  INSUFFICIENT_POINTS,
-  activePromotion,
-  applyReward,
-  earnPoints,
-  normalizePhone,
-  tierFor,
-  type Redemption,
-} from "@/lib/loyalty";
-import {
-  enrollStatements,
-  getLoyaltySettings,
-  getReward,
-  isInsufficientPoints,
-  ledgerKey,
-  ledgerStatement,
-  listPromotions,
-  memberByPhone,
-  qualifyingPoints,
-  type LoyaltyMember,
-  type LoyaltyReward,
-} from "@/lib/loyalty-server";
-import { taxFromBps } from "@/lib/money";
+import type { AppliedDiscount } from "@/lib/promotion-engine";
+import type { RedemptionCheck } from "@/lib/promotion-usage";
 import type { CheckoutInput } from "@/lib/validation";
 
 export type PricedLine = {
   itemId: number;
+  categoryId: number;
+  /** Chosen modifier ids, so promotions can target a size. */
+  modifierIds: number[];
   itemName: string;
   quantity: number;
   unitPriceCents: number;
@@ -51,7 +33,6 @@ export type PricedLine = {
   modifiers: OrderItemModifier[];
   notes?: string;
   station: KitchenStation;
-  categoryId: number;
 };
 
 export type PricedCart = {
@@ -62,8 +43,10 @@ export type PricedCart = {
 
 export class OrderError extends Error {}
 
+export type StoreSettings = typeof storeSettings.$inferSelect;
+
 /** Read once per request (React cache); outside a render it reads every time. */
-export const getSettings = cache(async () => {
+export const getSettings = cache(async (): Promise<StoreSettings> => {
   const [settings] = await db
     .select()
     .from(storeSettings)
@@ -80,9 +63,8 @@ export const getSettings = cache(async () => {
 export async function priceCart(
   lines: CheckoutInput["lines"],
   orderType: "pickup" | "delivery",
-  settings: Pick<StoreSettings, "deliveryFeeCents">,
+  settings: StoreSettings,
 ): Promise<PricedCart> {
-
   const itemIds = [...new Set(lines.map((l) => l.itemId))];
   const items = await db
     .select({ item: menuItems, station: categories.station })
@@ -166,6 +148,8 @@ export async function priceCart(
 
     return {
       itemId: item.id,
+      categoryId: item.categoryId,
+      modifierIds: line.modifierIds,
       itemName: item.name,
       quantity: line.quantity,
       unitPriceCents: unitPrice,
@@ -173,209 +157,143 @@ export async function priceCart(
       modifiers: chosen,
       notes: line.notes,
       station: item.station,
-      categoryId: item.categoryId,
     };
   });
 
-  return {
-    lines: priced,
-    subtotalCents: priced.reduce((sum, l) => sum + l.lineTotalCents, 0),
-    deliveryFeeCents: orderType === "delivery" ? settings.deliveryFeeCents : 0,
-  };
+  const subtotalCents = priced.reduce((sum, l) => sum + l.lineTotalCents, 0);
+  const deliveryFeeCents =
+    orderType === "delivery" ? settings.deliveryFeeCents : 0;
+
+  return { lines: priced, subtotalCents, deliveryFeeCents };
 }
 
-export type OrderQuote = PricedCart & {
+/** Everything an order row and its children are written from. */
+export type NewOrder = {
+  input: CheckoutInput;
+  prepMinutes: number;
+  lines: PricedLine[];
+  subtotalCents: number;
   discountCents: number;
   taxCents: number;
-  totalCents: number; // before tip
+  deliveryFeeCents: number;
+  /** Including the tip. */
+  totalCents: number;
+  discounts: AppliedDiscount[];
+  /** Null when the program is off. */
   loyalty: {
-    programName: string;
-    /** A rejected redemption means the order would be refused. */
-    redemption: Redemption<LoyaltyReward>;
+    /** The signed-in member, or null for a guest (who may be enrolled after). */
+    memberId: number | null;
+    /** The reward the member spends points on; recorded as an items discount. */
+    reward: { name: string; pointsCost: number; discountCents: number } | null;
     pointsEarned: number;
-    promoName: string | null;
   } | null;
 };
 
 /**
- * Prices a cart and applies the loyalty program: the reward discount (tax is
- * on the discounted subtotal) and the points this order will earn. `member`
- * earns, and spends when `rewardId` is set.
+ * `insert into t (cols) select cols from jsonb_populate_recordset(null::t, rows) where cond`.
+ * Postgres types each value by the table's own row type, so the rows need no
+ * casts and TypeScript checks them against the schema. Only the columns some
+ * row sets are written; the rest take their defaults or generated values.
  */
-export async function quoteOrder(
-  input: Pick<CheckoutInput, "lines" | "orderType" | "rewardId">,
-  member: LoyaltyMember | null,
-): Promise<OrderQuote> {
-  const rewardId = input.rewardId ?? null;
-  const [settings, loyalty, promos, reward, qualifying] = await Promise.all([
-    getSettings(),
-    getLoyaltySettings(),
-    listPromotions(),
-    rewardId === null ? null : getReward(rewardId),
-    member ? qualifyingPoints(member.id) : 0,
-  ]);
-  const cart = await priceCart(input.lines, input.orderType, settings);
-
-  const redemption: Redemption<LoyaltyReward> =
-    loyalty.enabled && rewardId !== null ? applyReward(reward, member, cart.lines) : { status: "none" };
-  const discountCents = redemption.status === "applied" ? redemption.discountCents : 0;
-  const netCents = cart.subtotalCents - discountCents;
-  const taxCents = taxFromBps(netCents, settings.taxRateBps);
-  const base = {
-    ...cart,
-    discountCents,
-    taxCents,
-    totalCents: netCents + taxCents + cart.deliveryFeeCents,
-  };
-  if (!loyalty.enabled) return { ...base, loyalty: null };
-
-  const promo = activePromotion(promos, new Date(), settings.timezone);
-  return {
-    ...base,
-    loyalty: {
-      programName: loyalty.programName,
-      redemption,
-      promoName: promo?.name ?? null,
-      pointsEarned: earnPoints({
-        netCents,
-        pointsPerDollar: loyalty.pointsPerDollar,
-        tierMultiplierBps: tierFor(qualifying, loyalty.tiers).multiplierBps,
-        promoMultiplierBps: promo?.multiplierBps ?? 10_000,
-      }),
-    },
-  };
+function insertRowsWhere<T extends PgTable>(table: T, rows: T["$inferInsert"][], cond: SQL): SQL {
+  const columns: Record<string, Column> = getTableColumns(table);
+  const keys = Object.keys(columns).filter((k) => rows.some((r) => r[k as keyof typeof r] !== undefined));
+  const names = sql.join(keys.map((k) => sql.identifier(columns[k].name)), sql`, `);
+  const json = rows.map((r) => Object.fromEntries(keys.map((k) => [columns[k].name, r[k as keyof typeof r] ?? null])));
+  return sql`insert into ${table} (${names})
+    select ${names} from jsonb_populate_recordset(null::${table}, ${JSON.stringify(json)}::jsonb) where ${cond}`;
 }
 
 /**
- * Creates an order (payment_status = 'pending').
+ * Inserts the order, its lines, its "placed" event and its discounts as
+ * one statement that writes nothing unless the redemption guard holds, after
+ * the lock that lets the guard see any order that won a race.
+ * Returns null when the guard failed (a deal's limit went to another order
+ * after the quote). Drizzle's builders can't make an insert conditional on
+ * another table, hence the SQL template.
  *
- * STRIPE SEAM: when payments land, create a PaymentIntent for
- * `totalCents` here (or in a wrapping action), store its id on the order,
- * and flip payment_status to 'paid' from the Stripe webhook. Everything
- * upstream (validation, pricing) and downstream (confirmation page,
- * admin inbox) already works off the persisted order.
- *
- * `signedIn` is the member from the session, never from the client; only
- * they can spend points. A guest who opts in earns on their phone number.
+ * `after` adds statements to the same transaction, run once the order is
+ * read back; each must write nothing when the order row is missing.
  */
-export async function createOrder(input: CheckoutInput, signedIn: LoyaltyMember | null = null) {
-  const [settings, loyalty] = await Promise.all([getSettings(), getLoyaltySettings()]);
-
-  if (!settings.isPublished) {
-    throw new OrderError("This store is not accepting online orders yet.");
-  }
-  if (!settings.isAcceptingOrders) {
-    throw new OrderError(
-      "Online ordering is temporarily paused. Please call the store.",
-    );
-  }
-  if (input.orderType === "pickup" && !settings.pickupEnabled) {
-    throw new OrderError("Pickup is not available right now.");
-  }
-  if (input.orderType === "delivery" && !settings.deliveryEnabled) {
-    throw new OrderError("Delivery is not available right now.");
-  }
-  if (loyalty.enabled && input.rewardId != null && !signedIn) {
-    throw new OrderError("Sign in to use your points.");
-  }
-
-  const phone = normalizePhone(input.customerPhone);
-  // A guest opting in is enrolled inside the order's batch, so a rejected
-  // order enrolls nobody. Until then a new phone earns like any new member.
-  const joiningPhone = loyalty.enabled && !signedIn && input.joinLoyalty && phone ? phone : null;
-  const member = signedIn ?? (joiningPhone ? await memberByPhone(joiningPhone) : null);
-
-  const quote = await quoteOrder(input, member);
-  const redemption = quote.loyalty?.redemption ?? { status: "none" };
-  if (redemption.status === "rejected") throw new OrderError(redemption.error);
-
-  if (
-    input.orderType === "delivery" &&
-    quote.subtotalCents < settings.deliveryMinimumCents
-  ) {
-    throw new OrderError(
-      `Delivery orders have a minimum subtotal of $${(
-        settings.deliveryMinimumCents / 100
-      ).toFixed(2)}.`,
-    );
-  }
-
+export async function insertOrder(
+  o: NewOrder,
+  check: RedemptionCheck,
+  after: (orderId: string) => BatchItem<"pg">[] = () => [],
+): Promise<typeof orders.$inferSelect | null> {
+  const { input } = o;
+  const orderId = crypto.randomUUID();
   const placedAt = new Date();
-  const prepMinutes =
-    input.orderType === "delivery" ? settings.deliveryPrepMinutes : settings.pickupPrepMinutes;
-
-  // The id is minted here so the order, its lines, its "placed" event and
-  // the points it spends go in as one transaction: a failure can't leave an
-  // order with no items, and two orders racing for the same points can't
-  // both win.
-  const orderId = randomUUID();
-  const reward = redemption.status === "applied" ? redemption.reward : null;
-  try {
-    const [[order]] = await db.batch([
-      db
-        .insert(orders)
-        .values({
-          id: orderId,
-          placedAt,
-          promisedAt: new Date(placedAt.getTime() + prepMinutes * 60_000),
-          orderType: input.orderType,
-          customerName: input.customerName,
-          customerPhone: input.customerPhone,
-          customerEmail: input.customerEmail || null,
-          addressLine1: input.addressLine1 || null,
-          addressLine2: input.addressLine2 || null,
-          city: input.city || null,
-          zip: input.zip || null,
-          orderNotes: input.orderNotes || null,
-          subtotalCents: quote.subtotalCents,
-          discountCents: quote.discountCents,
-          taxCents: quote.taxCents,
-          deliveryFeeCents: quote.deliveryFeeCents,
-          tipCents: input.tipCents,
-          totalCents: quote.totalCents + input.tipCents,
-          paymentStatus: "pending",
-          loyaltyMemberId: quote.loyalty ? (signedIn?.id ?? null) : null,
-          loyaltyRewardName: reward?.name ?? null,
-          loyaltyPointsRedeemed: reward?.price.cost ?? 0,
-          loyaltyPointsEarned: quote.loyalty?.pointsEarned ?? 0,
-        })
-        .returning(),
-      db.insert(orderEvents).values({
+  const placed = sql`exists (select 1 from placed)`;
+  const reward = o.loyalty?.reward ?? null;
+  const discountRows: (typeof orderDiscounts.$inferInsert)[] = [
+    ...o.discounts.map((a) => ({
+      orderId,
+      promotionId: a.promotionId,
+      codeId: a.codeId,
+      label: a.label,
+      amountCents: a.amountCents,
+      target: a.target,
+      source: "promotion" as const,
+    })),
+    ...(reward && reward.discountCents > 0
+      ? [{ orderId, label: reward.name, amountCents: reward.discountCents, target: "items" as const, source: "loyalty" as const }]
+      : []),
+  ];
+  const children = [
+    insertRowsWhere(orderEvents, [{ orderId, type: "placed", toStatus: "new", actor: "Customer", createdAt: placedAt }], placed),
+    insertRowsWhere(
+      orderItems,
+      o.lines.map((l) => ({
         orderId,
-        type: "placed",
-        toStatus: "new",
-        actor: "Customer",
-        createdAt: placedAt,
-      }),
-      db.insert(orderItems).values(
-        quote.lines.map((l) => ({
-          orderId,
-          menuItemId: l.itemId,
-          itemName: l.itemName,
-          quantity: l.quantity,
-          unitPriceCents: l.unitPriceCents,
-          lineTotalCents: l.lineTotalCents,
-          modifiers: l.modifiers,
-          notes: l.notes || null,
-          station: l.station,
-        })),
-      ),
-      ...(quote.loyalty && joiningPhone ? enrollStatements(orderId, joiningPhone, input.customerName) : []),
-      ...(reward && signedIn
-        ? [
-            ledgerStatement({
-              kind: "redeem",
-              idemKey: ledgerKey.redeem(orderId),
-              orderId,
-              note: reward.name,
-              from: { memberId: signedIn.id, points: -reward.price.cost },
-            }),
-          ]
-        : []),
-    ]);
-    return order;
-  } catch (err) {
-    if (isInsufficientPoints(err)) throw new OrderError(INSUFFICIENT_POINTS);
-    throw err;
-  }
+        menuItemId: l.itemId,
+        itemName: l.itemName,
+        quantity: l.quantity,
+        unitPriceCents: l.unitPriceCents,
+        lineTotalCents: l.lineTotalCents,
+        modifiers: l.modifiers,
+        notes: l.notes || null,
+        station: l.station,
+      })),
+      placed,
+    ),
+    ...(discountRows.length ? [insertRowsWhere(orderDiscounts, discountRows, placed)] : []),
+  ];
+  const order = insertRowsWhere(
+    orders,
+    [
+      {
+        id: orderId,
+        placedAt,
+        promisedAt: new Date(placedAt.getTime() + o.prepMinutes * 60_000),
+        orderType: input.orderType,
+        customerName: input.customerName,
+        customerPhone: input.customerPhone,
+        customerEmail: input.customerEmail || null,
+        addressLine1: input.addressLine1 || null,
+        addressLine2: input.addressLine2 || null,
+        city: input.city || null,
+        zip: input.zip || null,
+        orderNotes: input.orderNotes || null,
+        subtotalCents: o.subtotalCents,
+        discountCents: o.discountCents,
+        taxCents: o.taxCents,
+        deliveryFeeCents: o.deliveryFeeCents,
+        tipCents: input.tipCents,
+        totalCents: o.totalCents,
+        loyaltyMemberId: o.loyalty?.memberId ?? null,
+        loyaltyRewardName: reward?.name ?? null,
+        loyaltyPointsRedeemed: reward?.pointsCost ?? 0,
+        loyaltyPointsEarned: o.loyalty?.pointsEarned ?? 0,
+      },
+    ],
+    check.guard,
+  );
+  const place = db.execute(sql`
+    with placed as (${order} returning id),
+    ${sql.join(children.map((c, i) => sql`${sql.identifier(`child${i}`)} as (${c})`), sql`, `)}
+    select id from placed`);
+  // Read back in the same transaction; no row means the guard failed.
+  const read = db.select().from(orders).where(eq(orders.id, orderId));
+  const [, , [row]] = await db.batch([db.execute(check.lock), place, read, ...after(orderId)]);
+  return row ?? null;
 }

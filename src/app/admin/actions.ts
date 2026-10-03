@@ -46,11 +46,14 @@ import {
 import {
   addOrderNote,
   adjustPromisedTime,
+  applyDiscount,
+  removeDiscount,
   recordPayment,
   transitionOrder,
   type Actor,
   type OrderActionResult,
 } from "@/lib/order-writes";
+import { compSchema } from "@/lib/validation";
 
 export type AuthFormState = { error?: string };
 
@@ -314,6 +317,25 @@ export async function addOrderNoteAction(formData: FormData): Promise<OrderActio
   if (!note) return { error: "Write a note first." };
   return orderActionState(
     await addOrderNote({ orderId: orderIdField(formData), note, actor }),
+  );
+}
+
+export async function applyDiscountAction(formData: FormData): Promise<OrderActionState> {
+  const actor = await operatorActor();
+  const parsed = compSchema.safeParse({
+    kind: textField(formData, "kind"),
+    reason: textField(formData, "reason"),
+    value: textField(formData, "value"),
+    promotionId: textField(formData, "promotionId"),
+  });
+  if (!parsed.success) return { error: parsed.error.issues[0]?.message ?? "Check the discount." };
+  return orderActionState(await applyDiscount({ orderId: orderIdField(formData), ...parsed.data, actor }));
+}
+
+export async function removeDiscountAction(formData: FormData): Promise<OrderActionState> {
+  const actor = await operatorActor();
+  return orderActionState(
+    await removeDiscount({ orderId: orderIdField(formData), discountId: idField(formData, "discountId"), actor }),
   );
 }
 

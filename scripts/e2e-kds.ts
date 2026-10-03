@@ -11,7 +11,7 @@
 import { chromium, type Page } from "playwright";
 import { eq } from "drizzle-orm";
 import { db, menuItems, modifierGroups, modifiers, orderItems, orders } from "../src/db";
-import { createOrder } from "../src/lib/orders";
+import { createOrder } from "../src/lib/checkout";
 
 const BASE = process.env.E2E_BASE_URL ?? "http://localhost:3000";
 const SHOT_DIR = process.env.E2E_SHOT_DIR ?? "/tmp";

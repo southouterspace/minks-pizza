@@ -3,7 +3,7 @@ import { activePromotion } from "@/lib/loyalty";
 import { listPromotions } from "@/lib/loyalty-server";
 import { getSettings } from "@/lib/orders";
 import { deletePromotion } from "../actions";
-import { PromotionForm } from "@/components/admin/promotion-form";
+import { LoyaltyPromotionForm } from "@/components/admin/loyalty-promotion-form";
 import { ConfirmButton } from "@/components/admin/confirm-button";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -36,7 +36,7 @@ export default async function LoyaltyPromotionsPage() {
             </form>
           </CardHeader>
           <CardContent>
-            <PromotionForm promo={p} />
+            <LoyaltyPromotionForm promo={p} />
           </CardContent>
         </Card>
       ))}
@@ -46,7 +46,7 @@ export default async function LoyaltyPromotionsPage() {
           <CardTitle className="text-sm">Add a promotion</CardTitle>
         </CardHeader>
         <CardContent>
-          <PromotionForm promo={null} />
+          <LoyaltyPromotionForm promo={null} />
         </CardContent>
       </Card>
     </div>

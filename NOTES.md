@@ -551,6 +551,14 @@ the webhook route and the admin UI are untested against real services.
   history search input showed up only in e2e runs that take screenshots
   (Playwright hides the caret for them). Loading and searching without
   screenshots logs nothing.
+- A server component that imports a plain value (not a component) from a
+  `"use client"` module gets a client reference, not the value. Spreading
+  it yields nothing. Keep shared constants in plain modules.
+- In a single-table select list Drizzle renders `${table.column}` bare
+  (`"id"`). Inside a correlated subquery that bare name binds to the inner
+  table, silently. Spell the outer column out (`orders.id`).
+- Base UI's `Checkbox` puts the `id` on a hidden input; Playwright can't
+  click it. Click the label text instead.
 - Destructive e2e (creating/removing operator accounts) must not run against the
   production database. `mcp__Neon__create_branch` makes an isolated copy in
   seconds; point `MINKS_DATABASE_URL` at it and delete the branch afterwards.
@@ -615,3 +623,181 @@ the webhook route and the admin UI are untested against real services.
 - Handoff state plan: after operator e2e passes, delete the test operator row
   and set `is_published=false` so the owner experiences pristine first-run
   setup (/admin/setup → build menu → publish). Demo orders stay for the inbox.
+
+## Session 8 — Promotions
+
+**Ask:** promotions and coupons an operator can set up in under a minute and
+trust, that a customer can see, understand and not lose. Competitor
+complaints are in `docs/promotions-research.md`.
+
+**Built:** see README → Promotions.
+
+- **Data shape.** A typed discriminated union for the reward
+  (`order_percent`, `order_amount`, `item_percent`, `item_amount`,
+  `item_price`, `bogo`, `free_delivery`), validated by zod on every write and
+  parsed on read. One pure evaluator (`evaluatePromotions` in
+  `src/lib/promotions.ts`) with an exhaustive switch. A redemption ledger
+  (`order_discounts`) that every usage number is counted from.
+- **Usage is derived, never stored.** Uses = ledger rows whose order isn't
+  canceled. A cancel gives the use back with no counter to decrement.
+  Operator comps are ledger rows too (`source = 'comp'`). The definition
+  lives once, as the `redemptions` SQL fragment in `promotion-usage.ts`;
+  every limit count, the checkout guard and the admin numbers read it.
+- **Comps don't use up a deal (decided in review).** A comp from a deal's
+  preset keeps `promotion_id` so the deal's Discounted total and net sales
+  include it, but `redemptions` filters `source = 'promotion'`, so it never
+  counts toward the total, per-customer or code limits. Before this, a comp
+  could push a limit-1 deal past its cap without taking the lock.
+- **One pricing path.** `quoteCheckout` serves the live preview and
+  `createOrder`. The checkout also sends the total its button showed
+  (`expectedTotalCents`); if the server's quote differs (a phone typed late,
+  a deal paused mid-checkout), the order is refused with the new total
+  rather than charged silently. Not in the spec; it is what makes "the
+  preview can never disagree with what's charged" hold.
+- **Limits under races.** `redemptionCheck` in `promotion-usage.ts` returns
+  `{ lock, guard }`: a `select … for update` on the applied promotions in id
+  order (an empty array when none apply), and the redemption guard.
+  `insertOrder` always batches the lock, then one data-modifying CTE that
+  inserts the order, its lines, its placed event and its ledger rows only
+  `where` the guard holds. The guard has to run in a statement after the
+  lock: under read committed each statement takes a fresh snapshot, so it
+  sees the order that won. No order row back means the race was lost;
+  `createOrder` re-quotes once and names the deal that went ("PIZZA10 was
+  just fully redeemed — your total is now $12.97."). The race test fires two
+  `placeOrder` calls at a limit-1 code: one wins, one gets that message. A
+  round where the second quote lands after the first commit isn't a race
+  (that checkout places without the deal), so the test re-runs it. (The
+  first version aborted the batch by casting a sentinel string to int and
+  matched the error text; replaced in review.)
+- **Typed rows into the guarded insert.** Each table's rows are typed by
+  its `$inferInsert` and reach Postgres as JSON through
+  `jsonb_populate_recordset(null::<table>, …)`, so the table's own row type
+  does the casting. A second round of review replaced a hand-written column
+  list with a `::type` per value, which a new NOT NULL column would have
+  broken at runtime only.
+- **Refusals are data.** The evaluator returns a typed `Refusal`
+  (`{ kind: "short", shortCents }`, `{ kind: "soldOut" }`, …);
+  `promotion-copy.ts` owns every sentence. Reasons carry no closing period,
+  so "We don't recognize that code" and "This offer has ended" lost theirs.
+- **One message when a deal changes mid-checkout.** Whether the quote no
+  longer matches the button's total or the guard lost a race,
+  `dealChangedMessage` names the deal with the refusal the cart would show
+  ("E2E-PIZZA: This offer has ended. Your total is now $38.91. Check it and
+  place your order again."). Sold out is the race case, so it keeps "was
+  just fully redeemed — your total is now …". `createOrder` tries twice.
+- **Tables per reward type, split by reader.** `REWARD_SCOPE` in
+  `promotion-schema.ts` says which part of the order a reward discounts
+  (item, order, delivery); the engine's stage order, the discount target,
+  the "orders $30+" wording and the comp presets read it. The form's label
+  and fields live in `REWARD_FORM` in `promotion-codec.ts`, next to both
+  directions of the form model and the templates. One test round-trips
+  every template and reward type; another changes each form field in turn
+  and checks the reward moves exactly when the type lists that field.
+- **Free delivery is a delivery-only deal.** The form fixes its order types
+  to delivery and the schema refuses anything else, so the engine's ordinary
+  order-type check tells a pickup customer "Delivery orders only". A zero
+  delivery fee reads "Delivery is already free". The engine's own
+  free-delivery branch and its `deliveryFree` refusal are gone.
+- **Module layout.** `promotion-schema.ts` (zod, stored shape),
+  `promotion-engine.ts` (pure evaluator), `promotion-copy.ts` (words),
+  `promotion-usage.ts` (what a use is), `checkout.ts` (quote, guard,
+  refusal messages, `createOrder`), `orders.ts` (pricing and the insert).
+- **Customer key on orders.** `orders.customer_key` is a stored generated
+  column over the phone, so the new-customer check compares an indexed
+  column instead of a per-row regex, and existing orders get their key in
+  the same push. The first cut wrote it at insert, which needed a nullable
+  push, a backfill and a second push, with old code failing inserts in
+  between. `customerKeyFromPhone` is the same rule for quotes made before
+  an order exists. The ledger kept its own copy until round 2 of review;
+  per-customer counts now read `o.customer_key` through the join every
+  usage query already makes, and the column never reached production.
+- **One totals renderer.** `TotalsList` with `orderTotals`/`quoteTotals`
+  serves checkout, cart, tracker, admin detail and the print ticket in one
+  row order; a zero fee, tax or tip is hidden everywhere (the ticket used to
+  print "Tax $0.00").
+- **Order type lives in the cart context**, clamped there to the types the
+  store offers (the store layout passes them in) and saved with the cart, so
+  the cart and checkout quote the same order type even with pickup off or
+  after a reload. The cart's footnote names only what checkout still adds.
+  The store layout is `force-dynamic`: `/cart` used to prerender at build
+  time, freezing that day's settings into the page.
+- **Best deal.** Options are each eligible exclusive promotion alone, or all
+  eligible stackable ones together; the larger saving wins, ties go to the
+  option using more of the customer's codes. Item rewards apply before
+  order rewards, order rewards before free delivery, so stacking never takes
+  a unit or the fee below zero.
+- **Rejection order (spec gap).** The spec lists the reasons but not their
+  priority. Hard stops come first (ended or paused, not started, expired,
+  used up, already used, new customers only), then the fixable ones
+  (schedule, order type, minimum, qualifying item), so nobody is told to add
+  $4 for a deal that still wouldn't apply.
+- **Net sales (deviation).** Day stats and promotion reports subtract item
+  discounts only. A free-delivery discount reduces the delivery fee, which
+  was never a sale, so subtracting it would understate sales. This matches
+  Toast's definition, which excludes service charges.
+- **Comps recompute tax at the store's current rate.** Orders don't store
+  their tax rate; if the rate changed since the order, a comp re-taxes the
+  order at the new one. Add `orders.tax_rate_bps` if that ever matters.
+- **Customer identity is the phone number only** (last ten digits). Email
+  and card fingerprints, which the research suggests, wait for customer
+  accounts and Stripe; there is nothing trustworthy to key on before then.
+- **Research rows deferred.** Reserved/consumed ledger states (no payment
+  capture yet), pro-rata discount allocation per line (needed with refunds),
+  a per-day velocity alert for leaked codes, a versioned audit log of deal
+  edits, "at most one code per order" (the spec lets combinable codes
+  stack), and validating against a scheduled order time (no scheduled
+  orders exist).
+- **Small calls.** Codes are stored twice: `code` normalized for matching
+  (unique) and `display` as written. Generated codes skip 0/O and 1/I. Dates
+  are store-local days, stored as instants (`endsAt` exclusive). The promo
+  field hides behind "Have a promo code?" unless a code is on the cart, so
+  customers without one aren't sent hunting (Baymard). `normalizeCode` lives
+  in its own module so the storefront bundle doesn't pull in zod.
+- **Fixed in passing:** the cart's "Go to checkout" button collapsed to a
+  sliver on phones (`flex-1` in a column).
+
+**Tested** against a throwaway Neon branch (`promotions-test`):
+
+- `scripts/test-promotions.ts`, 34 tests against literal cents and strings:
+  every reward type, the BOGO cheapest-unit rule, stacking against the best
+  exclusive deal, a stack that can't go below zero, every rejection reason,
+  nudges, code and phone normalization, weekly windows across the Nov 1 DST
+  change and overnight, store-day boundaries in spring and fall, totals
+  (tax after item discounts), offer sentences, derived status, the
+  deal-changed messages, the form codec round trip over every template and
+  reward type, each form field against the reward it moves, and free
+  delivery saved as delivery-only.
+- `scripts/e2e-promotions.ts`, 51 checks (including a preset comp that
+  leaves a limit-1 deal redeemable, and the cart quoting delivery with
+  pickup switched off), passing against
+  `next build && next start` (the first 45 also passed against `next dev`
+  before the review): see the script header. Screenshots of the
+  deals strip, cart under and over the minimum, checkout, confirmation, the
+  per-customer refusal, the comp on order detail and the promotions list.
+- `scripts/test-order-workflow.ts` (9), `scripts/e2e-orders.ts` (60) and
+  `scripts/e2e-customer.ts` still pass.
+
+### Merging promotions with loyalty and delivery
+
+Loyalty (#14) and delivery integrations (#12) landed while promotions was in
+review. Both rewrote checkout, so the merge chose one shape for it:
+
+- **One quote.** `checkout.ts` is the only checkout. `quoteCheckout` applies
+  promotions, then the member's reward against what the deals left of the
+  items (capped there, refused if nothing is left), then tax on the items
+  after both. Points are earned on that same net. The loyalty `quoteOrder` and
+  `createOrder` in `orders.ts` are gone.
+- **One ledger.** A reward is an `order_discounts` row with source `loyalty`,
+  so `discount_cents` is always the sum of an order's rows. Comps recompute
+  totals from the rows and would otherwise drop the reward. The migration
+  backfills a row for each earlier order with a reward discount.
+- **One transaction.** The guarded order insert takes the loyalty statements
+  (guest enrollment, the points debit) in the same batch. Both select from the
+  order row, so when the redemption guard refuses the order nobody is enrolled
+  and no points move. A points race still fails on the balance CHECK.
+- **One preview.** `previewCheckout` and `useCheckoutQuote` carry the reward
+  and return points to earn and the member's reward options. Base's
+  `useCheckoutPreview` and its local total estimate are gone: totals show only
+  once the server has priced the cart.
+- The loyalty points-multiplier form moved to `loyalty-promotion-form.tsx`,
+  since `promotion-form.tsx` is the deals form.

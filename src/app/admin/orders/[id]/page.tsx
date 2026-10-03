@@ -7,6 +7,7 @@ import { requireOperator } from "@/lib/auth";
 import { courierProviders } from "@/lib/delivery/providers";
 import { formatCents } from "@/lib/money";
 import {
+  canComp,
   canTransition,
   isCooking,
   isLate,
@@ -15,9 +16,13 @@ import {
   PAYMENT_METHODS,
 } from "@/lib/order-workflow";
 import { getOrderDetail, getStoreTimezone, type OrderDetail } from "@/lib/order-queries";
+import { compPresets } from "@/lib/promotion-admin";
+import type { DiscountSource } from "@/lib/promotion-schema";
 import {
   ActionForm,
   AdvanceButton,
+  ApplyDiscountDialog,
+  RemoveDiscountButton,
   CancelOrderDialog,
   EtaButtons,
   PrintButton,
@@ -29,8 +34,9 @@ import {
   PromisedTime,
   StatusBadge,
 } from "@/components/admin/order-status";
+import { addressLine, PrintTicket } from "@/components/admin/order-ticket";
+import { orderTotals, TotalsList } from "@/components/totals-list";
 import { CourierCard } from "@/components/admin/courier-card";
-import { addressLine, PrintTicket, Totals } from "@/components/admin/order-ticket";
 import { OrderTimeline } from "@/components/admin/order-timeline";
 import { formatDateTime } from "@/components/admin/ui";
 import { Badge } from "@/components/ui/badge";
@@ -41,6 +47,12 @@ import { Textarea } from "@/components/ui/textarea";
 export const dynamic = "force-dynamic";
 
 export const metadata: Metadata = { title: "Order" };
+
+const DISCOUNT_SOURCE_LABEL: Record<DiscountSource, string> = {
+  promotion: "Promotion",
+  comp: "Staff discount",
+  loyalty: "Loyalty reward",
+};
 
 const SOURCE_LABEL: Record<OrderDetail["source"], string> = {
   web: "Web",
@@ -54,13 +66,14 @@ export default async function OrderDetailPage({ params }: PageProps<"/admin/orde
   const { id } = await params;
   if (!/^[0-9a-f-]{36}$/i.test(id)) notFound();
 
-  const [order, timeZone] = await Promise.all([getOrderDetail(id), getStoreTimezone()]);
+  const [order, timeZone, presets] = await Promise.all([getOrderDetail(id), getStoreTimezone(), compPresets()]);
   if (!order) notFound();
 
   const now = new Date();
   const late = isLate(order.promisedAt, order.status, now);
   const address = addressLine(order);
   const open = NEXT_ACTION[order.status] || canTransition(order.status, "canceled");
+  const discountable = canComp(order);
 
   return (
     <div className="print:m-0">
@@ -156,7 +169,7 @@ export default async function OrderDetailPage({ params }: PageProps<"/admin/orde
                   </p>
                 ) : null}
                 <Separator className="my-3" />
-                <Totals order={order} className="ml-auto max-w-56 space-y-1 text-sm" />
+                <TotalsList totals={orderTotals(order)} audience="staff" className="ml-auto max-w-56 space-y-1 text-sm" />
               </CardContent>
             </Card>
 
@@ -210,6 +223,30 @@ export default async function OrderDetailPage({ params }: PageProps<"/admin/orde
                         minutes={[-5, 5, 10, 15]}
                       />
                     </div>
+                  </div>
+                ) : null}
+
+                {order.discounts.length > 0 || discountable ? (
+                  <div className="space-y-2" data-testid="discounts">
+                    <p className="text-sm font-medium">Discounts</p>
+                    {order.discounts.length ? (
+                      <ul className="space-y-1 text-sm">
+                        {order.discounts.map((d) => (
+                          <li key={d.id} className="flex items-center justify-between gap-2">
+                            <span className="min-w-0">
+                              <span className="block truncate">{d.label}</span>
+                              <span className="text-xs text-muted-foreground">
+                                {DISCOUNT_SOURCE_LABEL[d.source]} · −{formatCents(d.amountCents)}
+                              </span>
+                            </span>
+                            {discountable && d.source === "comp" ? (
+                              <RemoveDiscountButton orderId={order.id} discountId={d.id} label={d.label} />
+                            ) : null}
+                          </li>
+                        ))}
+                      </ul>
+                    ) : null}
+                    {discountable ? <ApplyDiscountDialog orderId={order.id} presets={presets} /> : null}
                   </div>
                 ) : null}
 

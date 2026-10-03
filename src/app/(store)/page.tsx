@@ -4,6 +4,8 @@ import { MenuBrowser } from "@/components/store/menu-browser";
 import { ComingSoon } from "@/components/store/coming-soon";
 import { StoreStatusBanner } from "@/components/store/status-banner";
 import { RecentOrderLink } from "@/components/store/recent-order-link";
+import { DealsStrip } from "@/components/store/deals-strip";
+import { getAdvertisedDeals } from "@/lib/promotion-queries";
 import { DAY_NAMES, formatHhmm } from "@/lib/zoned";
 
 export const dynamic = "force-dynamic";
@@ -22,7 +24,10 @@ export default async function StorePage() {
     );
   }
 
-  const menu = await getPublicMenu();
+  const [menu, deals] = await Promise.all([
+    getPublicMenu(),
+    getAdvertisedDeals(new Date(), settings.timezone),
+  ]);
   const todayHours = settings.hours?.find(
     (h) => h.day === new Date().getDay(),
   );
@@ -56,6 +61,8 @@ export default async function StorePage() {
           </div>
         </div>
       </section>
+
+      <DealsStrip deals={deals} />
 
       {settings.isAcceptingOrders ? null : (
         <div className="border-b border-border bg-muted">

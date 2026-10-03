@@ -9,6 +9,7 @@ import {
   History,
   Settings,
   SlidersHorizontal,
+  Tag,
   Users,
   UtensilsCrossed,
 } from "lucide-react";
@@ -24,6 +25,7 @@ const LINKS = [
     exact: false,
     icon: SlidersHorizontal,
   },
+  { href: "/admin/promotions", label: "Promotions", exact: false, icon: Tag },
   { href: "/admin/staff", label: "Staff", exact: false, icon: CalendarClock },
   { href: "/admin/loyalty", label: "Loyalty", exact: false, icon: Gift },
   { href: "/admin/settings", label: "Settings", exact: false, icon: Settings },

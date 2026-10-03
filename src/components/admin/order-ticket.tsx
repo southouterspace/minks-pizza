@@ -2,6 +2,7 @@ import { formatClock } from "@/lib/zoned";
 import { formatCents } from "@/lib/money";
 import { PAYMENT_METHOD_LABEL } from "@/lib/order-workflow";
 import type { OrderDetail } from "@/lib/order-queries";
+import { orderTotals, TotalsList } from "@/components/totals-list";
 import { formatDateTime } from "./ui";
 
 export function addressLine(o: OrderDetail): string | null {
@@ -9,32 +10,6 @@ export function addressLine(o: OrderDetail): string | null {
   return [o.addressLine1, o.addressLine2, [o.city, o.zip].filter(Boolean).join(" ")]
     .filter(Boolean)
     .join(", ");
-}
-
-export function Totals({ order, className }: { order: OrderDetail; className?: string }) {
-  const rows: [string, number][] = [
-    ["Subtotal", order.subtotalCents],
-    ...(order.discountCents > 0
-      ? [[order.loyaltyRewardName ?? "Reward", -order.discountCents] as [string, number]]
-      : []),
-    ["Tax", order.taxCents],
-    ...(order.deliveryFeeCents > 0 ? [["Delivery fee", order.deliveryFeeCents] as [string, number]] : []),
-    ...(order.tipCents > 0 ? [["Tip", order.tipCents] as [string, number]] : []),
-  ];
-  return (
-    <dl className={className}>
-      {rows.map(([label, cents]) => (
-        <div key={label} className="flex justify-between gap-6">
-          <dt className="text-muted-foreground print:text-black">{label}</dt>
-          <dd className="tabular-nums">{cents < 0 ? `−${formatCents(-cents)}` : formatCents(cents)}</dd>
-        </div>
-      ))}
-      <div className="flex justify-between gap-6 border-t pt-1.5 font-semibold">
-        <dt>Total</dt>
-        <dd className="tabular-nums">{formatCents(order.totalCents)}</dd>
-      </div>
-    </dl>
-  );
 }
 
 /** Receipt-width kitchen/counter ticket, the only thing on the page when printing. */
@@ -76,7 +51,7 @@ export function PrintTicket({ order, timeZone }: { order: OrderDetail; timeZone:
         <p className="my-2 border border-black p-1 font-bold">NOTE: {order.orderNotes}</p>
       ) : null}
       <hr className="my-2 border-dashed border-black" />
-      <Totals order={order} />
+      <TotalsList totals={orderTotals(order)} audience="staff" />
       <p className="mt-2 text-center font-bold uppercase">
         {order.paymentStatus === "paid"
           ? `Paid${order.paymentMethod ? ` · ${PAYMENT_METHOD_LABEL[order.paymentMethod]}` : ""}`

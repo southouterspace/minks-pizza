@@ -39,7 +39,6 @@ export default async function CheckoutPage() {
         deliveryPrepMinutes: settings.deliveryPrepMinutes,
         deliveryFeeCents: settings.deliveryFeeCents,
         deliveryMinimumCents: settings.deliveryMinimumCents,
-        taxRateBps: settings.taxRateBps,
         loyalty: loyalty.enabled
           ? {
               programName: loyalty.programName,

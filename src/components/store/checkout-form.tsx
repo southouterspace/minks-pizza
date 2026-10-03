@@ -5,7 +5,7 @@ import { useRouter } from "next/navigation";
 import { useMemo, useRef, useState, useTransition } from "react";
 import { ShoppingBag } from "lucide-react";
 import { useCart } from "@/components/cart-context";
-import { formatCents, taxFromBps } from "@/lib/money";
+import { formatCents } from "@/lib/money";
 import { placeOrder } from "@/app/(store)/actions";
 import { Button, buttonVariants } from "@/components/ui/button";
 import {
@@ -26,10 +26,10 @@ import { Field, FieldLabel } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Separator } from "@/components/ui/separator";
+import { PromoCodeField, QuoteTotals, useCheckoutQuote } from "@/components/store/promo-summary";
 import { Textarea } from "@/components/ui/textarea";
 import { cn } from "@/lib/utils";
 import { LoyaltyPanel } from "@/components/store/checkout-loyalty";
-import { useCheckoutPreview } from "@/components/store/use-checkout-preview";
 
 export type CheckoutConfig = {
   storeName: string;
@@ -41,7 +41,6 @@ export type CheckoutConfig = {
   deliveryPrepMinutes: number;
   deliveryFeeCents: number;
   deliveryMinimumCents: number;
-  taxRateBps: number;
   loyalty: {
     programName: string;
     member: { name: string | null; phone: string; pointsBalance: number } | null;
@@ -52,12 +51,11 @@ const TIP_PRESETS = [0, 10, 15, 20];
 
 export function CheckoutForm({ config }: { config: CheckoutConfig }) {
   const router = useRouter();
-  const { lines, subtotalCents, clear, ready } = useCart();
+  const { lines, subtotalCents: cartSubtotalCents, promoCodes, removePromoCode, orderType, setOrderType, clear, ready } =
+    useCart();
   const [pending, startTransition] = useTransition();
   const submittedRef = useRef(false);
 
-  const defaultType = config.pickupEnabled ? "pickup" : "delivery";
-  const [orderType, setOrderType] = useState<"pickup" | "delivery">(defaultType);
   const [tipPercent, setTipPercent] = useState<number | "custom">(15);
   const [customTip, setCustomTip] = useState("");
   const [error, setError] = useState<string | null>(null);
@@ -74,6 +72,14 @@ export function CheckoutForm({ config }: { config: CheckoutConfig }) {
   const [zip, setZip] = useState("");
   const [orderNotes, setOrderNotes] = useState("");
 
+  const { quote, error: quoteError, pending: quotePending, refresh } = useCheckoutQuote(orderType, {
+    phone,
+    rewardId,
+    withRewards: member !== null,
+  });
+  // Tip presets stay a share of the pre-discount subtotal: staff did the full work.
+  const subtotalCents = quote?.subtotalCents ?? cartSubtotalCents;
+
   const tipCents = useMemo(() => {
     if (tipPercent === "custom") {
       const dollars = parseFloat(customTip);
@@ -84,13 +90,8 @@ export function CheckoutForm({ config }: { config: CheckoutConfig }) {
     return Math.round((subtotalCents * tipPercent) / 100);
   }, [tipPercent, customTip, subtotalCents]);
 
-  const preview = useCheckoutPreview(lines, orderType, rewardId, { withRewards: member !== null });
-  const quote = preview.status === "ok" ? preview.quote : null;
-  // Every total comes from one place: the server's quote for this exact cart,
-  // or, until it arrives, a local estimate with no reward applied.
-  const totals = quote ?? estimateTotals(subtotalCents, orderType, config);
-  const totalCents = totals.totalCents + tipCents;
-  const rewardError = quote?.rewardError ?? null;
+  const totalCents = quote ? quote.totalBeforeTipCents + tipCents : null;
+  const rewardError = quote?.loyalty?.rewardError ?? null;
 
   const belowMinimum =
     orderType === "delivery" && subtotalCents < config.deliveryMinimumCents;
@@ -143,6 +144,8 @@ export function CheckoutForm({ config }: { config: CheckoutConfig }) {
         zip,
         orderNotes,
         tipCents,
+        promoCodes,
+        expectedTotalCents: totalCents ?? undefined,
         joinLoyalty: config.loyalty && !member ? joinLoyalty : false,
         rewardId,
         lines: lines.map((l) => ({
@@ -163,6 +166,7 @@ export function CheckoutForm({ config }: { config: CheckoutConfig }) {
       } else {
         submittedRef.current = false; // allow retry after a rejected order
         setError(result.error);
+        refresh();
       }
     });
   };
@@ -313,7 +317,7 @@ export function CheckoutForm({ config }: { config: CheckoutConfig }) {
             <LoyaltyPanel
               programName={config.loyalty.programName}
               member={member}
-              preview={quote ?? (preview.status === "loading" ? preview.previous : null)}
+              quote={quote}
               rewardId={rewardId}
               onRewardChange={setRewardId}
               joinLoyalty={joinLoyalty}
@@ -370,6 +374,11 @@ export function CheckoutForm({ config }: { config: CheckoutConfig }) {
                 </div>
               ) : null}
             </div>
+            {quote && quote.discountCents > 0 ? (
+              <p className="mt-2 text-xs text-muted-foreground">
+                Tip is based on your pre-discount subtotal.
+              </p>
+            ) : null}
           </section>
 
           {/* Notes */}
@@ -423,48 +432,16 @@ export function CheckoutForm({ config }: { config: CheckoutConfig }) {
 
             <Separator className="my-4" />
 
-            <dl className="space-y-1.5 text-sm">
-              <div className="flex justify-between">
-                <dt className="text-muted-foreground">Subtotal</dt>
-                <dd className="tabular-nums">{formatCents(totals.subtotalCents)}</dd>
-              </div>
-              {totals.discountCents > 0 ? (
-                <div className="flex justify-between" data-testid="discount-line">
-                  <dt className="text-muted-foreground">Reward</dt>
-                  <dd className="tabular-nums text-success">−{formatCents(totals.discountCents)}</dd>
-                </div>
+            <div className="space-y-4">
+              <PromoCodeField quote={quote} />
+              {quote ? <QuoteTotals quote={quote} tipCents={tipCents} onRemoveCode={removePromoCode} /> : null}
+              {quote?.loyalty?.pointsEarned ? (
+                <p className="flex justify-between text-xs text-muted-foreground" data-testid="points-to-earn">
+                  <span>Points you&apos;ll earn{quote.loyalty.promoName ? ` (${quote.loyalty.promoName})` : ""}</span>
+                  <span className="tabular-nums">+{quote.loyalty.pointsEarned.toLocaleString()}</span>
+                </p>
               ) : null}
-              {totals.taxCents > 0 ? (
-                <div className="flex justify-between">
-                  <dt className="text-muted-foreground">Tax</dt>
-                  <dd className="tabular-nums">{formatCents(totals.taxCents)}</dd>
-                </div>
-              ) : null}
-              {totals.deliveryFeeCents > 0 ? (
-                <div className="flex justify-between">
-                  <dt className="text-muted-foreground">Delivery fee</dt>
-                  <dd className="tabular-nums">
-                    {formatCents(totals.deliveryFeeCents)}
-                  </dd>
-                </div>
-              ) : null}
-              {tipCents > 0 ? (
-                <div className="flex justify-between">
-                  <dt className="text-muted-foreground">Tip</dt>
-                  <dd className="tabular-nums">{formatCents(tipCents)}</dd>
-                </div>
-              ) : null}
-              <div className="flex justify-between border-t border-border pt-2 text-base font-semibold">
-                <dt>Total</dt>
-                <dd className="tabular-nums" data-testid="order-total">{formatCents(totalCents)}</dd>
-              </div>
-              {quote?.pointsEarned ? (
-                <div className="flex justify-between pt-1 text-xs text-muted-foreground" data-testid="points-to-earn">
-                  <dt>Points you&apos;ll earn{quote.promoName ? ` (${quote.promoName})` : ""}</dt>
-                  <dd className="tabular-nums">+{quote.pointsEarned.toLocaleString()}</dd>
-                </div>
-              ) : null}
-            </dl>
+            </div>
 
             {belowMinimum ? (
               <p className="mt-4 text-sm text-warning">
@@ -477,27 +454,27 @@ export function CheckoutForm({ config }: { config: CheckoutConfig }) {
             {rewardError ? (
               <p className="mt-4 text-sm text-destructive">{rewardError}</p>
             ) : null}
-            {preview.status === "error" ? (
-              <p role="alert" className="mt-4 text-sm text-destructive" data-testid="preview-error">
-                {preview.error} The total above is an estimate.
-              </p>
-            ) : null}
-            {error ? (
+            {error || quoteError ? (
               <p role="alert" className="mt-4 text-sm text-destructive">
-                {error}
+                {error ?? quoteError}
               </p>
             ) : null}
 
             <Button
               type="submit"
-              disabled={pending || belowMinimum || !config.acceptingOrders || rewardError !== null}
+              disabled={
+                pending || quotePending || totalCents === null || belowMinimum || !config.acceptingOrders || rewardError !== null
+              }
               className="mt-5 h-11! w-full"
+              data-testid="place-order"
             >
               {pending
                 ? "Placing order…"
                 : !config.acceptingOrders
                   ? "Ordering paused"
-                  : `Place ${orderType} order · ${formatCents(totalCents)}`}
+                  : totalCents === null
+                    ? "Updating total…"
+                    : `Place ${orderType} order · ${formatCents(totalCents)}`}
             </Button>
             <p className="mt-3 text-center text-xs text-muted-foreground">
               You&apos;ll pay at {orderType === "pickup" ? "pickup" : "the door"}.
@@ -510,14 +487,3 @@ export function CheckoutForm({ config }: { config: CheckoutConfig }) {
   );
 }
 
-function estimateTotals(subtotalCents: number, orderType: "pickup" | "delivery", config: CheckoutConfig) {
-  const taxCents = taxFromBps(subtotalCents, config.taxRateBps);
-  const deliveryFeeCents = orderType === "delivery" ? config.deliveryFeeCents : 0;
-  return {
-    subtotalCents,
-    discountCents: 0,
-    taxCents,
-    deliveryFeeCents,
-    totalCents: subtotalCents + taxCents + deliveryFeeCents,
-  };
-}

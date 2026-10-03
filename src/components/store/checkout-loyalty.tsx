@@ -5,14 +5,14 @@ import { Gift } from "lucide-react";
 import { Checkbox } from "@/components/ui/checkbox";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { RewardSummary } from "@/components/store/reward-row";
-import type { PreviewQuote } from "@/components/store/use-checkout-preview";
+import type { QuoteView } from "@/app/(store)/actions";
 import { cn } from "@/lib/utils";
 
 /** Checkout's rewards section: join by phone as a guest, or pick a reward as a member. */
 export function LoyaltyPanel({
   programName,
   member,
-  preview,
+  quote,
   rewardId,
   onRewardChange,
   joinLoyalty,
@@ -21,7 +21,7 @@ export function LoyaltyPanel({
   programName: string;
   member: { pointsBalance: number } | null;
   /** The latest quote, possibly for the previous cart: rewards and points are hints here. */
-  preview: PreviewQuote | null;
+  quote: QuoteView | null;
   rewardId: number | null;
   onRewardChange: (id: number | null) => void;
   joinLoyalty: boolean;
@@ -32,8 +32,8 @@ export function LoyaltyPanel({
       <section data-testid="loyalty-panel" className="rounded-xl border border-border p-4">
         <h2 className="flex items-center gap-2 text-sm font-semibold">
           <Gift className="size-4" aria-hidden />
-          {preview?.pointsEarned
-            ? `Earn ${preview.pointsEarned.toLocaleString()} points on this order`
+          {quote?.loyalty?.pointsEarned
+            ? `Earn ${quote.loyalty.pointsEarned.toLocaleString()} points on this order`
             : programName}
         </h2>
         <label className="mt-3 flex items-start gap-2.5 text-sm">
@@ -75,7 +75,7 @@ export function LoyaltyPanel({
           <RadioGroupItem value="none" />
           No reward this time
         </label>
-        {(preview?.rewards ?? []).map(({ reward, fitsCart }) => {
+        {(quote?.loyalty?.rewards ?? []).map(({ reward, fitsCart }) => {
           const short = reward.cost - member.pointsBalance;
           const disabled = short > 0 || !fitsCart;
           return (

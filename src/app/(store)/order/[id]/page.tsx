@@ -1,9 +1,9 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { and, desc, eq, notInArray } from "drizzle-orm";
+import { and, asc, desc, eq, notInArray } from "drizzle-orm";
 import { Gift } from "lucide-react";
-import { courierDeliveries, db, orderItems, orders } from "@/db";
+import { courierDeliveries, db, orderDiscounts, orderItems, orders } from "@/db";
 import { COURIER_STATUS_LABEL, TERMINAL_COURIER_STATUSES } from "@/lib/delivery/types";
 import { formatClock } from "@/lib/zoned";
 import { orderPointsStatus } from "@/lib/loyalty";
@@ -11,6 +11,7 @@ import { formatCents } from "@/lib/money";
 import { isActive, isCooking } from "@/lib/order-workflow";
 import { getSettings } from "@/lib/orders";
 import { OrderAutoRefresh } from "@/components/store/order-auto-refresh";
+import { orderTotals, TotalsList } from "@/components/totals-list";
 import { buttonVariants } from "@/components/ui/button";
 import {
   Card,
@@ -65,22 +66,26 @@ export default async function OrderPage({
   const [order] = await db.select().from(orders).where(eq(orders.id, id));
   if (!order) notFound();
 
-  const items = await db
-    .select()
-    .from(orderItems)
-    .where(eq(orderItems.orderId, order.id));
-  const settings = await getSettings();
-  const [courier] = await db
-    .select()
-    .from(courierDeliveries)
-    .where(
-      and(
-        eq(courierDeliveries.orderId, order.id),
-        notInArray(courierDeliveries.status, [...TERMINAL_COURIER_STATUSES]),
-      ),
-    )
-    .orderBy(desc(courierDeliveries.createdAt))
-    .limit(1);
+  const [items, discounts, settings, [courier]] = await Promise.all([
+    db.select().from(orderItems).where(eq(orderItems.orderId, order.id)),
+    db
+      .select()
+      .from(orderDiscounts)
+      .where(eq(orderDiscounts.orderId, order.id))
+      .orderBy(asc(orderDiscounts.id)),
+    getSettings(),
+    db
+      .select()
+      .from(courierDeliveries)
+      .where(
+        and(
+          eq(courierDeliveries.orderId, order.id),
+          notInArray(courierDeliveries.status, [...TERMINAL_COURIER_STATUSES]),
+        ),
+      )
+      .orderBy(desc(courierDeliveries.createdAt))
+      .limit(1),
+  ]);
 
   const stepIndex = STATUS_STEPS.indexOf(
     order.status as (typeof STATUS_STEPS)[number],
@@ -216,56 +221,16 @@ export default async function OrderPage({
             ))}
           </ul>
         </CardContent>
-        <CardFooter>
-          <dl className="w-full space-y-1.5 text-sm">
-            <div className="flex justify-between">
-              <dt className="text-muted-foreground">Subtotal</dt>
-              <dd className="tabular-nums">{formatCents(order.subtotalCents)}</dd>
-            </div>
-            {order.discountCents > 0 ? (
-              <div className="flex justify-between">
-                <dt className="text-muted-foreground">
-                  {order.loyaltyRewardName ?? "Reward"}
-                  {order.loyaltyPointsRedeemed > 0
-                    ? ` (${order.loyaltyPointsRedeemed.toLocaleString()} pts)`
-                    : ""}
-                </dt>
-                <dd className="tabular-nums text-success">−{formatCents(order.discountCents)}</dd>
-              </div>
-            ) : null}
-            {order.taxCents > 0 ? (
-              <div className="flex justify-between">
-                <dt className="text-muted-foreground">Tax</dt>
-                <dd className="tabular-nums">{formatCents(order.taxCents)}</dd>
-              </div>
-            ) : null}
-            {order.deliveryFeeCents > 0 ? (
-              <div className="flex justify-between">
-                <dt className="text-muted-foreground">Delivery fee</dt>
-                <dd className="tabular-nums">
-                  {formatCents(order.deliveryFeeCents)}
-                </dd>
-              </div>
-            ) : null}
-            {order.tipCents > 0 ? (
-              <div className="flex justify-between">
-                <dt className="text-muted-foreground">Tip</dt>
-                <dd className="tabular-nums">{formatCents(order.tipCents)}</dd>
-              </div>
-            ) : null}
-            <div className="flex justify-between border-t border-border pt-2 text-base font-semibold">
-              <dt>Total</dt>
-              <dd className="tabular-nums">{formatCents(order.totalCents)}</dd>
-            </div>
-            <div className="flex justify-between pt-1">
-              <dt className="text-muted-foreground">Payment</dt>
-              <dd className="text-muted-foreground">
-                {order.paymentStatus === "paid"
-                  ? "Paid online"
-                  : `Due at ${order.orderType === "pickup" ? "pickup" : "delivery"}`}
-              </dd>
-            </div>
-          </dl>
+        <CardFooter className="flex-col items-stretch gap-1.5">
+          <TotalsList totals={orderTotals({ ...order, discounts })} audience="customer" />
+          <p className="flex justify-between text-sm text-muted-foreground">
+            <span>Payment</span>
+            <span>
+              {order.paymentStatus === "paid"
+                ? "Paid online"
+                : `Due at ${order.orderType === "pickup" ? "pickup" : "delivery"}`}
+            </span>
+          </p>
         </CardFooter>
       </Card>
 

@@ -14,7 +14,7 @@ import { and, eq, ilike, like } from "drizzle-orm";
 import { categories, db, loyaltyLedger, loyaltyMembers, loyaltyRewards, loyaltySettings, operators } from "../../src/db";
 import { DEFAULT_TIERS, INSUFFICIENT_POINTS, MONTHS, localYearMonth } from "../../src/lib/loyalty";
 import { auditBalances, getMember, refreshMember } from "../../src/lib/loyalty-server";
-import { createOrder } from "../../src/lib/orders";
+import { createOrder } from "../../src/lib/checkout";
 import {
   BASE,
   cancelOrder,
@@ -216,11 +216,11 @@ describe("loyalty", { timeout: 120_000 }, () => {
     await option(threeOff.id).click();
     await page.getByRole("button", { name: "No tip" }).click();
     // 1999 − 300 = 1699; 8.25% tax on 1699 = 140; total 1839; earns 169.
-    await waitUntil(async () => (await page.getByTestId("order-total").textContent()) === "$18.39", "the server-priced total");
+    await waitUntil(async () => (await page.getByTestId("totals-total").textContent()) === "$18.39", "the server-priced total");
     assert.match((await page.getByTestId("points-to-earn").textContent()) ?? "", /\+169$/);
     await page.getByRole("button", { name: /^Place pickup order/ }).click();
     await page.waitForURL(/\/order\//);
-    await page.getByText("E2E $3 off (300 pts)").waitFor();
+    await page.getByTestId("discount-line").filter({ hasText: "E2E $3 off" }).getByText("Reward · 300 points").waitFor();
 
     const placed = await orderRow(page.url().split("/order/")[1]);
     assert.deepEqual(

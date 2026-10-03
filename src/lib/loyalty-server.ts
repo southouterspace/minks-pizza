@@ -296,14 +296,15 @@ export async function memberByPhone(phone: string): Promise<LoyaltyMember | null
 
 /**
  * Batch after inserting a guest's order: enrolls the phone if it's new and
- * links the order to its member.
+ * links the order to its member. Both write nothing if the order isn't there,
+ * so an order refused inside its batch enrolls nobody.
  */
 export function enrollStatements(orderId: string, phone: string, name: string) {
   return [
-    db
-      .insert(loyaltyMembers)
-      .values({ phone, name: name || null, referralCode: newReferralCode() })
-      .onConflictDoNothing({ target: loyaltyMembers.phone }),
+    db.execute(sql`
+      insert into ${loyaltyMembers} (phone, name, referral_code)
+      select ${phone}, ${name || null}, ${newReferralCode()} from ${orders} where ${orders.id} = ${orderId}
+      on conflict (phone) do nothing`),
     db
       .update(orders)
       .set({ loyaltyMemberId: sql`(select id from loyalty_members where phone = ${phone})` })
