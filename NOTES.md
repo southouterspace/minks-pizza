@@ -361,23 +361,58 @@ complaints are in `docs/promotions-research.md`.
   (`order_discounts`) that every usage number is counted from.
 - **Usage is derived, never stored.** Uses = ledger rows whose order isn't
   canceled. A cancel gives the use back with no counter to decrement.
-  Operator comps are ledger rows too (`source = 'comp'`).
+  Operator comps are ledger rows too (`source = 'comp'`). The definition
+  lives once, as the `redemptions` SQL fragment in `promotion-usage.ts`;
+  every limit count, the checkout guard and the admin numbers read it.
+- **Comps don't use up a deal (decided in review).** A comp from a deal's
+  preset keeps `promotion_id` so the deal's Discounted total and net sales
+  include it, but `redemptions` filters `source = 'promotion'`, so it never
+  counts toward the total, per-customer or code limits. Before this, a comp
+  could push a limit-1 deal past its cap without taking the lock.
 - **One pricing path.** `quoteCheckout` serves the live preview and
   `createOrder`. The checkout also sends the total its button showed
   (`expectedTotalCents`); if the server's quote differs (a phone typed late,
   a deal paused mid-checkout), the order is refused with the new total
   rather than charged silently. Not in the spec; it is what makes "the
   preview can never disagree with what's charged" hold.
-- **Limits under races.** `createOrder` batches the order, its lines, its
-  event, then `select … for update` on the applied promotions in id order,
-  then a guard statement that recounts every limit, then the ledger rows.
-  The guard has to be its own statement: under read committed each
-  statement takes a fresh snapshot, so it sees the order that won the lock.
-  A count inside the locking statement would read the old snapshot. A failed
-  guard raises by casting a sentinel string to int; `createOrder` re-quotes
-  and names the deal that was lost ("PIZZA10 was just fully redeemed — your
-  total is now $12.97."). The race test fires two `placeOrder` calls at a
-  limit-1 code: one wins, one gets that message.
+- **Limits under races.** `insertOrder` batches `select … for update` on
+  the applied promotions in id order, then one data-modifying CTE that
+  inserts the order, its lines, its placed event and its ledger rows only
+  `where` the redemption guard holds (the `order-writes.ts` pattern). The
+  guard has to run in a statement after the lock: under read committed each
+  statement takes a fresh snapshot, so it sees the order that won. No order
+  row back means the race was lost; `createOrder` re-quotes once and names
+  the deal that went ("PIZZA10 was just fully redeemed — your total is now
+  $12.97."). The race test fires two `placeOrder` calls at a limit-1 code:
+  one wins, one gets that message. (The first version aborted the batch by
+  casting a sentinel string to int and matched the error text; replaced in
+  review.)
+- **Refusals are data.** The evaluator returns a typed `Refusal`
+  (`{ kind: "short", shortCents }`, `{ kind: "soldOut" }`, …);
+  `promotion-copy.ts` owns every sentence, and the race message switches on
+  the kind. Reasons carry no closing period, so "We don't recognize that
+  code" and "This offer has ended" lost theirs.
+- **One table per reward type.** `REWARD_SPEC` in `promotion-schema.ts` holds
+  the form label, the form fields and the scope (item, order, delivery). The
+  engine's stage order, the discount target, the "orders $30+" wording, the
+  form and the comp presets all read it. `promotion-codec.ts` holds both
+  directions of the form model and the templates, and a test round-trips
+  every template and reward type.
+- **Module layout.** `promotion-schema.ts` (zod, stored shape),
+  `promotion-engine.ts` (pure evaluator), `promotion-copy.ts` (words),
+  `promotion-usage.ts` (what a use is), `checkout.ts` (quote, guard,
+  refusal messages, `createOrder`), `orders.ts` (pricing and the insert).
+- **Customer key on orders.** `orders.customer_key` is written at insert,
+  so the new-customer check compares a column instead of a per-row regex
+  over the phone. Migration needs a backfill (README).
+- **One totals renderer.** `TotalsList` with `orderTotals`/`quoteTotals`
+  serves checkout, cart, tracker, admin detail and the print ticket in one
+  row order; a zero fee, tax or tip is hidden everywhere (the ticket used to
+  print "Tax $0.00").
+- **Order type lives in the cart context**, so the cart quotes what checkout
+  will. On a fresh visit it defaults to pickup, so when pickup is off the
+  cart no longer shows a delivery fee before checkout (its copy already said
+  the fee is added there).
 - **Best deal.** Options are each eligible exclusive promotion alone, or all
   eligible stackable ones together; the larger saving wins, ties go to the
   option using more of the customer's codes. Item rewards apply before
@@ -415,14 +450,18 @@ complaints are in `docs/promotions-research.md`.
 
 **Tested** against a throwaway Neon branch (`promotions-test`):
 
-- `scripts/test-promotions.ts`, 29 tests against literal cents and strings:
+- `scripts/test-promotions.ts`, 32 tests against literal cents and strings:
   every reward type, the BOGO cheapest-unit rule, stacking against the best
   exclusive deal, a stack that can't go below zero, every rejection reason,
   nudges, code and phone normalization, weekly windows across the Nov 1 DST
   change and overnight, store-day boundaries in spring and fall, totals
-  (tax after item discounts), offer sentences and derived status.
-- `scripts/e2e-promotions.ts`, 45 checks, passing against both `next dev`
-  and `next build && next start`: see the script header. Screenshots of the
+  (tax after item discounts), offer sentences, derived status, the lost-race
+  sentences, and the form codec round trip over every template and reward
+  type.
+- `scripts/e2e-promotions.ts`, 48 checks (including a preset comp that
+  leaves a limit-1 deal redeemable), passing against
+  `next build && next start` (the first 45 also passed against `next dev`
+  before the review): see the script header. Screenshots of the
   deals strip, cart under and over the minimum, checkout, confirmation, the
   per-customer refusal, the comp on order detail and the promotions list.
 - `scripts/test-order-workflow.ts` (9), `scripts/e2e-orders.ts` (60) and

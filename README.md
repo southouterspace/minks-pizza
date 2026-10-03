@@ -248,7 +248,8 @@ orders already placed: each order keeps a snapshot of its discount lines. The
 list shows status (Active, Scheduled, Expired, Paused, Used up, Archived),
 uses against the limit, the total discounted and net sales from orders that
 used it. Uses count only orders that weren't canceled, so canceling an order
-gives its use back.
+gives its use back. Staff discounts made from a deal's preset count in its
+total discounted and net sales but never use up its limits.
 
 **Apply discount** on an order's page takes dollars or a percent off the
 items with a reason that prints on the receipt, or one tap on a live
@@ -291,6 +292,17 @@ MINKS_DATABASE_URL=<production url> npm run db:push
 
 Orders placed before the migration have `discount_cents = 0` and no
 discount lines.
+
+`orders.customer_key` (the phone's last ten digits, which promotion limits
+count against) is `NOT NULL`, so existing orders need a backfill between two
+pushes. Run `db:push` with the column declared without `.notNull()` in
+`src/db/schema.ts`, backfill, then push again with the schema as committed:
+
+```sql
+UPDATE orders
+SET customer_key = right(regexp_replace(customer_phone, '\D', '', 'g'), 10)
+WHERE customer_key IS NULL;
+```
 
 ### Customer (`/`)
 
