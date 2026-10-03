@@ -6,7 +6,7 @@
 import { zonedParts } from "./hours";
 import { bpsOf } from "./money";
 import {
-  REWARD_SPEC,
+  REWARD_SCOPE,
   type DiscountTarget,
   type OrderType,
   type PromotionReward,
@@ -268,12 +268,12 @@ function applyReward(reward: PromotionReward, s: PriceState, lines: EvalLine[]):
 }
 
 export function rewardTarget(reward: PromotionReward): DiscountTarget {
-  return REWARD_SPEC[reward.type].scope === "delivery" ? "delivery" : "items";
+  return REWARD_SCOPE[reward.type] === "delivery" ? "delivery" : "items";
 }
 
 /** Item-level rewards go first so order-level ones discount what is left. */
 const STAGE: Record<RewardScope, number> = { item: 0, order: 1, delivery: 2 };
-const stage = (reward: PromotionReward) => STAGE[REWARD_SPEC[reward.type].scope];
+const stage = (reward: PromotionReward) => STAGE[REWARD_SCOPE[reward.type]];
 
 // ---------------------------------------------------------------------------
 // Eligibility
@@ -317,7 +317,7 @@ function firstRefusal(c: PromotionCandidate, input: EvaluateInput): Refusal | nu
   }
   if (!inSchedule(p.schedule, now, timezone)) return { kind: "schedule", schedule: p.schedule ?? [] };
   if (!p.orderTypes.includes(input.orderType)) return { kind: "orderType", only: input.orderType === "pickup" ? "delivery" : "pickup" };
-  if (REWARD_SPEC[p.reward.type].scope === "delivery") {
+  if (REWARD_SCOPE[p.reward.type] === "delivery") {
     if (input.orderType === "pickup") return { kind: "orderType", only: "delivery" };
     if (input.deliveryFeeCents === 0) return { kind: "deliveryFree" };
   }

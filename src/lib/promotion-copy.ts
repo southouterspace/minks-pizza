@@ -6,7 +6,7 @@
 import { DAY_NAMES, formatTime } from "./hours";
 import { formatCents } from "./money";
 import type { Nudge, PromotionStatus, PromotionTerms, Refusal } from "./promotion-engine";
-import { REWARD_SPEC, sameTarget, type PromotionReward, type Target, type WeeklyWindow } from "./promotion-schema";
+import { REWARD_SCOPE, sameTarget, type PromotionReward, type Target, type WeeklyWindow } from "./promotion-schema";
 
 /** Display names for target ids, for "Add a Large 14" Cheese Pizza to use this". */
 export type TargetNames = {
@@ -111,7 +111,7 @@ export function describePromotionShort(p: Pick<PromotionTerms, "reward" | "minSu
   const reward = describeReward(p.reward, names);
   if (p.minSubtotalCents <= 0) return reward;
   const min = formatCents(p.minSubtotalCents).replace(/\.00$/, "");
-  return REWARD_SPEC[p.reward.type].scope === "order"
+  return REWARD_SCOPE[p.reward.type] === "order"
     ? `${reward} orders ${min}+`
     : `${reward} on orders ${min}+`;
 }

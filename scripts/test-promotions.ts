@@ -3,9 +3,10 @@
  * Run: npx tsx scripts/test-promotions.ts
  */
 import assert from "node:assert/strict";
+import { isDeepStrictEqual } from "node:util";
 import { zonedDayStart } from "../src/lib/hours";
 import { normalizeCode } from "../src/lib/promo-code";
-import { EMPTY_DRAFT, fromDraft, promotionTemplates, toDraft, type PromotionDraft } from "../src/lib/promotion-codec";
+import { EMPTY_DRAFT, fromDraft, promotionTemplates, REWARD_FORM, toDraft, type PromotionDraft, type RewardField } from "../src/lib/promotion-codec";
 import {
   customerKeyFromPhone,
   discountedTotals,
@@ -491,6 +492,29 @@ test("every template and every reward type survives save and edit unchanged", ()
     const input = fromDraft(d);
     assert.ok(promotionInputSchema.safeParse(input).success, d.name);
     assert.deepEqual(roundTrip(input), input, d.name);
+  }
+});
+
+test("each reward type's form shows exactly the fields its reward reads", () => {
+  const changed: { [K in RewardField]: PromotionDraft[K] } = {
+    percent: "7",
+    maxDiscount: "7",
+    amount: "7",
+    price: "7",
+    maxUnits: "7",
+    buyQty: "7",
+    getQty: "7",
+    getPercent: "7",
+    maxApplications: "7",
+    target: target({ itemIds: [KNOTS] }),
+    getTarget: target({ itemIds: [KNOTS] }),
+  };
+  for (const t of REWARD_TYPES) {
+    const base: PromotionDraft = { ...EMPTY_DRAFT, rewardType: t, getSameAsBuy: false };
+    const read = (Object.keys(changed) as RewardField[]).filter(
+      (f) => !isDeepStrictEqual(fromDraft({ ...base, [f]: changed[f] }).reward, fromDraft(base).reward),
+    );
+    assert.deepEqual(read.sort(), [...REWARD_FORM[t].fields].sort(), t);
   }
 });
 

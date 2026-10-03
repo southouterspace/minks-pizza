@@ -406,12 +406,14 @@ complaints are in `docs/promotions-research.md`.
   ("E2E-PIZZA: This offer has ended. Your total is now $38.91. Check it and
   place your order again."). Sold out is the race case, so it keeps "was
   just fully redeemed — your total is now …". `createOrder` tries twice.
-- **One table per reward type.** `REWARD_SPEC` in `promotion-schema.ts` holds
-  the form label, the form fields and the scope (item, order, delivery). The
-  engine's stage order, the discount target, the "orders $30+" wording, the
-  form and the comp presets all read it. `promotion-codec.ts` holds both
-  directions of the form model and the templates, and a test round-trips
-  every template and reward type.
+- **Tables per reward type, split by reader.** `REWARD_SCOPE` in
+  `promotion-schema.ts` says which part of the order a reward discounts
+  (item, order, delivery); the engine's stage order, the discount target,
+  the "orders $30+" wording and the comp presets read it. The form's label
+  and fields live in `REWARD_FORM` in `promotion-codec.ts`, next to both
+  directions of the form model and the templates. One test round-trips
+  every template and reward type; another changes each form field in turn
+  and checks the reward moves exactly when the type lists that field.
 - **Module layout.** `promotion-schema.ts` (zod, stored shape),
   `promotion-engine.ts` (pure evaluator), `promotion-copy.ts` (words),
   `promotion-usage.ts` (what a use is), `checkout.ts` (quote, guard,

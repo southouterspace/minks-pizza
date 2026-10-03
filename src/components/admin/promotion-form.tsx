@@ -4,14 +4,12 @@ import { useMemo, useState, useTransition } from "react";
 import { Plus, X } from "lucide-react";
 import { savePromotion } from "@/app/admin/promotions/actions";
 import type { MenuCatalog } from "@/lib/promotion-admin";
-import { fromDraft, promotionTemplates, type PromotionDraft } from "@/lib/promotion-codec";
+import { fromDraft, promotionTemplates, REWARD_FORM, type PromotionDraft, type RewardField } from "@/lib/promotion-codec";
 import { describeOffer, describeTarget, type TargetNames } from "@/lib/promotion-copy";
 import {
   promotionColumns,
   promotionInputSchema,
-  REWARD_SPEC,
   REWARD_TYPES,
-  type RewardField,
   type RewardType,
   type Target,
   type WeeklyWindow,
@@ -81,7 +79,7 @@ export function PromotionForm({
     });
   };
 
-  const fields: readonly RewardField[] = REWARD_SPEC[draft.rewardType].fields;
+  const fields: readonly RewardField[] = REWARD_FORM[draft.rewardType].fields;
   const numberFields = fields.filter((f): f is NumberFieldKey => f in NUMBER_FIELD);
   const buyGet = fields.includes("getTarget");
 
@@ -175,7 +173,7 @@ export function PromotionForm({
                 >
                   {REWARD_TYPES.map((t) => (
                     <NativeSelectOption key={t} value={t}>
-                      {REWARD_SPEC[t].label}
+                      {REWARD_FORM[t].label}
                     </NativeSelectOption>
                   ))}
                 </NativeSelect>

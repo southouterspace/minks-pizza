@@ -1,7 +1,7 @@
 /**
  * Promotions as stored and as the operator submits them: the reward union,
- * its zod schemas, and REWARD_SPEC, the one table of facts that differ by
- * reward type outside the math. Money is integer cents, percentages are
+ * its zod schemas, and REWARD_SCOPE, which part of the order each reward
+ * type discounts. Money is integer cents, percentages are
  * basis points (2000 = 20%).
  */
 import { z } from "zod";
@@ -127,46 +127,29 @@ export function sameTarget(a: Target, b: Target): boolean {
 /** Which part of the order a reward discounts; item rewards apply first, delivery last. */
 export type RewardScope = "item" | "order" | "delivery";
 
-/** The operator form's inputs for a reward, in the order the form shows them. */
-export type RewardField =
-  | "percent"
-  | "maxDiscount"
-  | "amount"
-  | "price"
-  | "maxUnits"
-  | "buyQty"
-  | "getQty"
-  | "getPercent"
-  | "maxApplications"
-  | "target"
-  | "getTarget";
-
 /**
- * Everything outside the math that differs by reward type. Adding a type
- * means a schema variant, an applyReward case, its copy, and a row here.
+ * Which part of the order each reward discounts. Adding a type means a
+ * schema variant, an applyReward case, its copy, a row here and a row in
+ * the form's REWARD_FORM.
  */
-export const REWARD_SPEC = {
-  order_percent: { label: "Percent off the order", scope: "order", fields: ["percent", "maxDiscount"] },
-  order_amount: { label: "Dollars off the order", scope: "order", fields: ["amount"] },
-  item_percent: { label: "Percent off items", scope: "item", fields: ["percent", "maxUnits", "target"] },
-  item_amount: { label: "Dollars off items", scope: "item", fields: ["amount", "maxUnits", "target"] },
-  item_price: { label: "Deal price on items", scope: "item", fields: ["price", "maxUnits", "target"] },
-  bogo: {
-    label: "Buy X, get Y",
-    scope: "item",
-    fields: ["buyQty", "getQty", "getPercent", "maxApplications", "target", "getTarget"],
-  },
-  free_delivery: { label: "Free delivery", scope: "delivery", fields: [] },
-} as const satisfies Record<RewardType, { label: string; scope: RewardScope; fields: readonly RewardField[] }>;
+export const REWARD_SCOPE = {
+  order_percent: "order",
+  order_amount: "order",
+  item_percent: "item",
+  item_amount: "item",
+  item_price: "item",
+  bogo: "item",
+  free_delivery: "delivery",
+} as const satisfies Record<RewardType, RewardScope>;
 
-export const REWARD_TYPES = Object.keys(REWARD_SPEC) as RewardType[];
+export const REWARD_TYPES = Object.keys(REWARD_SCOPE) as RewardType[];
 
 type OrderRewardType = {
-  [K in RewardType]: (typeof REWARD_SPEC)[K]["scope"] extends "order" ? K : never;
+  [K in RewardType]: (typeof REWARD_SCOPE)[K] extends "order" ? K : never;
 }[RewardType];
 /** A whole-order reward, the kind an operator can also comp by hand. */
 export type OrderReward = Extract<PromotionReward, { type: OrderRewardType }>;
 
 export function isOrderReward(r: PromotionReward): r is OrderReward {
-  return REWARD_SPEC[r.type].scope === "order";
+  return REWARD_SCOPE[r.type] === "order";
 }

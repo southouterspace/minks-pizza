@@ -81,6 +81,23 @@ export const EMPTY_DRAFT: PromotionDraft = {
   code: "",
 };
 
+/** The form's inputs for a reward, in the order the form shows them. */
+export type RewardField = Extract<
+  keyof PromotionDraft,
+  "percent" | "maxDiscount" | "amount" | "price" | "maxUnits" | "buyQty" | "getQty" | "getPercent" | "maxApplications" | "target" | "getTarget"
+>;
+
+/** The form for each reward type; rewardDraft and rewardOf must read and write exactly these fields. */
+export const REWARD_FORM = {
+  order_percent: { label: "Percent off the order", fields: ["percent", "maxDiscount"] },
+  order_amount: { label: "Dollars off the order", fields: ["amount"] },
+  item_percent: { label: "Percent off items", fields: ["percent", "maxUnits", "target"] },
+  item_amount: { label: "Dollars off items", fields: ["amount", "maxUnits", "target"] },
+  item_price: { label: "Deal price on items", fields: ["price", "maxUnits", "target"] },
+  bogo: { label: "Buy X, get Y", fields: ["buyQty", "getQty", "getPercent", "maxApplications", "target", "getTarget"] },
+  free_delivery: { label: "Free delivery", fields: [] },
+} as const satisfies Record<RewardType, { label: string; fields: readonly RewardField[] }>;
+
 /** "12" for 1200, "12.5" for 1250: dollars from cents, percent from basis points. */
 const fromHundredths = (n: number) => (n / 100).toFixed(2).replace(/\.00$/, "");
 const toHundredths = (s: string) => Math.round(Number.parseFloat(s || "0") * 100);
