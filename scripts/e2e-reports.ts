@@ -157,7 +157,9 @@ async function main() {
     const page = await signIn(browser);
 
     await page.goto(`${BASE}/admin/reports`, { waitUntil: "networkidle" });
-    check("/admin/reports opens on food cost", page.url().endsWith("/admin/reports/food-cost"), page.url());
+    check("/admin/reports opens on sales", (await page.getByRole("link", { name: "Sales", exact: true }).getAttribute("aria-current")) === "page", page.url());
+    await page.getByRole("link", { name: "Food cost", exact: true }).click();
+    await page.waitForURL(/\/admin\/reports\/food-cost$/);
     const today = new Date().toLocaleDateString("sv-SE", { timeZone: settings.timezone });
     await page.fill("#r-from", today);
     await page.fill("#r-to", today);
