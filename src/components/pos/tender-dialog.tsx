@@ -82,7 +82,7 @@ export function TenderDialog({
     setDue(out.dueCents);
     setCashText("");
     setCard({ amount: "", tip: "", last4: "" });
-    if (split && turn) setSplit({ ...split, base: shares!.map((s) => s.cents), next: turn.guest + 1 });
+    if (split && shares && turn) setSplit({ ...split, base: shares.map((s) => s.cents), next: turn.guest + 1 });
     if (out.dueCents <= 0) setPaidOff(true);
   };
 
@@ -126,7 +126,7 @@ export function TenderDialog({
           <>
             <div className="flex items-end justify-between gap-4">
               <div>
-                <p className="text-sm text-muted-foreground">{turn ? `Guest ${turn.guest + 1} of ${split!.guests}` : "Balance due"}</p>
+                <p className="text-sm text-muted-foreground">{turn && split ? `Guest ${turn.guest + 1} of ${split.guests}` : "Balance due"}</p>
                 <p className="text-4xl font-bold tabular-nums" data-testid="tender-due">
                   {formatCents(applying)}
                 </p>
@@ -154,42 +154,7 @@ export function TenderDialog({
               </div>
             </div>
 
-            {split && lines && lines.length > 0 && split.next === 0 && (
-              <div className="flex flex-col gap-1 rounded-xl border p-2" data-testid="split-by-item">
-                <p className="px-1 text-sm text-muted-foreground">Tap who had each item. Untapped items are shared by everyone.</p>
-                <ul className="max-h-48 divide-y overflow-y-auto">
-                  {lines.map((l) => {
-                    const who = split.byItem[l.lineId] ?? [];
-                    return (
-                      <li key={l.lineId} className="flex items-center gap-2 px-1 py-1">
-                        <span className="min-w-0 flex-1 truncate">{l.label}</span>
-                        <span className="text-sm text-muted-foreground tabular-nums">{who.length === 0 ? "shared" : formatCents(l.cents)}</span>
-                        {Array.from({ length: split.guests }, (_, g) => (
-                          <button
-                            key={g}
-                            type="button"
-                            aria-pressed={who.includes(g)}
-                            aria-label={`Guest ${g + 1} had ${l.label}`}
-                            onClick={() =>
-                              setSplit({
-                                ...split,
-                                byItem: { ...split.byItem, [l.lineId]: who.includes(g) ? who.filter((x) => x !== g) : [...who, g].sort() },
-                              })
-                            }
-                            className={cn("size-10 rounded-lg border text-sm font-semibold", who.includes(g) ? "border-primary bg-primary text-primary-foreground" : "hover:bg-muted")}
-                          >
-                            {g + 1}
-                          </button>
-                        ))}
-                      </li>
-                    );
-                  })}
-                </ul>
-                <p className="px-1 text-sm tabular-nums" data-testid="split-shares">
-                  {shares!.map((s) => `Guest ${s.guest + 1} ${formatCents(s.cents)}`).join(" · ")}
-                </p>
-              </div>
-            )}
+            {split && shares && lines && lines.length > 0 && split.next === 0 && <SplitByItem split={split} shares={shares} lines={lines} onChange={setSplit} />}
 
             <Segmented<Method>
               value={method}
@@ -269,5 +234,55 @@ export function TenderDialog({
         )}
       </DialogContent>
     </Dialog>
+  );
+}
+
+/** Who had what: tap guests per line; untapped lines are shared by everyone. */
+function SplitByItem({
+  split,
+  shares,
+  lines,
+  onChange,
+}: {
+  split: Split;
+  shares: { guest: number; cents: number }[];
+  lines: readonly SplitLine[];
+  onChange: (split: Split) => void;
+}) {
+  return (
+    <div className="flex flex-col gap-1 rounded-xl border p-2" data-testid="split-by-item">
+      <p className="px-1 text-sm text-muted-foreground">Tap who had each item. Untapped items are shared by everyone.</p>
+      <ul className="max-h-48 divide-y overflow-y-auto">
+        {lines.map((l) => {
+          const who = split.byItem[l.lineId] ?? [];
+          return (
+            <li key={l.lineId} className="flex items-center gap-2 px-1 py-1">
+              <span className="min-w-0 flex-1 truncate">{l.label}</span>
+              <span className="text-sm text-muted-foreground tabular-nums">{who.length === 0 ? "shared" : formatCents(l.cents)}</span>
+              {Array.from({ length: split.guests }, (_, g) => (
+                <button
+                  key={g}
+                  type="button"
+                  aria-pressed={who.includes(g)}
+                  aria-label={`Guest ${g + 1} had ${l.label}`}
+                  onClick={() =>
+                    onChange({
+                      ...split,
+                      byItem: { ...split.byItem, [l.lineId]: who.includes(g) ? who.filter((x) => x !== g) : [...who, g].sort() },
+                    })
+                  }
+                  className={cn("size-10 rounded-lg border text-sm font-semibold", who.includes(g) ? "border-primary bg-primary text-primary-foreground" : "hover:bg-muted")}
+                >
+                  {g + 1}
+                </button>
+              ))}
+            </li>
+          );
+        })}
+      </ul>
+      <p className="px-1 text-sm tabular-nums" data-testid="split-shares">
+        {shares.map((s) => `Guest ${s.guest + 1} ${formatCents(s.cents)}`).join(" · ")}
+      </p>
+    </div>
   );
 }

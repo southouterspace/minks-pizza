@@ -40,8 +40,7 @@ export function OrderDetail({
   onAddItems: (o: OrderView) => void;
   onReceipt: (o: OrderView) => void;
 }) {
-  const { act, menu, store } = usePos();
-  const clock = (iso: string) => formatStoreTime(iso, store.timeZone);
+  const { act, menu } = usePos();
   const [prompt, setPrompt] = useState<PromptSpec | null>(null);
   const [paying, setPaying] = useState(false);
   const [splitting, setSplitting] = useState<Set<string> | null>(null);
@@ -119,132 +118,37 @@ export function OrderDetail({
       onSubmit: ({ reason }) => void mutate("Cancel order", { kind: "cancel", reason }),
     });
 
-  const f = order.fulfillment;
-
   return (
     <div className="flex min-h-0 flex-1 flex-col gap-3" data-testid="order-detail">
-      <div className="flex items-center gap-3">
-        <button type="button" onClick={onBack} className="rounded-xl p-3 hover:bg-muted" aria-label="Back to open orders">
-          <ArrowLeft className="size-5" />
-        </button>
-        <div className="min-w-0 flex-1">
-          <h2 className="flex items-center gap-2 text-2xl font-bold">
-            #{order.number}
-            <span className="truncate text-xl font-semibold">{orderLabel(order)}</span>
-          </h2>
-          <p className="flex flex-wrap items-center gap-2 text-sm text-muted-foreground">
-            <Badge variant="outline">{channelLabel(order.channel, f.kind)}</Badge>
-            <StatusChip status={order.status} />
-            <PaymentChip order={order} />
-            {order.customer.phone && <span>{order.customer.phone}</span>}
-            {order.status === "held" && order.fireAt && <span>fires {clock(order.fireAt)}</span>}
-            {order.promisedAt && <span>promised {clock(order.promisedAt)}</span>}
-          </p>
-          {f.kind === "delivery" && (
-            <p className="text-sm font-medium">
-              {f.address.line1}
-              {f.address.line2 ? `, ${f.address.line2}` : ""}, {f.address.zip}
-            </p>
-          )}
-          {order.notes && <p className="text-sm font-medium text-warning">Note: {order.notes}</p>}
-        </div>
-        <Tap variant="outline" onClick={() => setShowLog((s) => !s)} aria-pressed={showLog}>
-          <History className="size-4" /> Log
-        </Tap>
-      </div>
+      <OrderHeading order={order} onBack={onBack} showLog={showLog} onToggleLog={() => setShowLog((s) => !s)} />
 
       <div className="flex min-h-0 flex-1 gap-3">
         <div className="min-h-0 flex-1 overflow-y-auto rounded-2xl border bg-card">
           <ul className="divide-y">
-            {order.lines.map((l) => {
-              const adj = order.adjustments.filter((a) => a.lineId === l.lineId);
-              return (
-                <li key={l.lineId} className={cn("flex items-center gap-3 px-4 py-3", l.voided && "opacity-60")} data-line={l.name}>
-                  {splitting && !l.voided && (
-                    <input
-                      type="checkbox"
-                      className="size-6"
-                      aria-label={`Move ${l.name}`}
-                      checked={splitting.has(l.lineId)}
-                      onChange={(e) => {
-                        const next = new Set(splitting);
-                        if (e.target.checked) next.add(l.lineId);
-                        else next.delete(l.lineId);
-                        setSplitting(next);
-                      }}
-                    />
-                  )}
-                  <div className="min-w-0 flex-1">
-                    <p className={cn("font-semibold", l.voided && "line-through")}>
-                      {l.quantity} × {l.name}
-                      {l.voided && <span className="ml-2 text-sm font-bold text-destructive no-underline">VOID</span>}
-                      {!l.voided && !l.firedAt && <span className="ml-2 text-xs font-semibold text-muted-foreground uppercase">held</span>}
-                      {!l.voided && l.doneAt && <span className="ml-2 text-xs font-semibold text-success uppercase">done</span>}
-                    </p>
-                    {l.modifiers.length > 0 && <p className="text-sm text-muted-foreground">{lineSummary(l.modifiers)}</p>}
-                    {l.notes && <p className="text-sm text-warning italic">“{l.notes}”</p>}
-                    {l.voided && <p className="text-xs text-muted-foreground">{l.voided.reason}</p>}
-                    {adj.map((a) => (
-                      <p key={a.id} className="text-xs text-success">
-                        {a.kind === "comp" ? "Comped" : "Discount"} −{formatCents(a.cents)} · {a.reason}
-                      </p>
-                    ))}
-                  </div>
-                  <span className="tabular-nums">{formatCents(l.lineTotalCents)}</span>
-                  {!l.voided && !closed && !splitting && (
-                    <div className="flex gap-1">
-                      {!l.firedAt && (
-                        <button type="button" onClick={() => void mutate(`Fire ${l.name}`, { kind: "fire", lineIds: [l.lineId] })} className="flex size-11 items-center justify-center rounded-lg hover:bg-muted" aria-label={`Fire ${l.name}`}>
-                          <Flame className="size-5" />
-                        </button>
-                      )}
-                      {adj.length === 0 && (
-                        <button type="button" onClick={() => compLine(l)} className="flex size-11 items-center justify-center rounded-lg hover:bg-muted" aria-label={`Comp ${l.name}`}>
-                          <Gift className="size-5" />
-                        </button>
-                      )}
-                      <button type="button" onClick={() => voidLine(l)} className="flex size-11 items-center justify-center rounded-lg text-destructive hover:bg-destructive/10" aria-label={`Void ${l.name}`}>
-                        <Ban className="size-5" />
-                      </button>
-                    </div>
-                  )}
-                </li>
-              );
-            })}
+            {order.lines.map((l) => (
+              <LineRow
+                key={l.lineId}
+                line={l}
+                order={order}
+                actions={!l.voided && !closed && !splitting}
+                picked={splitting && !l.voided ? splitting.has(l.lineId) : null}
+                onPick={(on) => {
+                  if (!splitting) return;
+                  const next = new Set(splitting);
+                  if (on) next.add(l.lineId);
+                  else next.delete(l.lineId);
+                  setSplitting(next);
+                }}
+                onFire={() => void mutate(`Fire ${l.name}`, { kind: "fire", lineIds: [l.lineId] })}
+                onComp={() => compLine(l)}
+                onVoid={() => voidLine(l)}
+              />
+            ))}
           </ul>
-          <dl className="grid grid-cols-2 gap-y-0.5 border-t px-4 py-3 text-sm tabular-nums">
-            <ChargeRows totals={order.totals} />
-            <dt className="font-semibold">Total</dt>
-            <dd className="text-right font-semibold">{formatCents(order.totals.totalCents)}</dd>
-            <dt className="text-muted-foreground">Paid</dt>
-            <dd className="text-right">{formatCents(net)}</dd>
-            {net > order.totals.totalCents ? (
-              <>
-                <dt className="text-lg font-bold text-destructive">Refund due</dt>
-                <dd className="text-right text-lg font-bold text-destructive">{formatCents(net - order.totals.totalCents)}</dd>
-              </>
-            ) : (
-              <>
-                <dt className="text-lg font-bold">Due</dt>
-                <dd className="text-right text-lg font-bold" data-testid="order-due">
-                  {formatCents(due)}
-                </dd>
-              </>
-            )}
-          </dl>
+          <CheckMoney order={order} />
         </div>
 
-        {showLog && (
-          <ol className="w-72 shrink-0 space-y-2 overflow-y-auto rounded-2xl border bg-card p-3 text-sm" data-testid="activity-log">
-            {orderHistory(order).map((h, i) => (
-              <li key={i}>
-                <span className="text-xs text-muted-foreground">{clock(h.at)}</span> {h.text}
-                {h.who && <span className="text-muted-foreground"> · {h.who}</span>}
-                {h.approvedBy && h.approvedBy !== h.who && <span className="text-muted-foreground"> · approved by {h.approvedBy}</span>}
-              </li>
-            ))}
-          </ol>
-        )}
+        {showLog && <ActivityLog order={order} />}
       </div>
 
       {splitting ? (
@@ -332,5 +236,147 @@ export function OrderDetail({
         />
       )}
     </div>
+  );
+}
+
+function OrderHeading({ order, onBack, showLog, onToggleLog }: { order: OrderView; onBack: () => void; showLog: boolean; onToggleLog: () => void }) {
+  const { store } = usePos();
+  const clock = (iso: string) => formatStoreTime(iso, store.timeZone);
+  const f = order.fulfillment;
+  return (
+    <div className="flex items-center gap-3">
+      <button type="button" onClick={onBack} className="rounded-xl p-3 hover:bg-muted" aria-label="Back to open orders">
+        <ArrowLeft className="size-5" />
+      </button>
+      <div className="min-w-0 flex-1">
+        <h2 className="flex items-center gap-2 text-2xl font-bold">
+          #{order.number}
+          <span className="truncate text-xl font-semibold">{orderLabel(order)}</span>
+        </h2>
+        <p className="flex flex-wrap items-center gap-2 text-sm text-muted-foreground">
+          <Badge variant="outline">{channelLabel(order.channel, f.kind)}</Badge>
+          <StatusChip status={order.status} />
+          <PaymentChip order={order} />
+          {order.customer.phone && <span>{order.customer.phone}</span>}
+          {order.status === "held" && order.fireAt && <span>fires {clock(order.fireAt)}</span>}
+          {order.promisedAt && <span>promised {clock(order.promisedAt)}</span>}
+        </p>
+        {f.kind === "delivery" && (
+          <p className="text-sm font-medium">
+            {f.address.line1}
+            {f.address.line2 ? `, ${f.address.line2}` : ""}, {f.address.zip}
+          </p>
+        )}
+        {order.notes && <p className="text-sm font-medium text-warning">Note: {order.notes}</p>}
+      </div>
+      <Tap variant="outline" onClick={onToggleLog} aria-pressed={showLog}>
+        <History className="size-4" /> Log
+      </Tap>
+    </div>
+  );
+}
+
+function LineRow({
+  line: l,
+  order,
+  actions,
+  picked,
+  onPick,
+  onFire,
+  onComp,
+  onVoid,
+}: {
+  line: LineView;
+  order: OrderView;
+  /** Fire, comp and void buttons: an open check, a live line, not mid-split. */
+  actions: boolean;
+  /** Mid-split: whether this line moves to the new check; null when it can't. */
+  picked: boolean | null;
+  onPick: (on: boolean) => void;
+  onFire: () => void;
+  onComp: () => void;
+  onVoid: () => void;
+}) {
+  const adj = order.adjustments.filter((a) => a.lineId === l.lineId);
+  return (
+    <li className={cn("flex items-center gap-3 px-4 py-3", l.voided && "opacity-60")} data-line={l.name}>
+      {picked !== null && <input type="checkbox" className="size-6" aria-label={`Move ${l.name}`} checked={picked} onChange={(e) => onPick(e.target.checked)} />}
+      <div className="min-w-0 flex-1">
+        <p className={cn("font-semibold", l.voided && "line-through")}>
+          {l.quantity} × {l.name}
+          {l.voided && <span className="ml-2 text-sm font-bold text-destructive no-underline">VOID</span>}
+          {!l.voided && !l.firedAt && <span className="ml-2 text-xs font-semibold text-muted-foreground uppercase">held</span>}
+          {!l.voided && l.doneAt && <span className="ml-2 text-xs font-semibold text-success uppercase">done</span>}
+        </p>
+        {l.modifiers.length > 0 && <p className="text-sm text-muted-foreground">{lineSummary(l.modifiers)}</p>}
+        {l.notes && <p className="text-sm text-warning italic">“{l.notes}”</p>}
+        {l.voided && <p className="text-xs text-muted-foreground">{l.voided.reason}</p>}
+        {adj.map((a) => (
+          <p key={a.id} className="text-xs text-success">
+            {a.kind === "comp" ? "Comped" : "Discount"} −{formatCents(a.cents)} · {a.reason}
+          </p>
+        ))}
+      </div>
+      <span className="tabular-nums">{formatCents(l.lineTotalCents)}</span>
+      {actions && (
+        <div className="flex gap-1">
+          {!l.firedAt && (
+            <button type="button" onClick={onFire} className="flex size-11 items-center justify-center rounded-lg hover:bg-muted" aria-label={`Fire ${l.name}`}>
+              <Flame className="size-5" />
+            </button>
+          )}
+          {adj.length === 0 && (
+            <button type="button" onClick={onComp} className="flex size-11 items-center justify-center rounded-lg hover:bg-muted" aria-label={`Comp ${l.name}`}>
+              <Gift className="size-5" />
+            </button>
+          )}
+          <button type="button" onClick={onVoid} className="flex size-11 items-center justify-center rounded-lg text-destructive hover:bg-destructive/10" aria-label={`Void ${l.name}`}>
+            <Ban className="size-5" />
+          </button>
+        </div>
+      )}
+    </li>
+  );
+}
+
+function CheckMoney({ order }: { order: OrderView }) {
+  const net = order.totals.paidCents - order.totals.refundedCents;
+  const due = dueCents(order.totals);
+  return (
+    <dl className="grid grid-cols-2 gap-y-0.5 border-t px-4 py-3 text-sm tabular-nums">
+      <ChargeRows totals={order.totals} />
+      <dt className="font-semibold">Total</dt>
+      <dd className="text-right font-semibold">{formatCents(order.totals.totalCents)}</dd>
+      <dt className="text-muted-foreground">Paid</dt>
+      <dd className="text-right">{formatCents(net)}</dd>
+      {net > order.totals.totalCents ? (
+        <>
+          <dt className="text-lg font-bold text-destructive">Refund due</dt>
+          <dd className="text-right text-lg font-bold text-destructive">{formatCents(net - order.totals.totalCents)}</dd>
+        </>
+      ) : (
+        <>
+          <dt className="text-lg font-bold">Due</dt>
+          <dd className="text-right text-lg font-bold" data-testid="order-due">
+            {formatCents(due)}
+          </dd>
+        </>
+      )}
+    </dl>
+  );
+}
+
+function ActivityLog({ order }: { order: OrderView }) {
+  const { store } = usePos();
+  return (
+    <ol className="w-72 shrink-0 space-y-2 overflow-y-auto rounded-2xl border bg-card p-3 text-sm" data-testid="activity-log">
+      {orderHistory(order).map((h, i) => (
+        <li key={i}>
+          <span className="text-xs text-muted-foreground">{formatStoreTime(h.at, store.timeZone)}</span> {h.text}
+          {h.who && <span className="text-muted-foreground"> · {h.who}</span>}
+          {h.approvedBy && h.approvedBy !== h.who && <span className="text-muted-foreground"> · approved by {h.approvedBy}</span>}
+        </li>
+      ))}
+    </ol>
   );
 }
