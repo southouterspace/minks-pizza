@@ -119,7 +119,7 @@ export function OrderPanel({
                 <Minus className="size-4" />
               </button>
             </div>
-            <button type="button" className="min-w-0 flex-1 text-left" onClick={() => onEditLine(l)} disabled={l.modifiers.length === 0 && l.selections.length === 0}>
+            <button type="button" className="min-w-0 flex-1 text-left" onClick={() => onEditLine(l)}>
               <span className="flex justify-between gap-2">
                 <span className="font-semibold">{l.name}</span>
                 <span className="tabular-nums">{formatCents(l.unitPriceCents * l.quantity)}</span>

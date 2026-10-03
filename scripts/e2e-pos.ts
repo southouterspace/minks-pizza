@@ -14,9 +14,9 @@
  * $5.00 discount threshold.
  */
 import { chromium, type Page } from "playwright";
-import { and, eq, isNull, type SQL } from "drizzle-orm";
+import { and, eq, gte, isNull, type SQL } from "drizzle-orm";
 import { randomUUID } from "node:crypto";
-import { adjustments, customers, db, menuItems, modifierGroups, modifiers, orderItems, orders, pinAttempts, shifts, storeSettings, tenders } from "../src/db";
+import { adjustments, customers, db, drawerEvents, menuItems, modifierGroups, modifiers, orderItems, orders, pinAttempts, shifts, storeSettings, tenders } from "../src/db";
 import type { KdsSnapshot } from "../src/lib/kds";
 import { normalizePhone, submitOrder } from "../src/lib/orders-server";
 
@@ -62,9 +62,11 @@ async function signIn(page: Page) {
   await page.goto(`${BASE}/pos`, { waitUntil: "networkidle" });
 }
 
-/** The newest order this terminal created, found by its customer or table. */
+const startedAt = new Date();
+
+/** The newest order this run created that matches `where`. */
 async function newestOrder(where: SQL) {
-  const rows = await db.select().from(orders).where(where);
+  const rows = await db.select().from(orders).where(and(where, gte(orders.placedAt, startedAt)));
   return rows.sort((a, b) => b.placedAt.getTime() - a.placedAt.getTime())[0];
 }
 
@@ -424,13 +426,59 @@ async function main() {
   check("reprint sends a receipt to the printer", (await prints()) === beforeReceipt + 1);
   check("receipt shows the order and the discount", /Order #\d+[\s\S]*Discounts/.test(await page.locator("#pos-print").innerText()));
 
+  // --- Dine-in hold → fire → split by item; a note on a plain line ------------------------
+  await page.getByRole("button", { name: "New order" }).click();
+  await page.getByRole("radio", { name: "Dine-in" }).click();
+  await page.getByLabel("Table").fill("7");
+  await page.getByRole("radio", { name: "Hold" }).click();
+  await page.getByRole("tab", { name: "Drinks" }).click();
+  await page.locator('[data-item="Sparkling Water"]').click();
+  await page.getByTestId("draft-line").filter({ hasText: "Sparkling Water" }).getByRole("button", { name: /^Sparkling Water \$/ }).click();
+  await page.getByPlaceholder("well done, cut in squares…").fill("no ice");
+  await page.getByTestId("builder-add").click();
+  check("a plain line takes a note", (await page.getByTestId("draft-line").innerText()).includes("no ice"));
+  await page.getByRole("tab", { name: "Sides & Salads" }).click();
+  await page.locator('[data-item="Garlic Knots (6)"]').click();
+  await page.getByTestId("send").click();
+  await eventually(async () => !!(await newestOrder(eq(orders.tableLabel, "7"))));
+  const table7 = await newestOrder(eq(orders.tableLabel, "7"));
+  check("Hold keeps the dine-in check off the kitchen", table7.status === "held");
+  await page.getByTestId("tab-board").click();
+  await page.getByLabel("Search open orders").fill("Table 7");
+  await page.locator(`[data-order="${table7.orderNumber}"]`).click();
+  await page.getByTestId("fire-all").click();
+  check("Fire sends the held lines", await eventually(async () => (await orderRow(table7.id)).status === "new"));
+  await page.getByRole("button", { name: "Split by item" }).click();
+  await page.getByLabel("Move Sparkling Water").check();
+  await page.getByRole("button", { name: /Move 1 to new check/ }).click();
+  const childrenOf = async () => (await db.select().from(orders).where(eq(orders.ticketOrderId, table7.id))).filter((o) => o.id !== table7.id);
+  const split = await eventually(async () => (await childrenOf()).length === 1);
+  const children = await childrenOf();
+  const movedLines = children[0] ? await linesOf(children[0].id) : [];
+  check("split by item moves the water to a new check on the same ticket", split && movedLines.length === 1 && movedLines[0].itemName === "Sparkling Water");
+
+  // --- Deep link and paid out --------------------------------------------------------------
+  await page.goto(`${BASE}/pos?order=${online.id}`, { waitUntil: "networkidle" });
+  await page.getByTestId("order-detail").waitFor();
+  check("/pos?order= opens that order", (await page.getByTestId("order-detail").innerText()).includes(`#${online.number}`));
+  await page.getByTestId("staff-menu").click();
+  await page.getByRole("menuitem", { name: "Paid out" }).click();
+  await page.getByLabel("Amount").fill("5.00");
+  await page.getByRole("button", { name: "Supplies" }).click();
+  await page.getByRole("button", { name: "Record" }).click();
+  await page.getByTestId("manager-pin").waitFor();
+  await pin("1234");
+  await page.getByTestId("manager-pin").waitFor({ state: "detached" });
+  const paidOut = await eventually(async () => (await db.select().from(drawerEvents).where(and(eq(drawerEvents.shiftId, openShift.id), eq(drawerEvents.kind, "paid_out")))).length === 1);
+  check("paid out of the drawer needs and records a manager", paidOut && (await db.select().from(drawerEvents).where(eq(drawerEvents.shiftId, openShift.id)))[0].approvedBy === 1);
+
   // --- Shift close: counted vs expected ---------------------------------------------------
   await page.getByTestId("staff-menu").click();
   await page.getByTestId("menu-close-shift").click();
   await page.getByTestId("shift-report").waitFor();
   const expectedText = await page.getByTestId("shift-report").innerText();
-  const expectedCash = 15000 + (await db.select().from(tenders).where(and(eq(tenders.shiftId, openShift.id), eq(tenders.method, "cash")))).reduce((s, t) => s + t.amountCents, 0);
-  check(`expected cash is bank + cash taken (${(expectedCash / 100).toFixed(2)})`, expectedText.includes(`$${(expectedCash / 100).toFixed(2)}`), expectedText.split("\n").slice(0, 2).join(" "));
+  const expectedCash = 15000 - 500 + (await db.select().from(tenders).where(and(eq(tenders.shiftId, openShift.id), eq(tenders.method, "cash")))).reduce((s, t) => s + t.amountCents, 0);
+  check(`expected cash is bank + cash taken − paid out (${(expectedCash / 100).toFixed(2)})`, expectedText.includes(`$${(expectedCash / 100).toFixed(2)}`), expectedText.split("\n").slice(0, 2).join(" "));
   await page.getByLabel("Counted cash").fill(((expectedCash - 150) / 100).toFixed(2));
   await page.getByLabel("Card batch total").fill("15.00");
   check("short by $1.50 shows before closing", (await page.getByTestId("shift-report").innerText()).includes("-$1.50"));
@@ -457,6 +505,16 @@ async function main() {
   await page.getByTestId("order-panel").waitFor();
   await page.keyboard.press("Escape");
   await shot("14-wide");
+
+  // --- Auto-lock after idle -------------------------------------------------------------------
+  await db.update(storeSettings).set({ posLockSeconds: 3 }).where(eq(storeSettings.id, 1));
+  try {
+    await page.reload({ waitUntil: "networkidle" });
+    await page.getByTestId("order-panel").waitFor();
+    check("the terminal locks itself after the idle time", await page.getByTestId("lock-screen").waitFor({ timeout: 8_000 }).then(() => true, () => false));
+  } finally {
+    await db.update(storeSettings).set({ posLockSeconds: 120 }).where(eq(storeSettings.id, 1));
+  }
   }
 }
 

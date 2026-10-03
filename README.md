@@ -165,7 +165,7 @@ Orders placed before the migration default to the Kitchen station.
 ### Front-of-house POS (server layer)
 
 The counter POS (walk-in, phone, some dine-in) shares one order seam with the
-storefront and the KDS. The screens are not built yet; the server layer is.
+storefront and the KDS. The terminal is `/pos` (see [the terminal](#the-pos-terminal)).
 
 - **Staff and PINs.** A device signed in as an operator unlocks the POS;
   staff then switch with a 4-digit PIN, which sets a short `minks_staff`
@@ -204,6 +204,50 @@ storefront and the KDS. The screens are not built yet; the server layer is.
 Wire API: `POST /api/pos/orders` (the replayable submit), `GET
 /api/pos/menu`, `GET /api/pos/customers?phone=`, `GET /api/pos/board`; the
 interactive verbs are server actions in `src/app/pos/actions.ts`.
+
+#### The POS terminal
+
+`/pos` is a full-screen, touch-first counter screen for a tablet or a
+1366×768 laptop. Like `/kitchen`, the device signs in as an operator; staff
+then unlock it with their PIN, and it locks again after
+`store_settings.pos_lock_seconds` of idle time (or after each order, a
+per-device toggle in the staff menu).
+
+- **Order entry.** Pick Walk-in, Phone, Delivery or Dine-in. Phone and
+  Delivery start on the caller's number, which brings up their name, saved
+  addresses and last orders with one-tap Reorder (re-priced today; 86'd
+  items are listed, not added). Pizzas open the builder: size, crust, then a
+  toppings grid where a tap cycles regular, extra, light and off, Whole /
+  Left ½ / Right ½ picks the half, and a long-press moves one topping
+  between halves. Totals come from `priceLine` on the device, so entry never
+  waits on the network. A walk-in 2 × half-and-half large paid with a $50 is
+  11 taps.
+- **Paying.** Cash (exact, $20, $50, $100 or any amount, with change due),
+  card on the separate terminal (amount, tip, optional last 4), several
+  tenders in a row, an even split by 2 to 4, or pay later.
+- **Open orders.** Every open order across channels, searchable by name,
+  phone or number, with lanes for held, in kitchen, ready and unpaid. An
+  order opens to collect payment, add to a dine-in check, fire held lines,
+  void, comp, discount, split by item, refund, cancel, hand off, reprint the
+  receipt and read its activity log. `/pos?order=<id>` opens one directly.
+  Anything that needs a manager pops a manager PIN pad and resends the same
+  request.
+- **Shift.** Open with a starting bank; no sale, paid in and paid out from
+  the staff menu; close with counted cash, the card batch total and declared
+  cash tips, which shows expected vs counted and links to the Z report.
+- **Offline.** A new order is saved in the browser (IndexedDB) before it is
+  sent. If it can't reach the server it shows as NOT SENT in red, prints a
+  paper kitchen ticket, and replays automatically; a replay can't double-ring
+  because the order id is minted on the device. The kitchen screen needs the
+  internet too, so the paper ticket is the kitchen's copy until it returns.
+  Payments and changes to existing orders need the connection.
+
+Receipts and fallback tickets print through the browser at 80mm width.
+
+```bash
+npx tsx scripts/test-pos-client.ts                          # builder, draft and totals rules
+npx tsx --env-file=.env.local scripts/e2e-pos.ts            # every terminal flow, against a test branch
+```
 
 #### Deploying the POS schema
 
@@ -257,12 +301,13 @@ src/
                  orders.ts (order domain: payment state, role policy, shift report, pure),
                  orders-server.ts (submitOrder / mutateOrder seam, folds, reads),
                  staff.ts + pin.ts (staff cookie, PIN lookup and lockout),
-                 kds.ts (kitchen display rules, pure), kds-server.ts (queries + actions)
+                 kds.ts (kitchen display rules, pure), kds-server.ts (queries + actions),
+                 pos-client/ (terminal draft + builder rules, pure), pos-outbox.ts (offline queue)
   app/(store)/   customer storefront (menu, cart, checkout, order status)
   app/admin/     operator dashboard (orders, menu, modifiers, settings, team)
   app/kitchen/   kitchen display (KDS); data via app/api/kds
-  app/pos/       POS server actions; data via app/api/pos/*
-  components/    cart context, storefront + admin UI
+  app/pos/       POS terminal + server actions; data via app/api/pos/*
+  components/    cart context, storefront, admin, kitchen and pos UI
 ```
 
 ## Roadmap
