@@ -6,9 +6,16 @@ import {
   pgTable,
   text,
   timestamp,
+  uniqueIndex,
   uuid,
 } from "drizzle-orm/pg-core";
-import { relations } from "drizzle-orm";
+import { relations, sql } from "drizzle-orm";
+import {
+  COURIER_PROVIDERS,
+  COURIER_STATUSES,
+  ORDER_SOURCES,
+  TERMINAL_COURIER_STATUSES,
+} from "../lib/delivery/types";
 import { KITCHEN_STATIONS } from "../lib/kds";
 
 // ---------------------------------------------------------------------------
@@ -38,6 +45,13 @@ export const paymentStatusEnum = pgEnum("payment_status", [
   "paid",
   "refunded",
 ]);
+
+/** Where an order was placed: our storefront or a delivery marketplace. */
+export const orderSourceEnum = pgEnum("order_source", ORDER_SOURCES);
+
+export const courierProviderEnum = pgEnum("courier_provider", COURIER_PROVIDERS);
+
+export const courierStatusEnum = pgEnum("courier_status", COURIER_STATUSES);
 
 // ---------------------------------------------------------------------------
 // Operator accounts
@@ -204,38 +218,49 @@ export type OrderItemModifier = {
   priceDeltaCents: number;
 };
 
-export const orders = pgTable("orders", {
-  id: uuid("id").primaryKey().defaultRandom(),
-  orderNumber: integer("order_number").notNull().generatedAlwaysAsIdentity({
-    startWith: 1001,
-  }),
-  status: orderStatusEnum("status").notNull().default("new"),
-  orderType: orderTypeEnum("order_type").notNull(),
-  customerName: text("customer_name").notNull(),
-  customerPhone: text("customer_phone").notNull(),
-  customerEmail: text("customer_email"),
-  addressLine1: text("address_line1"),
-  addressLine2: text("address_line2"),
-  city: text("city"),
-  zip: text("zip"),
-  orderNotes: text("order_notes"),
-  subtotalCents: integer("subtotal_cents").notNull(),
-  taxCents: integer("tax_cents").notNull(),
-  deliveryFeeCents: integer("delivery_fee_cents").notNull().default(0),
-  tipCents: integer("tip_cents").notNull().default(0),
-  totalCents: integer("total_cents").notNull(),
-  paymentStatus: paymentStatusEnum("payment_status")
-    .notNull()
-    .default("pending"),
-  placedAt: timestamp("placed_at", { withTimezone: true })
-    .notNull()
-    .defaultNow(),
-  /** Set when the kitchen bumps the order (status → ready); cleared on recall. */
-  readyAt: timestamp("ready_at", { withTimezone: true }),
-  updatedAt: timestamp("updated_at", { withTimezone: true })
-    .notNull()
-    .defaultNow(),
-});
+export const orders = pgTable(
+  "orders",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    orderNumber: integer("order_number").notNull().generatedAlwaysAsIdentity({
+      startWith: 1001,
+    }),
+    source: orderSourceEnum("source").notNull().default("web"),
+    /** The marketplace's own order id; null for web orders. */
+    sourceOrderId: text("source_order_id"),
+    /** The short code a marketplace driver reads out at the counter. */
+    sourceDisplayId: text("source_display_id"),
+    status: orderStatusEnum("status").notNull().default("new"),
+    orderType: orderTypeEnum("order_type").notNull(),
+    customerName: text("customer_name").notNull(),
+    customerPhone: text("customer_phone").notNull(),
+    customerEmail: text("customer_email"),
+    addressLine1: text("address_line1"),
+    addressLine2: text("address_line2"),
+    city: text("city"),
+    zip: text("zip"),
+    orderNotes: text("order_notes"),
+    subtotalCents: integer("subtotal_cents").notNull(),
+    taxCents: integer("tax_cents").notNull(),
+    deliveryFeeCents: integer("delivery_fee_cents").notNull().default(0),
+    tipCents: integer("tip_cents").notNull().default(0),
+    totalCents: integer("total_cents").notNull(),
+    paymentStatus: paymentStatusEnum("payment_status")
+      .notNull()
+      .default("pending"),
+    placedAt: timestamp("placed_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+    /** Set when the kitchen bumps the order (status → ready); cleared on recall. */
+    readyAt: timestamp("ready_at", { withTimezone: true }),
+    updatedAt: timestamp("updated_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  // Makes marketplace ingestion idempotent. Web orders have a null
+  // source_order_id, and nulls never collide.
+  (t) => [uniqueIndex("orders_source_order_idx").on(t.source, t.sourceOrderId)],
+);
 
 export const orderItems = pgTable("order_items", {
   id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
@@ -262,6 +287,69 @@ export const orderItems = pgTable("order_items", {
   /** Set when the item is finished (pies: out of the oven, cut and boxed). */
   doneAt: timestamp("done_at", { withTimezone: true }),
 });
+
+// ---------------------------------------------------------------------------
+// Delivery integrations
+// ---------------------------------------------------------------------------
+
+const TERMINAL_SQL = sql.raw(TERMINAL_COURIER_STATUSES.map((s) => `'${s}'`).join(", "));
+
+/** A courier we dispatched (Uber Direct, DoorDash Drive) for a web order. */
+export const courierDeliveries = pgTable(
+  "courier_deliveries",
+  {
+    /** Sent as DoorDash `external_delivery_id` and Uber `external_id`. */
+    id: uuid("id").primaryKey().defaultRandom(),
+    orderId: uuid("order_id")
+      .notNull()
+      .references(() => orders.id, { onDelete: "cascade" }),
+    provider: courierProviderEnum("provider").notNull(),
+    /** Uber's `del_…` id; for DoorDash, the same as our id. */
+    providerDeliveryId: text("provider_delivery_id"),
+    status: courierStatusEnum("status").notNull().default("requested"),
+    feeCents: integer("fee_cents"),
+    currency: text("currency"),
+    trackingUrl: text("tracking_url"),
+    courierName: text("courier_name"),
+    courierPhone: text("courier_phone"),
+    pickupEta: timestamp("pickup_eta", { withTimezone: true }),
+    dropoffEta: timestamp("dropoff_eta", { withTimezone: true }),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (t) => [
+    // An order can never have two live couriers.
+    uniqueIndex("courier_deliveries_live_order_idx")
+      .on(t.orderId)
+      .where(sql`status not in (${TERMINAL_SQL})`),
+    uniqueIndex("courier_deliveries_provider_idx").on(t.provider, t.providerDeliveryId),
+  ],
+);
+
+/**
+ * Webhook inbox. Every accepted delivery is recorded before it is applied;
+ * the unique key turns provider retries into no-ops.
+ */
+export const integrationEvents = pgTable(
+  "integration_events",
+  {
+    id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+    source: text("source").notNull(),
+    dedupeKey: text("dedupe_key").notNull(),
+    type: text("type").notNull(),
+    payload: jsonb("payload").notNull(),
+    receivedAt: timestamp("received_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+    processedAt: timestamp("processed_at", { withTimezone: true }),
+    error: text("error"),
+  },
+  (t) => [uniqueIndex("integration_events_dedupe_idx").on(t.source, t.dedupeKey)],
+);
 
 // ---------------------------------------------------------------------------
 // Relations
@@ -310,6 +398,14 @@ export const itemModifierGroupsRelations = relations(
 
 export const ordersRelations = relations(orders, ({ many }) => ({
   items: many(orderItems),
+  courierDeliveries: many(courierDeliveries),
+}));
+
+export const courierDeliveriesRelations = relations(courierDeliveries, ({ one }) => ({
+  order: one(orders, {
+    fields: [courierDeliveries.orderId],
+    references: [orders.id],
+  }),
 }));
 
 export const orderItemsRelations = relations(orderItems, ({ one }) => ({
