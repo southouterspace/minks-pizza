@@ -26,6 +26,7 @@ import {
   verifyPassword,
 } from "@/lib/auth";
 import { KITCHEN_STATIONS, type KitchenStation } from "@/lib/kds";
+import { DEFAULT_TIMEZONE } from "@/lib/timeclock";
 import {
   checkbox,
   dollarsToCents,
@@ -714,7 +715,7 @@ function hoursToMinutesOrNull(formData: FormData, name: string): number | null {
 
 function timezoneField(formData: FormData): string {
   const tz = textField(formData, "timezone");
-  return Intl.supportedValuesOf("timeZone").includes(tz) || tz === "UTC" ? tz : "America/New_York";
+  return Intl.supportedValuesOf("timeZone").includes(tz) || tz === "UTC" ? tz : DEFAULT_TIMEZONE;
 }
 
 export async function saveSettings(formData: FormData): Promise<void> {

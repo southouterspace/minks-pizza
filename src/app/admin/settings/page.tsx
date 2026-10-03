@@ -11,6 +11,7 @@ import {
 import { ToggleSwitchForm } from "@/components/admin/toggle-switch-form";
 import { LogoField } from "@/components/admin/logo-field";
 import { centsToDollars } from "@/lib/money";
+import { DEFAULT_TIMEZONE } from "@/lib/timeclock";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -55,7 +56,7 @@ const DEFAULTS = {
   deliveryFeeCents: 0,
   deliveryMinimumCents: 0,
   taxRateBps: 0,
-  timezone: "America/New_York",
+  timezone: DEFAULT_TIMEZONE,
   weekStartsOn: 1,
   otWeeklyMinutes: 2400,
   otDailyMinutes: null as number | null,

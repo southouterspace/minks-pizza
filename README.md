@@ -215,7 +215,7 @@ MINKS_DATABASE_URL=<production url> npm run db:push   # new enums and tables, se
 ```
 
 Then open **Settings → Staff & payroll** and set the store timezone. It
-defaults to America/New_York, and every shift, day and payroll week uses it.
+defaults to America/Chicago, and every shift, day and payroll week uses it.
 
 ### Customer (`/`)
 
