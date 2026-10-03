@@ -1,5 +1,6 @@
 import {
   boolean,
+  check,
   index,
   integer,
   jsonb,
@@ -7,10 +8,14 @@ import {
   pgTable,
   text,
   timestamp,
+  unique,
   uuid,
 } from "drizzle-orm/pg-core";
-import { relations } from "drizzle-orm";
+import { relations, sql } from "drizzle-orm";
+import { COUNT_KINDS, INVENTORY_MOVE_KINDS, WASTE_REASONS } from "../lib/inventory-domain";
 import { KITCHEN_STATIONS } from "../lib/kds";
+import { MODIFIER_GROUP_KINDS, type Placement, type Portion } from "../lib/toppings";
+import { BASE_UNITS } from "../lib/units";
 import {
   ORDER_EVENT_TYPES,
   ORDER_STATUSES,
@@ -42,6 +47,12 @@ export const paymentStatusEnum = pgEnum("payment_status", [
   "paid",
   "refunded",
 ]);
+
+export const modifierGroupKindEnum = pgEnum("modifier_group_kind", MODIFIER_GROUP_KINDS);
+export const baseUnitEnum = pgEnum("base_unit", BASE_UNITS);
+export const inventoryMoveKindEnum = pgEnum("inventory_move_kind", INVENTORY_MOVE_KINDS);
+export const wasteReasonEnum = pgEnum("waste_reason", WASTE_REASONS);
+export const countKindEnum = pgEnum("count_kind", COUNT_KINDS);
 
 // ---------------------------------------------------------------------------
 // Operator accounts
@@ -104,6 +115,14 @@ export const storeSettings = pgTable("store_settings", {
   kdsOvenMinutes: integer("kds_oven_minutes").notNull().default(7),
   /** IANA zone that defines the store's day for stats, history and times. */
   timezone: text("timezone").notNull().default("America/Chicago"),
+  /** Share of a topping's price charged for a half (basis points). */
+  halfToppingPriceBps: integer("half_topping_price_bps").notNull().default(5000),
+  /** Share of a topping's recipe a half uses (basis points). */
+  halfPortionBps: integer("half_portion_bps").notNull().default(5000),
+  lightPortionBps: integer("light_portion_bps").notNull().default(5000),
+  extraPortionBps: integer("extra_portion_bps").notNull().default(15000),
+  /** The margin report flags items below this gross margin (basis points). */
+  minMarginBps: integer("min_margin_bps").notNull().default(7000),
   isPublished: boolean("is_published").notNull().default(false),
   isAcceptingOrders: boolean("is_accepting_orders").notNull().default(true),
   updatedAt: timestamp("updated_at", { withTimezone: true })
@@ -165,6 +184,8 @@ export const menuItems = pgTable("menu_items", {
 export const modifierGroups = pgTable("modifier_groups", {
   id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
   name: text("name").notNull(), // "Size", "Crust", "Toppings"
+  /** Drives behavior: the size group picks recipe lines, toppings groups offer halves and portions. */
+  kind: modifierGroupKindEnum("kind").notNull().default("choice"),
   /** Minimum selections required (0 = optional group). */
   minSelect: integer("min_select").notNull().default(0),
   /** Maximum selections allowed (null = unlimited). 1 ⇒ radio, else checkboxes. */
@@ -182,6 +203,8 @@ export const modifiers = pgTable("modifiers", {
     .references(() => modifierGroups.id, { onDelete: "cascade" }),
   name: text("name").notNull(),
   priceDeltaCents: integer("price_delta_cents").notNull().default(0),
+  /** Price of an "extra" portion; null = extra is not offered. Toppings groups only. */
+  extraPriceDeltaCents: integer("extra_price_delta_cents"),
   isDefault: boolean("is_default").notNull().default(false),
   isAvailable: boolean("is_available").notNull().default(true),
   sortOrder: integer("sort_order").notNull().default(0),
@@ -205,9 +228,15 @@ export const itemModifierGroups = pgTable("item_modifier_groups", {
 
 /** Snapshot of one chosen modifier, denormalized into the order line. */
 export type OrderItemModifier = {
+  /** Absent on orders placed before recipes existed. */
+  modifierId?: number;
   groupName: string;
   modifierName: string;
+  /** What was charged for this selection. */
   priceDeltaCents: number;
+  /** Present only for toppings-group selections. */
+  placement?: Placement;
+  portion?: Portion;
 };
 
 export const orders = pgTable("orders", {
@@ -267,6 +296,8 @@ export const orderItems = pgTable("order_items", {
   lineTotalCents: integer("line_total_cents").notNull(),
   modifiers: jsonb("modifiers").$type<OrderItemModifier[]>().notNull(),
   notes: text("notes"),
+  /** Theoretical food cost of the whole line, set when the order completes. */
+  costCents: integer("cost_cents"),
   /**
    * Kitchen station snapshot, copied from the category at order time so
    * re-routing a category never reshuffles tickets already on the line.
@@ -301,6 +332,115 @@ export const orderEvents = pgTable(
   },
   (t) => [index("order_events_order_id_created_at_idx").on(t.orderId, t.createdAt)],
 );
+
+// ---------------------------------------------------------------------------
+// Inventory
+// ---------------------------------------------------------------------------
+
+export const ingredients = pgTable("ingredients", {
+  id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+  name: text("name").notNull(),
+  baseUnit: baseUnitEnum("base_unit").notNull(),
+  /** Millicents per base unit (mozzarella at $4.00/lb = 882 per gram). */
+  unitCostMillicents: integer("unit_cost_millicents").notNull().default(0),
+  storageArea: text("storage_area").notNull().default("Walk-in"),
+  shelfOrder: integer("shelf_order").notNull().default(0),
+  lowStockAtMilli: integer("low_stock_at_milli"),
+  /** On hand at or below this auto-86's everything that uses it; null = never. */
+  outAtMilli: integer("out_at_milli"),
+  isActive: boolean("is_active").notNull().default(true),
+  createdAt: timestamp("created_at", { withTimezone: true })
+    .notNull()
+    .defaultNow(),
+});
+
+/** A purchase unit ("case", "bag") as a multiple of the ingredient's base unit. */
+export const ingredientPacks = pgTable("ingredient_packs", {
+  id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+  ingredientId: integer("ingredient_id")
+    .notNull()
+    .references(() => ingredients.id, { onDelete: "cascade" }),
+  name: text("name").notNull(),
+  baseQtyMilli: integer("base_qty_milli").notNull(),
+});
+
+/**
+ * One ingredient of one owner's recipe (a menu item or a modifier), optionally
+ * for one size. Negative quantities model removals.
+ */
+export const recipeLines = pgTable(
+  "recipe_lines",
+  {
+    id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+    menuItemId: integer("menu_item_id").references(() => menuItems.id, { onDelete: "cascade" }),
+    modifierId: integer("modifier_id").references(() => modifiers.id, { onDelete: "cascade" }),
+    sizeModifierId: integer("size_modifier_id").references(() => modifiers.id, {
+      onDelete: "cascade",
+    }),
+    ingredientId: integer("ingredient_id")
+      .notNull()
+      .references(() => ingredients.id, { onDelete: "restrict" }),
+    qtyMilli: integer("qty_milli").notNull(),
+  },
+  (t) => [
+    check("recipe_lines_one_owner", sql`num_nonnulls(${t.menuItemId}, ${t.modifierId}) = 1`),
+    unique("recipe_lines_owner_size_ingredient")
+      .on(t.menuItemId, t.modifierId, t.sizeModifierId, t.ingredientId)
+      .nullsNotDistinct(),
+  ],
+);
+
+export const inventoryCounts = pgTable("inventory_counts", {
+  id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+  kind: countKindEnum("kind").notNull(),
+  operatorId: integer("operator_id").references(() => operators.id, { onDelete: "set null" }),
+  createdAt: timestamp("created_at", { withTimezone: true })
+    .notNull()
+    .defaultNow(),
+});
+
+/** Append-only ledger: on hand is the sum of qty_milli. Rows are never updated or deleted. */
+export const inventoryMoves = pgTable(
+  "inventory_moves",
+  {
+    id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+    ingredientId: integer("ingredient_id")
+      .notNull()
+      .references(() => ingredients.id, { onDelete: "restrict" }),
+    kind: inventoryMoveKindEnum("kind").notNull(),
+    /** Signed: sales and waste are negative, receipts positive, counts either way. */
+    qtyMilli: integer("qty_milli").notNull(),
+    unitCostMillicents: integer("unit_cost_millicents").notNull(),
+    orderId: uuid("order_id").references(() => orders.id, { onDelete: "set null" }),
+    countId: integer("count_id").references(() => inventoryCounts.id, { onDelete: "cascade" }),
+    wasteReason: wasteReasonEnum("waste_reason"),
+    vendor: text("vendor"),
+    operatorId: integer("operator_id").references(() => operators.id, { onDelete: "set null" }),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (t) => [
+    index("inventory_moves_ingredient_id_id_idx").on(t.ingredientId, t.id),
+    index("inventory_moves_order_id_idx").on(t.orderId),
+  ],
+);
+
+/**
+ * One row per ingredient the system auto-86'd, remembering what it turned
+ * off so restocking turns exactly that back on. An operator re-enabling an
+ * item leaves the row, so later sales don't 86 it again.
+ */
+export const stockOuts = pgTable("stock_outs", {
+  ingredientId: integer("ingredient_id")
+    .primaryKey()
+    .references(() => ingredients.id, { onDelete: "cascade" }),
+  menuItemIds: integer("menu_item_ids").array().notNull(),
+  modifierIds: integer("modifier_ids").array().notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true })
+    .notNull()
+    .defaultNow(),
+});
 
 // ---------------------------------------------------------------------------
 // Relations
