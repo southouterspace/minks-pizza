@@ -345,6 +345,89 @@ reasons, payment recording, printing, day stats and a new-order alert.
 - The e2e creates and deletes its own operator. On a database that already
   has operators, `e2e-kds.ts` needs `kitchen@minks.example` to exist.
 
+## Session 6 — Promotions
+
+**Ask:** promotions and coupons an operator can set up in under a minute and
+trust, that a customer can see, understand and not lose. Competitor
+complaints are in `docs/promotions-research.md`.
+
+**Built:** see README → Promotions.
+
+- **Data shape.** A typed discriminated union for the reward
+  (`order_percent`, `order_amount`, `item_percent`, `item_amount`,
+  `item_price`, `bogo`, `free_delivery`), validated by zod on every write and
+  parsed on read. One pure evaluator (`evaluatePromotions` in
+  `src/lib/promotions.ts`) with an exhaustive switch. A redemption ledger
+  (`order_discounts`) that every usage number is counted from.
+- **Usage is derived, never stored.** Uses = ledger rows whose order isn't
+  canceled. A cancel gives the use back with no counter to decrement.
+  Operator comps are ledger rows too (`source = 'comp'`).
+- **One pricing path.** `quoteCheckout` serves the live preview and
+  `createOrder`. The checkout also sends the total its button showed
+  (`expectedTotalCents`); if the server's quote differs (a phone typed late,
+  a deal paused mid-checkout), the order is refused with the new total
+  rather than charged silently. Not in the spec; it is what makes "the
+  preview can never disagree with what's charged" hold.
+- **Limits under races.** `createOrder` batches the order, its lines, its
+  event, then `select … for update` on the applied promotions in id order,
+  then a guard statement that recounts every limit, then the ledger rows.
+  The guard has to be its own statement: under read committed each
+  statement takes a fresh snapshot, so it sees the order that won the lock.
+  A count inside the locking statement would read the old snapshot. A failed
+  guard raises by casting a sentinel string to int; `createOrder` re-quotes
+  and names the deal that was lost ("PIZZA10 was just fully redeemed — your
+  total is now $12.97."). The race test fires two `placeOrder` calls at a
+  limit-1 code: one wins, one gets that message.
+- **Best deal.** Options are each eligible exclusive promotion alone, or all
+  eligible stackable ones together; the larger saving wins, ties go to the
+  option using more of the customer's codes. Item rewards apply before
+  order rewards, order rewards before free delivery, so stacking never takes
+  a unit or the fee below zero.
+- **Rejection order (spec gap).** The spec lists the reasons but not their
+  priority. Hard stops come first (ended or paused, not started, expired,
+  used up, already used, new customers only), then the fixable ones
+  (schedule, order type, minimum, qualifying item), so nobody is told to add
+  $4 for a deal that still wouldn't apply.
+- **Net sales (deviation).** Day stats and promotion reports subtract item
+  discounts only. A free-delivery discount reduces the delivery fee, which
+  was never a sale, so subtracting it would understate sales. This matches
+  Toast's definition, which excludes service charges.
+- **Comps recompute tax at the store's current rate.** Orders don't store
+  their tax rate; if the rate changed since the order, a comp re-taxes the
+  order at the new one. Add `orders.tax_rate_bps` if that ever matters.
+- **Customer identity is the phone number only** (last ten digits). Email
+  and card fingerprints, which the research suggests, wait for customer
+  accounts and Stripe; there is nothing trustworthy to key on before then.
+- **Research rows deferred.** Reserved/consumed ledger states (no payment
+  capture yet), pro-rata discount allocation per line (needed with refunds),
+  a per-day velocity alert for leaked codes, a versioned audit log of deal
+  edits, "at most one code per order" (the spec lets combinable codes
+  stack), and validating against a scheduled order time (no scheduled
+  orders exist).
+- **Small calls.** Codes are stored twice: `code` normalized for matching
+  (unique) and `display` as written. Generated codes skip 0/O and 1/I. Dates
+  are store-local days, stored as instants (`endsAt` exclusive). The promo
+  field hides behind "Have a promo code?" unless a code is on the cart, so
+  customers without one aren't sent hunting (Baymard). `normalizeCode` lives
+  in its own module so the storefront bundle doesn't pull in zod.
+- **Fixed in passing:** the cart's "Go to checkout" button collapsed to a
+  sliver on phones (`flex-1` in a column).
+
+**Tested** against a throwaway Neon branch (`promotions-test`):
+
+- `scripts/test-promotions.ts`, 29 tests against literal cents and strings:
+  every reward type, the BOGO cheapest-unit rule, stacking against the best
+  exclusive deal, a stack that can't go below zero, every rejection reason,
+  nudges, code and phone normalization, weekly windows across the Nov 1 DST
+  change and overnight, store-day boundaries in spring and fall, totals
+  (tax after item discounts), offer sentences and derived status.
+- `scripts/e2e-promotions.ts`, 45 checks, passing against both `next dev`
+  and `next build && next start`: see the script header. Screenshots of the
+  deals strip, cart under and over the minimum, checkout, confirmation, the
+  per-customer refusal, the comp on order detail and the promotions list.
+- `scripts/test-order-workflow.ts` (9), `scripts/e2e-orders.ts` (60) and
+  `scripts/e2e-customer.ts` still pass.
+
 ## Gotchas hit (for future sessions)
 
 - Playwright `getByRole(name:)` is substring-matching: "Publish store" also
@@ -375,6 +458,14 @@ reasons, payment recording, printing, day stats and a new-order alert.
   history search input showed up only in e2e runs that take screenshots
   (Playwright hides the caret for them). Loading and searching without
   screenshots logs nothing.
+- A server component that imports a plain value (not a component) from a
+  `"use client"` module gets a client reference, not the value. Spreading
+  it yields nothing. Keep shared constants in plain modules.
+- In a single-table select list Drizzle renders `${table.column}` bare
+  (`"id"`). Inside a correlated subquery that bare name binds to the inner
+  table, silently. Spell the outer column out (`orders.id`).
+- Base UI's `Checkbox` puts the `id` on a hidden input; Playwright can't
+  click it. Click the label text instead.
 - Destructive e2e (creating/removing operator accounts) must not run against the
   production database. `mcp__Neon__create_branch` makes an isolated copy in
   seconds; point `MINKS_DATABASE_URL` at it and delete the branch afterwards.
