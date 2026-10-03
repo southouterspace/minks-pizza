@@ -7,7 +7,7 @@
  * Run: npx tsx scripts/test-pos-client.ts
  */
 import { cyclePlacement, defaultSelections, tapTopping } from "../src/lib/pos-client/builder";
-import { draftLine, draftProblem, draftReducer, draftTotals, emptyDraft, firePlan, lineSummary, toSubmitRequest } from "../src/lib/pos-client/draft";
+import { draftLine, draftProblem, draftReducer, draftTotals, emptyDraft, firePlan, lineSummary, toSubmitRequest, type Draft, type NewOrderDraft } from "../src/lib/pos-client/draft";
 import type { MenuItem, PricingPolicy } from "../src/lib/pricing";
 import { formatStoreTime, nextStoreTime, storeHhmm } from "../src/lib/store-time";
 
@@ -77,7 +77,12 @@ const line = draftLine(cheese, halves, 2, null, policy, "00000000-0000-4000-8000
 check("half-and-half large prices at the average rule", line.unitPriceCents, 1099 + 600 + 163);
 check("the line reads like a ticket", lineSummary(line.modifiers), 'Large 14" · Hand Tossed · L: Pepperoni · R: Mushrooms');
 
-let d = emptyDraft();
+function asNew(d: Draft): NewOrderDraft {
+  if (d.kind !== "new") throw new Error(`expected a new-order draft, got ${d.kind}`);
+  return d;
+}
+
+let d: Draft = emptyDraft();
 d = draftReducer(d, { type: "add", lines: [line] });
 d = draftReducer(d, { type: "add", lines: [draftLine(soda, [], 1, null, policy)] });
 d = draftReducer(d, { type: "add", lines: [draftLine(soda, [], 1, null, policy)] });
@@ -104,7 +109,7 @@ check(
   draftTotals(filled, { taxRateBps: 825, deliveryFeeCents: 399 }).totalCents,
   4895 + 399,
 );
-const req = toSubmitRequest(filled, 30, []);
+const req = toSubmitRequest(asNew(filled), 30, []);
 check(
   "delivery submits as a phone order with the address saved",
   [req.channel, req.fulfillment.kind, req.customer?.saveAddress, req.fire.kind, req.lines.length],
@@ -122,7 +127,21 @@ check("Later 23:45 picked at 11:30 PM Chicago stays on the store's day, not UTC'
 check("Later 18:00 on the day DST ends uses CST", nextStoreTime("18:00", new Date("2026-11-01T12:00:00Z"), CHICAGO).toISOString(), "2026-11-02T00:00:00.000Z");
 check("the picker shows the store's wall clock", storeHhmm("2026-10-04T04:45:00Z", CHICAGO), "23:45");
 check("times read in the store's zone", formatStoreTime("2026-10-04T04:45:00Z", CHICAGO), "11:45 PM");
-check("dine-in needs a table", draftProblem(draftReducer(d, { type: "mode", mode: "dine_in" })), "Enter the table.");
+const dineIn = draftReducer(d, { type: "mode", mode: "dine_in" });
+check("dine-in needs a table", draftProblem(dineIn), "Enter the table.");
+const held = draftReducer(dineIn, { type: "schedule", schedule: { kind: "hold" } });
+check("leaving dine-in drops a Hold back to ASAP", asNew(draftReducer(held, { type: "mode", mode: "walk_in" })).schedule, { kind: "asap" });
+check("the order after a dine-in check starts dine-in", asNew(draftReducer(held, { type: "next" })).mode, "dine_in");
+check("the order after a delivery starts walk-in", asNew(draftReducer(filled, { type: "next" })).mode, "walk_in");
+check("the next order is empty with a fresh id", [draftReducer(filled, { type: "next" }).lines.length, asNew(draftReducer(filled, { type: "next" })).orderId !== asNew(filled).orderId], [0, true]);
+
+let append: Draft = draftReducer(filled, { type: "append_to", target: { orderId: "00000000-0000-4000-8000-0000000000aa", number: 41, label: "Table 4" } });
+check("adding to a check starts with no lines", [append.kind, append.lines.length], ["append", 0]);
+append = draftReducer(append, { type: "customer", patch: { name: "Ignored" } });
+append = draftReducer(append, { type: "add", lines: [draftLine(soda, [], 1, null, policy)] });
+check("an added line needs nothing else and keeps the check's fee", [draftProblem(append), draftTotals(append, { taxRateBps: 825, deliveryFeeCents: 399 })], [null, { subtotalCents: 399, taxCents: 33, deliveryFeeCents: 0, totalCents: 432 }]);
+check("order details can't be set on an added-to check", "customer" in append, false);
+check("done adding goes back to a walk-in order", [draftReducer(append, { type: "next" }).kind, asNew(draftReducer(append, { type: "next" })).mode], ["new", "walk_in"]);
 
 console.log(failures === 0 ? "\nAll POS client checks passed." : `\n${failures} check(s) failed.`);
 process.exit(failures === 0 ? 0 : 1);

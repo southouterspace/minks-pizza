@@ -19,7 +19,7 @@ import { keepUnlocked, lockTerminal, mutateOrderAction, readOrder, switchEmploye
 import { dueCents, type Actor, type Approval, type Board, type DrawerEventKind, type OrderView, type PosMenu, type TenderInput } from "@/lib/orders";
 import * as outbox from "@/lib/pos-outbox";
 import { defaultSelections, needsBuilder } from "@/lib/pos-client/builder";
-import { draftLine, draftReducer, draftTotals, emptyDraft, findItem, isPhoneFirst, toSubmitRequest, type Draft, type DraftLine, type Mode } from "@/lib/pos-client/draft";
+import { draftLine, draftReducer, draftTotals, emptyDraft, findItem, MODES, toSubmitLine, toSubmitRequest, type AppendDraft, type DraftLine, type Mode, type NewOrderDraft } from "@/lib/pos-client/draft";
 import { formatCents } from "@/lib/money";
 import type { MenuItem, Selection } from "@/lib/pricing";
 import { formatStoreTime } from "@/lib/store-time";
@@ -62,7 +62,7 @@ type Pane =
 /** Paying for the draft as it was when Pay was tapped; `placed` once the first tender sent it. */
 type Checkout = {
   title: string;
-  draft: Draft;
+  draft: NewOrderDraft;
   dueCents: number;
   /** `order` is null while the order waits in the outbox. */
   placed: { orderId: string; order: OrderView | null } | null;
@@ -322,13 +322,13 @@ export function PosTerminal({
   };
 
   /** Hands the draft to the outbox and clears it once the outbox holds it. */
-  const submitDraft = async (d: Draft, tenders: TenderInput[]): Promise<{ ok: boolean; order: OrderView | null }> => {
+  const submitDraft = async (d: NewOrderDraft, tenders: TenderInput[]): Promise<{ ok: boolean; order: OrderView | null }> => {
     const result = await sendDraft(d, tenders);
-    if (result.ok) dispatch({ type: "reset", mode: d.mode === "dine_in" ? "dine_in" : "walk_in" });
+    if (result.ok) dispatch({ type: "next" });
     return result;
   };
 
-  const sendDraft = async (d: Draft, tenders: TenderInput[]): Promise<{ ok: boolean; order: OrderView | null }> => {
+  const sendDraft = async (d: NewOrderDraft, tenders: TenderInput[]): Promise<{ ok: boolean; order: OrderView | null }> => {
     const req = toSubmitRequest(d, quoteFor(d.mode), tenders);
     setSending(true);
     const out = await outbox.submit(req);
@@ -354,35 +354,35 @@ export function PosTerminal({
     }
   };
 
-  const send = async () => {
-    if (draft.appendTo) {
-      const target = draft.appendTo;
-      const lines = draft.lines.map(({ lineId, itemId, quantity, selections, notes }) => ({ lineId, itemId, quantity, selections, notes }));
-      setSending(true);
-      const r = await act("Add to check", (approval) =>
-        mutateOrderAction({ orderId: target.orderId, mutation: { kind: "add_lines", lines, fire: true }, approval }),
-      );
-      setSending(false);
-      if (r && "order" in r) {
-        notify.success(`Added to #${target.number}`);
-        dispatch({ type: "reset", mode: "walk_in" });
-        showOrder(r.order);
-        void refreshBoard();
-      }
-      return;
+  const appendLines = async ({ target, lines }: AppendDraft) => {
+    setSending(true);
+    const r = await act("Add to check", (approval) =>
+      mutateOrderAction({ orderId: target.orderId, mutation: { kind: "add_lines", lines: lines.map(toSubmitLine), fire: true }, approval }),
+    );
+    setSending(false);
+    if (r && "order" in r) {
+      notify.success(`Added to #${target.number}`);
+      dispatch({ type: "next" });
+      showOrder(r.order);
+      void refreshBoard();
     }
+  };
+
+  const send = async () => {
+    if (draft.kind === "append") return appendLines(draft);
     const { ok } = await submitDraft(draft, []);
     if (ok) finishOrder();
   };
 
   const pay = () => {
+    if (draft.kind !== "new") return;
     if (!board?.shift) {
       notify.error(failureText({ reason: "no_open_shift" }));
       setDialog({ kind: "open_shift" });
       return;
     }
     setCheckout({
-      title: `Pay new ${isPhoneFirst(draft.mode) ? "phone" : draft.mode === "dine_in" ? "dine-in" : "walk-in"} order`,
+      title: `Pay new ${MODES[draft.mode].noun} order`,
       draft,
       dueCents: draftTotals(draft, menu).totalCents,
       placed: null,
@@ -442,11 +442,7 @@ export function PosTerminal({
   };
 
   const startAppend = (o: OrderView) => {
-    dispatch({
-      type: "append_to",
-      order: { orderId: o.id, number: o.number, label: orderLabel(o) },
-      mode: o.fulfillment.kind === "dine_in" ? "dine_in" : o.fulfillment.kind === "delivery" ? "delivery" : "walk_in",
-    });
+    dispatch({ type: "append_to", target: { orderId: o.id, number: o.number, label: orderLabel(o) } });
     setPane({ kind: "menu" });
   };
 
@@ -499,8 +495,8 @@ export function PosTerminal({
         <header className="flex h-16 shrink-0 items-center gap-3 border-b px-3">
           <span className="hidden text-base font-semibold lg:block">{store.name}</span>
           <nav className="flex gap-1 rounded-xl bg-muted p-1">
-            <button type="button" className={tab(!onBoard)} onClick={() => setPane(isPhoneFirst(draft.mode) && draft.lines.length === 0 ? { kind: "caller" } : { kind: "menu" })}>
-              {draft.appendTo ? `Adding to #${draft.appendTo.number}` : "New order"}
+            <button type="button" className={tab(!onBoard)} onClick={() => setPane(draft.kind === "new" && MODES[draft.mode].phoneFirst && draft.lines.length === 0 ? { kind: "caller" } : { kind: "menu" })}>
+              {draft.kind === "append" ? `Adding to #${draft.target.number}` : "New order"}
             </button>
             <button type="button" className={tab(onBoard)} onClick={() => setPane({ kind: "board" })} data-testid="tab-board">
               Open orders <span className="ml-1 rounded-md bg-foreground/10 px-1.5 tabular-nums">{openCount}</span>
@@ -577,7 +573,7 @@ export function PosTerminal({
           <main className="flex min-h-0 min-w-0 flex-1 flex-col gap-3 p-3">
             {queue.length > 0 && onBoard && <NotSentList queue={queue} onOpen={() => setDialog({ kind: "outbox" })} />}
             {pane.kind === "menu" && <MenuGrid menu={menu} onPick={pickItem} />}
-            {pane.kind === "caller" && <CallerPanel draft={draft} dispatch={dispatch} onContinue={() => setPane({ kind: "menu" })} />}
+            {pane.kind === "caller" && draft.kind === "new" && <CallerPanel draft={draft} dispatch={dispatch} onContinue={() => setPane({ kind: "menu" })} />}
             {pane.kind === "builder" && (
               <PizzaBuilder
                 key={pane.initial.lineId ?? pane.item.id}

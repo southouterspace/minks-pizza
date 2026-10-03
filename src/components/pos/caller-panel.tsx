@@ -4,7 +4,7 @@ import { useEffect, useRef, useState, type Dispatch } from "react";
 import { notify } from "./notify";
 import { AlertTriangle, ArrowRight, History, MapPin, Phone, RotateCcw } from "lucide-react";
 import type { CustomerLookup } from "@/lib/orders";
-import { allItems, draftLine, lineSummary, type Draft, type DraftAction } from "@/lib/pos-client/draft";
+import { allItems, draftLine, lineSummary, MODES, type DraftAction, type NewOrderDraft } from "@/lib/pos-client/draft";
 import { formatCents } from "@/lib/money";
 import { reorderLines } from "@/lib/pricing";
 import { formatStoreDateTime } from "@/lib/store-time";
@@ -20,13 +20,13 @@ type Lookup = { phone: string; state: "loading" } | { phone: string; state: "don
  * Phone first: the number brings up the caller's name, saved addresses and
  * last orders with one-tap Reorder, re-priced at today's menu.
  */
-export function CallerPanel({ draft, dispatch, onContinue }: { draft: Draft; dispatch: Dispatch<DraftAction>; onContinue: () => void }) {
+export function CallerPanel({ draft, dispatch, onContinue }: { draft: NewOrderDraft; dispatch: Dispatch<DraftAction>; onContinue: () => void }) {
   const { menu, store } = usePos();
   const [lookup, setLookup] = useState<Lookup | null>(null);
   const [unavailable, setUnavailable] = useState<{ name: string; reason: string }[]>([]);
   const phoneInput = useRef<HTMLInputElement>(null);
   const phoneDigits = digits(draft.customer.phone);
-  const delivery = draft.mode === "delivery";
+  const delivery = MODES[draft.mode].fulfillment === "delivery";
 
   useEffect(() => {
     phoneInput.current?.focus();

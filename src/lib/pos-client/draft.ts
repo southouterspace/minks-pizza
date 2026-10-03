@@ -21,25 +21,40 @@ import { taxFromBps } from "@/lib/money";
 /** What the cashier picks; maps onto the server's channel × fulfillment. */
 export type Mode = "walk_in" | "phone" | "delivery" | "dine_in";
 
-export const MODES: { mode: Mode; label: string; channel: Channel }[] = [
-  { mode: "walk_in", label: "Walk-in", channel: "walk_in" },
-  { mode: "phone", label: "Phone", channel: "phone" },
-  { mode: "delivery", label: "Delivery", channel: "phone" },
-  { mode: "dine_in", label: "Dine-in", channel: "walk_in" },
-];
+type ModeSpec = {
+  label: string;
+  /** As in "Pay new phone order". */
+  noun: string;
+  channel: Channel;
+  fulfillment: Fulfillment["kind"];
+  /** The caller's number and name come before the food. */
+  phoneFirst: boolean;
+  /** A course can be held back for the table. */
+  hold: boolean;
+  /** The mode the next order starts in: a dine-in floor keeps ringing dine-in. */
+  next: Mode;
+};
 
-export const isPhoneFirst = (mode: Mode) => mode === "phone" || mode === "delivery";
+export const MODES: Record<Mode, ModeSpec> = {
+  walk_in: { label: "Walk-in", noun: "walk-in", channel: "walk_in", fulfillment: "pickup", phoneFirst: false, hold: false, next: "walk_in" },
+  phone: { label: "Phone", noun: "phone", channel: "phone", fulfillment: "pickup", phoneFirst: true, hold: false, next: "walk_in" },
+  delivery: { label: "Delivery", noun: "phone", channel: "phone", fulfillment: "delivery", phoneFirst: true, hold: false, next: "walk_in" },
+  dine_in: { label: "Dine-in", noun: "dine-in", channel: "walk_in", fulfillment: "dine_in", phoneFirst: false, hold: true, next: "dine_in" },
+};
+
+const MODE_ORDER: Mode[] = ["walk_in", "phone", "delivery", "dine_in"];
+
+export const MODE_OPTIONS = MODE_ORDER.map((value) => ({ value, label: MODES[value].label }));
 
 export type DraftLine = SubmitLine & { name: string; unitPriceCents: number; modifiers: LineModifier[] };
 
 /** ASAP fires now; Later fires at (ready time − quote); Hold keeps a dine-in course back. */
 export type Schedule = { kind: "asap" } | { kind: "later"; readyAt: string } | { kind: "hold" };
 
-export type Draft = {
+export type NewOrderDraft = {
+  kind: "new";
   orderId: string;
   mode: Mode;
-  /** Adding to an open check instead of ringing a new order. */
-  appendTo: { orderId: string; number: number; label: string } | null;
   customer: { phone: string; name: string };
   address: Address;
   table: string;
@@ -48,13 +63,22 @@ export type Draft = {
   lines: DraftLine[];
 };
 
+/** Lines being added to an open check: the check already has its customer, table and schedule. */
+export type AppendDraft = {
+  kind: "append";
+  target: { orderId: string; number: number; label: string };
+  lines: DraftLine[];
+};
+
+export type Draft = NewOrderDraft | AppendDraft;
+
 const EMPTY_ADDRESS: Address = { line1: "", line2: null, city: null, zip: "" };
 
-export function emptyDraft(mode: Mode = "walk_in"): Draft {
+export function emptyDraft(mode: Mode = "walk_in"): NewOrderDraft {
   return {
+    kind: "new",
     orderId: crypto.randomUUID(),
     mode,
-    appendTo: null,
     customer: { phone: "", name: "" },
     address: EMPTY_ADDRESS,
     table: "",
@@ -76,28 +100,33 @@ export function draftLine(
   return { lineId, itemId: item.id, name: item.name, quantity, selections, notes, unitPriceCents, modifiers };
 }
 
-export type DraftAction =
+/** Edits to the order's own details; a check being added to already has them. */
+type DetailAction =
   | { type: "mode"; mode: Mode }
-  | { type: "customer"; patch: Partial<Draft["customer"]> }
+  | { type: "customer"; patch: Partial<NewOrderDraft["customer"]> }
   | { type: "address"; address: Address }
   | { type: "table"; table: string }
   | { type: "schedule"; schedule: Schedule }
-  | { type: "notes"; notes: string }
+  | { type: "notes"; notes: string };
+
+export type DraftAction =
+  | DetailAction
   | { type: "add"; lines: DraftLine[] }
   | { type: "replace"; line: DraftLine }
   | { type: "qty"; lineId: string; delta: number }
   | { type: "repeat"; lineId: string }
   | { type: "remove"; lineId: string }
-  | { type: "append_to"; order: NonNullable<Draft["appendTo"]>; mode: Mode }
-  | { type: "reset"; mode?: Mode };
+  | { type: "append_to"; target: AppendDraft["target"] }
+  /** Done with this draft (sent, or adding abandoned): start the next order. */
+  | { type: "next" };
 
-export function draftReducer(d: Draft, a: DraftAction): Draft {
+function detailReducer(d: NewOrderDraft, a: DetailAction): NewOrderDraft {
   switch (a.type) {
     case "mode":
       return {
         ...d,
         mode: a.mode,
-        schedule: a.mode !== "dine_in" && d.schedule.kind === "hold" ? { kind: "asap" } : d.schedule,
+        schedule: !MODES[a.mode].hold && d.schedule.kind === "hold" ? { kind: "asap" } : d.schedule,
       };
     case "customer":
       return { ...d, customer: { ...d.customer, ...a.patch } };
@@ -109,6 +138,18 @@ export function draftReducer(d: Draft, a: DraftAction): Draft {
       return { ...d, schedule: a.schedule };
     case "notes":
       return { ...d, notes: a.notes };
+  }
+}
+
+export function draftReducer(d: Draft, a: DraftAction): Draft {
+  switch (a.type) {
+    case "mode":
+    case "customer":
+    case "address":
+    case "table":
+    case "schedule":
+    case "notes":
+      return d.kind === "new" ? detailReducer(d, a) : d;
     case "add":
       return { ...d, lines: mergeLines(d.lines, a.lines) };
     case "replace":
@@ -131,9 +172,9 @@ export function draftReducer(d: Draft, a: DraftAction): Draft {
     case "remove":
       return { ...d, lines: d.lines.filter((l) => l.lineId !== a.lineId) };
     case "append_to":
-      return { ...emptyDraft(a.mode), appendTo: a.order };
-    case "reset":
-      return emptyDraft(a.mode ?? d.mode);
+      return { kind: "append", target: a.target, lines: [] };
+    case "next":
+      return emptyDraft(d.kind === "new" ? MODES[d.mode].next : "walk_in");
   }
 }
 
@@ -162,7 +203,8 @@ export type DraftTotals = { subtotalCents: number; taxCents: number; deliveryFee
 export function draftTotals(d: Draft, menu: Pick<PosMenu, "taxRateBps" | "deliveryFeeCents">): DraftTotals {
   const subtotalCents = d.lines.reduce((s, l) => s + l.unitPriceCents * l.quantity, 0);
   const taxCents = taxFromBps(subtotalCents, menu.taxRateBps);
-  const deliveryFeeCents = d.mode === "delivery" && !d.appendTo ? menu.deliveryFeeCents : 0;
+  // An added line rides on the check's existing fee.
+  const deliveryFeeCents = d.kind === "new" && MODES[d.mode].fulfillment === "delivery" ? menu.deliveryFeeCents : 0;
   return { subtotalCents, taxCents, deliveryFeeCents, totalCents: subtotalCents + taxCents + deliveryFeeCents };
 }
 
@@ -171,25 +213,25 @@ const digits = (s: string) => s.replace(/\D/g, "");
 /** The first thing stopping this draft from being sent, or null. */
 export function draftProblem(d: Draft): string | null {
   if (d.lines.length === 0) return "Add an item first.";
-  if (d.appendTo) return null;
-  if (isPhoneFirst(d.mode)) {
+  if (d.kind === "append") return null;
+  const mode = MODES[d.mode];
+  if (mode.phoneFirst) {
     if (digits(d.customer.phone).length < 7) return "Enter the caller's phone number.";
     if (!d.customer.name.trim()) return "Enter the caller's name.";
   }
-  if (d.mode === "delivery" && (!d.address.line1.trim() || !d.address.zip.trim())) {
+  if (mode.fulfillment === "delivery" && (!d.address.line1.trim() || !d.address.zip.trim())) {
     return "Delivery needs a street address and ZIP.";
   }
-  if (d.mode === "dine_in" && !d.table.trim()) return "Enter the table.";
+  if (mode.fulfillment === "dine_in" && !d.table.trim()) return "Enter the table.";
   if (d.schedule.kind === "later" && Date.parse(d.schedule.readyAt) <= Date.now()) {
     return "The later time has already passed.";
   }
   return null;
 }
 
-export function fulfillmentOf(d: Pick<Draft, "mode" | "address" | "table">): Fulfillment {
-  switch (d.mode) {
-    case "walk_in":
-    case "phone":
+export function fulfillmentOf(d: Pick<NewOrderDraft, "mode" | "address" | "table">): Fulfillment {
+  switch (MODES[d.mode].fulfillment) {
+    case "pickup":
       return { kind: "pickup" };
     case "delivery":
       return { kind: "delivery", address: d.address };
@@ -211,20 +253,23 @@ export function firePlan(s: Schedule, quoteMinutes: number): { fire: FirePlan; p
   }
 }
 
-export function toSubmitRequest(d: Draft, quoteMinutes: number, tenders: TenderInput[]): SubmitOrderRequest {
+export const toSubmitLine = ({ lineId, itemId, quantity, selections, notes }: DraftLine): SubmitLine => ({ lineId, itemId, quantity, selections, notes });
+
+export function toSubmitRequest(d: NewOrderDraft, quoteMinutes: number, tenders: TenderInput[]): SubmitOrderRequest {
   const phone = d.customer.phone.trim();
+  const mode = MODES[d.mode];
   return {
     orderId: d.orderId,
-    channel: MODES.find((m) => m.mode === d.mode)!.channel,
+    channel: mode.channel,
     fulfillment: fulfillmentOf(d),
     customer:
       digits(phone).length >= 7
-        ? { phone, name: d.customer.name.trim() || "Guest", email: null, saveAddress: d.mode === "delivery" }
+        ? { phone, name: d.customer.name.trim() || "Guest", email: null, saveAddress: mode.fulfillment === "delivery" }
         : null,
     notes: d.notes.trim() || null,
     ...firePlan(d.schedule, quoteMinutes),
     tipCents: 0,
-    lines: d.lines.map(({ lineId, itemId, quantity, selections, notes }) => ({ lineId, itemId, quantity, selections, notes })),
+    lines: d.lines.map(toSubmitLine),
     tenders,
   };
 }
