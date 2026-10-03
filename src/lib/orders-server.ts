@@ -6,7 +6,7 @@
  * or half-retried write lands on the same end state.
  */
 import { createHash } from "node:crypto";
-import { and, asc, desc, eq, gte, inArray, isNull, lte, or, sql, type SQL } from "drizzle-orm";
+import { and, asc, desc, eq, gte, inArray, isNull, lt, lte, or, sql, type SQL } from "drizzle-orm";
 import type { BatchItem } from "drizzle-orm/batch";
 import {
   adjustments,
@@ -40,6 +40,7 @@ import {
   type Fulfillment,
   type OrderMutation,
   type OrderView,
+  type ReportFacts,
   type RequiredRole,
   type ShiftReport,
   type SubmitLine,
@@ -1040,49 +1041,146 @@ export async function openShift(
   return open?.id === input.shiftId ? { ok: true, shiftId: open.id } : rejected("Another shift is already open.");
 }
 
+/**
+ * The window a report covers. A shift's money is its own tenders and drawer
+ * events (only one shift is open at a time, so its window holds nothing
+ * else); a day's is everything stamped inside the day.
+ */
+export type ReportScope =
+  | { kind: "shift"; shiftId: string; from: Date; to: Date | null }
+  | { kind: "day"; from: Date; to: Date };
+
+/** [from, to), or open-ended while a shift is still open. */
+function within(col: Parameters<typeof gte>[0], scope: ReportScope) {
+  return and(gte(col, scope.from), scope.to ? lt(col, scope.to) : undefined);
+}
+
+/** Ids of every order a report covers: placed in the window, or paid or refunded in it. */
+export function reportOrderIds(scope: ReportScope) {
+  const tendered = db
+    .select({ id: tenders.orderId })
+    .from(tenders)
+    .where(scope.kind === "shift" ? eq(tenders.shiftId, scope.shiftId) : within(tenders.createdAt, scope));
+  return db
+    .select({ id: orders.id })
+    .from(orders)
+    .where(or(within(orders.placedAt, scope), inArray(orders.id, tendered)));
+}
+
+export async function loadReportFacts(scope: ReportScope): Promise<ReportFacts> {
+  const ref = { id: orders.id, number: orders.orderNumber };
+  const lineName = sql<string>`${orderItems.quantity} || ' × ' || ${orderItems.itemName}`;
+  const [tenderRows, drawerRows, adjustmentRows, voidRows, orderRows] = await Promise.all([
+    db
+      .select({ t: tenders, order: ref })
+      .from(tenders)
+      .innerJoin(orders, eq(orders.id, tenders.orderId))
+      .where(scope.kind === "shift" ? eq(tenders.shiftId, scope.shiftId) : within(tenders.createdAt, scope)),
+    db
+      .select()
+      .from(drawerEvents)
+      .where(scope.kind === "shift" ? eq(drawerEvents.shiftId, scope.shiftId) : within(drawerEvents.createdAt, scope)),
+    db
+      .select({ a: adjustments, order: ref, item: lineName })
+      .from(adjustments)
+      .innerJoin(orders, eq(orders.id, adjustments.orderId))
+      .leftJoin(orderItems, eq(orderItems.lineUid, adjustments.lineUid))
+      .where(within(adjustments.createdAt, scope)),
+    db
+      .select({ i: orderItems, order: ref, item: lineName })
+      .from(orderItems)
+      .innerJoin(orders, eq(orders.id, orderItems.orderId))
+      .where(within(orderItems.voidedAt, scope)),
+    db.select().from(orders).where(inArray(orders.id, reportOrderIds(scope))),
+  ]);
+
+  const ids = new Set<number>();
+  const note = (...xs: (number | null)[]) => xs.forEach((x) => x !== null && ids.add(x));
+  tenderRows.forEach(({ t }) => note(t.employeeId, t.approvedBy));
+  drawerRows.forEach((e) => note(e.employeeId, e.approvedBy));
+  adjustmentRows.forEach(({ a }) => note(a.employeeId, a.approvedBy));
+  voidRows.forEach(({ i }) => note(i.voidedBy, i.voidApprovedBy));
+  const staff = ids.size
+    ? Object.fromEntries(
+        (await db.select({ id: employees.id, name: employees.name }).from(employees).where(inArray(employees.id, [...ids]))).map(
+          (e) => [e.id, e.name],
+        ),
+      )
+    : {};
+
+  return {
+    window: { from: scope.from.toISOString(), to: scope.to?.toISOString() ?? null },
+    staff,
+    tenders: tenderRows.map(({ t, order }) => ({
+      direction: t.direction,
+      method: t.method,
+      amountCents: t.amountCents,
+      tipCents: t.tipCents,
+      employeeId: t.employeeId,
+      approvedBy: t.approvedBy,
+      reason: t.reason,
+      at: t.createdAt.toISOString(),
+      order,
+    })),
+    adjustments: adjustmentRows.map(({ a, order, item }) => ({
+      kind: a.kind,
+      cents: a.cents,
+      employeeId: a.employeeId,
+      approvedBy: a.approvedBy,
+      reason: a.reason,
+      at: a.createdAt.toISOString(),
+      order,
+      item,
+    })),
+    voids: voidRows.map(({ i, order, item }) => ({
+      employeeId: i.voidedBy,
+      approvedBy: i.voidApprovedBy,
+      cents: i.lineTotalCents,
+      reason: i.voidReason,
+      at: i.voidedAt!.toISOString(),
+      order,
+      item,
+    })),
+    drawerEvents: drawerRows.map((e) => ({
+      kind: e.kind,
+      cents: e.cents,
+      employeeId: e.employeeId,
+      approvedBy: e.approvedBy,
+      reason: e.reason,
+      at: e.createdAt.toISOString(),
+    })),
+    orders: orderRows.map((o) => ({
+      id: o.id,
+      number: o.orderNumber,
+      status: o.status,
+      channel: o.channel,
+      orderType: o.orderType,
+      placedAt: o.placedAt.toISOString(),
+      customerName: o.customerName,
+      totals: {
+        subtotalCents: o.subtotalCents,
+        discountCents: o.discountCents,
+        taxCents: o.taxCents,
+        deliveryFeeCents: o.deliveryFeeCents,
+        tipCents: o.tipCents,
+        totalCents: o.totalCents,
+        paidCents: o.paidCents,
+        refundedCents: o.refundedCents,
+      },
+    })),
+  };
+}
+
 export async function getShiftReport(shiftId: string): Promise<ShiftReport | null> {
   const [shift] = await db.select().from(shifts).where(eq(shifts.id, shiftId));
   if (!shift) return null;
-  const from = shift.openedAt;
-  const to = shift.closedAt ?? new Date();
-  const inWindow = (col: Parameters<typeof gte>[0]) => and(gte(col, from), lte(col, to));
-
-  const [tenderRows, drawerRows, adjustmentRows, voidRows, orderRows] = await Promise.all([
-    db.select().from(tenders).where(eq(tenders.shiftId, shiftId)),
-    db.select().from(drawerEvents).where(eq(drawerEvents.shiftId, shiftId)),
-    db.select().from(adjustments).where(inWindow(adjustments.createdAt)),
-    db.select().from(orderItems).where(inWindow(orderItems.voidedAt)),
-    db
-      .select()
-      .from(orders)
-      .where(
-        or(
-          inWindow(orders.placedAt),
-          inArray(orders.id, db.select({ id: tenders.orderId }).from(tenders).where(eq(tenders.shiftId, shiftId))),
-        ),
-      ),
-  ]);
-  return shiftReport(
-    {
-      startingBankCents: shift.startingBankCents,
-      countedCashCents: shift.countedCashCents,
-      cardBatchCents: shift.cardBatchCents,
-      declaredCashTipsCents: shift.declaredCashTipsCents,
-    },
-    {
-      tenders: tenderRows,
-      drawerEvents: drawerRows,
-      adjustments: adjustmentRows,
-      voids: voidRows.map((v) => ({ employeeId: v.voidedBy, approvedBy: v.voidApprovedBy, cents: v.lineTotalCents })),
-      orders: orderRows.map((o) => ({
-        id: o.id,
-        number: o.orderNumber,
-        status: o.status,
-        customerName: o.customerName,
-        totals: { totalCents: o.totalCents, paidCents: o.paidCents, refundedCents: o.refundedCents },
-      })),
-    },
-  );
+  const facts = await loadReportFacts({
+    kind: "shift",
+    shiftId,
+    from: shift.openedAt,
+    to: shift.closedAt,
+  });
+  return shiftReport(shift, facts);
 }
 
 export async function closeShift(
