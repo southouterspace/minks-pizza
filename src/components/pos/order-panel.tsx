@@ -24,7 +24,6 @@ const hhmmOf = (iso: string) => {
   return `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
 };
 
-/** The running order, always on the right: lines, schedule, totals, send/pay. */
 export function OrderPanel({
   draft,
   dispatch,

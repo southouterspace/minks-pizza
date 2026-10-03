@@ -9,7 +9,6 @@ import { formatCents } from "@/lib/money";
 import { priceLine } from "@/lib/pricing";
 import type { StoreInfo } from "./context";
 
-/** Renders `node` into the print-only portal and opens the browser print dialog. */
 export function usePrinter() {
   const [job, setJob] = useState<{ node: ReactNode; n: number } | null>(null);
 

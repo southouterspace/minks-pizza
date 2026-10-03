@@ -505,6 +505,15 @@ async function main() {
   await page.getByTestId("order-panel").waitFor();
   await page.keyboard.press("Escape");
   await shot("14-wide");
+  await page.getByTestId("staff-menu").click();
+  await page.getByRole("menuitemcheckbox", { name: "Dark screen" }).click();
+  await page.keyboard.press("Escape");
+  await page.getByTestId("tab-board").click();
+  check("dark screen toggles the dark theme", await page.evaluate(() => document.documentElement.classList.contains("dark")));
+  await shot("15-dark");
+  await page.getByTestId("staff-menu").click();
+  await page.getByRole("menuitemcheckbox", { name: "Dark screen" }).click();
+  await page.keyboard.press("Escape");
 
   // --- Auto-lock after idle -------------------------------------------------------------------
   await db.update(storeSettings).set({ posLockSeconds: 3 }).where(eq(storeSettings.id, 1));

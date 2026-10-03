@@ -52,7 +52,6 @@ function loadPrefs(): Prefs {
   }
 }
 
-/** The left pane: what the cashier is doing beside the always-visible order. */
 type Pane =
   | { kind: "menu" }
   | { kind: "caller" }
@@ -113,7 +112,6 @@ export function PosTerminal({
   const lastRenew = useRef(0);
   const deepLink = useRef(deepLinkOrderId);
 
-  // --- preferences and theme ------------------------------------------------
 
   useEffect(() => {
     // eslint-disable-next-line react-hooks/set-state-in-effect -- localStorage is only readable after hydration
@@ -129,7 +127,6 @@ export function PosTerminal({
     }
   }, [prefs]);
 
-  // --- locking --------------------------------------------------------------
 
   const lock = useCallback(() => {
     setStaff(null);
@@ -164,7 +161,6 @@ export function PosTerminal({
     };
   }, [staff, lockSeconds, lock]);
 
-  // --- outbox ---------------------------------------------------------------
 
   const drain = useCallback(async () => {
     const sent = await outbox.drain();
@@ -177,7 +173,6 @@ export function PosTerminal({
     return outbox.subscribe(sync);
   }, []);
 
-  // --- polling --------------------------------------------------------------
 
   const refreshBoard = useCallback(async () => {
     try {
@@ -208,11 +203,13 @@ export function PosTerminal({
       setNow(Date.now());
     }, POLL_MS);
     const onOnline = () => void refreshBoard();
+    const onOffline = () => setOnline(false);
     window.addEventListener("online", onOnline);
-    window.addEventListener("offline", () => setOnline(false));
+    window.addEventListener("offline", onOffline);
     return () => {
       clearInterval(t);
       window.removeEventListener("online", onOnline);
+      window.removeEventListener("offline", onOffline);
     };
   }, [refreshBoard]);
 
@@ -230,7 +227,6 @@ export function PosTerminal({
     return () => clearInterval(t);
   }, []);
 
-  // --- actions with approval ------------------------------------------------
 
   const fail = useCallback(
     (r: { reason: string; message?: string }) => {
@@ -293,7 +289,6 @@ export function PosTerminal({
     fail(r);
   };
 
-  // --- orders -----------------------------------------------------------------
 
   const showOrder = useCallback((order: OrderView) => setPane({ kind: "order", order }), []);
 
@@ -326,7 +321,6 @@ export function PosTerminal({
     [prefs.lockAfterOrder, lock],
   );
 
-  /** Sends the draft as a new order through the outbox. Returns the stored order when it got through. */
   const submitDraft = async (d: Draft, tenders: TenderInput[]): Promise<{ ok: boolean; order: OrderView | null }> => {
     const req = toSubmitRequest(d, quoteFor(d.mode), tenders);
     setSending(true);
@@ -398,7 +392,6 @@ export function PosTerminal({
     }
   };
 
-  // --- builder ------------------------------------------------------------------
 
   const pickItem = (item: MenuItem) => {
     if (needsBuilder(item)) {
@@ -425,7 +418,6 @@ export function PosTerminal({
 
   const receipt = (o: OrderView) => print(<Receipt order={o} store={store} />);
 
-  // --- render -------------------------------------------------------------------
 
   const pending = queue.filter((e) => e.state === "pending").length;
   const rejected = queue.length - pending;

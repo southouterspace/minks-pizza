@@ -147,7 +147,6 @@ export function LockScreen({
   );
 }
 
-/** The manager PIN pad that pops over a gated action. */
 export function ManagerPinDialog({
   open,
   label,

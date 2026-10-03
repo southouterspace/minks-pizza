@@ -7,7 +7,6 @@ import type { MenuItem } from "@/lib/pricing";
 import { formatCents } from "@/lib/money";
 import { cn } from "@/lib/utils";
 
-/** Category tabs over a big item grid; typing anywhere searches the whole menu. */
 export function MenuGrid({ menu, onPick }: { menu: PosMenu; onPick: (item: MenuItem) => void }) {
   const [categoryId, setCategoryId] = useState(menu.categories[0]?.id ?? 0);
   const [query, setQuery] = useState("");

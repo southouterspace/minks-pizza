@@ -14,13 +14,11 @@ export type PromptSpec = {
   confirm: string;
   destructive?: boolean;
   reasons: string[];
-  /** Ask for an amount, capped at `max` cents. */
   amount?: { max: number; initial?: number };
   method?: boolean;
   onSubmit: (v: { reason: string; cents: number; method: TenderMethod }) => void;
 };
 
-/** Reason (one-tap presets or typed), and optionally an amount and a method. */
 export function PromptDialog({ spec, onClose }: { spec: PromptSpec; onClose: () => void }) {
   const [reason, setReason] = useState("");
   const [amount, setAmount] = useState(spec.amount?.initial ? (spec.amount.initial / 100).toFixed(2) : "");

@@ -126,7 +126,6 @@ function Money({ label, cents, tone }: { label: string; cents: number | null; to
 
 const overShortTone = (c: number | null) => (c === null || c === 0 ? undefined : c > 0 ? "good" : "bad");
 
-/** The Z-report body: expected vs counted, card vs batch, who voided and comped what. */
 export function ShiftSummary({ report, names }: { report: ShiftReport; names: Record<number, string> }) {
   return (
     <div className="flex flex-col gap-3 text-sm" data-testid="shift-report">

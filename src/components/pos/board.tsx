@@ -56,7 +56,6 @@ export function orderLabel(o: OrderView): string {
   return o.fulfillment.kind === "dine_in" ? `Table ${o.fulfillment.table}` : o.customer.name;
 }
 
-/** Every open order across channels, searchable by name, phone or number. */
 export function OrdersBoard() {
   const { board, openOrder } = usePos();
   const [lane, setLane] = useState<Lane>("all");
