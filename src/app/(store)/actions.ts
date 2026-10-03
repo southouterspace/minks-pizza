@@ -73,7 +73,6 @@ export type CheckoutPreview =
     }
   | { ok: false; error: string };
 
-/** Server-computed totals for the checkout summary. */
 export async function previewCheckout(input: unknown): Promise<CheckoutPreview> {
   const parsed = previewSchema.safeParse(input);
   if (!parsed.success) return { ok: false, error: "Invalid cart." };

@@ -54,7 +54,7 @@ export default async function LoyaltyMemberPage({ params, searchParams }: PagePr
             {member.verifiedAt ? "verified by text" : "not verified yet"}
           </p>
         </div>
-        <div className="text-right">
+        <div className="sm:text-right">
           <p className="text-3xl font-semibold tabular-nums" data-testid="member-balance">
             {member.pointsBalance.toLocaleString()}
           </p>

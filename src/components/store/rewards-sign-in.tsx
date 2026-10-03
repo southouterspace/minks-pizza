@@ -8,7 +8,6 @@ import { Field, FieldDescription, FieldLabel } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import { formatPhone } from "@/lib/loyalty";
 
-/** Two steps: text a code to the phone, then trade the code for a session. */
 export function RewardsSignIn({ next, referralCode }: { next: string; referralCode: string | null }) {
   const router = useRouter();
   const [pending, startTransition] = useTransition();

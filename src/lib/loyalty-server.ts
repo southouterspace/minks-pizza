@@ -104,12 +104,18 @@ export function ledgerStatement(entry: LedgerEntry) {
   `);
 }
 
-/** Postgres check_violation, possibly wrapped by drizzle. */
-export function isInsufficientPoints(err: unknown): boolean {
+/** The Postgres error code, looking through drizzle's wrapping. */
+function pgCode(err: unknown): string | null {
   for (let e = err; e && typeof e === "object"; e = (e as { cause?: unknown }).cause) {
-    if ((e as { code?: unknown }).code === "23514") return true;
+    const code = (e as { code?: unknown }).code;
+    if (typeof code === "string") return code;
   }
-  return false;
+  return null;
+}
+
+/** check_violation: the points_balance >= 0 CHECK. */
+export function isInsufficientPoints(err: unknown): boolean {
+  return pgCode(err) === "23514";
 }
 
 // ---------------------------------------------------------------------------
@@ -246,8 +252,9 @@ export async function findOrCreateMember(
       const [existing] = await db.select().from(loyaltyMembers).where(eq(loyaltyMembers.phone, phone));
       return { member: existing, created: false };
     } catch (err) {
-      // A referral-code collision: roll a new code.
-      if (attempt >= 3) throw err;
+      // Phone conflicts are absorbed above, so a unique violation here is a
+      // referral-code collision: roll a new code.
+      if (pgCode(err) !== "23505" || attempt >= 3) throw err;
     }
   }
 }

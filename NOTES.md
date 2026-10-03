@@ -278,6 +278,30 @@ appearing and clearing.
   production database. `mcp__Neon__create_branch` makes an isolated copy in
   seconds; point `MINKS_DATABASE_URL` at it and delete the branch afterwards.
 
+- React 19 resets a `<form>` after its action finishes. A Base UI `Switch`
+  inside one snaps its hidden checkbox back to the first-render value, so the
+  next click changes nothing React can see. `ToggleSwitchForm` now calls its
+  action in a transition instead of submitting a form.
+- Next's route announcer has `role="alert"`; target form errors by
+  `data-testid`, not `getByRole("alert")`.
+- Drizzle sends `sql` params untyped, so a raw `VALUES (...)` list reads as
+  text. Cast (`::int`, `::jsonb`) or the insert fails on integer columns.
+
+## Loyalty program (session 4)
+
+- Every balance change is one `ledgerStatement` in `src/lib/loyalty-server.ts`:
+  `INSERT ... ON CONFLICT (idem_key) DO NOTHING` feeding an `UPDATE` of the
+  cached balance. It rides inside `db.batch` with the order write that caused
+  it, so the `points_balance >= 0` CHECK rejects an overspend atomically.
+- Program rules are pure in `src/lib/loyalty.ts` (`npm test`).
+- `scripts/loyalty-audit.ts` asserts balance = SUM(ledger) for every member.
+- `scripts/e2e-loyalty.ts` wipes loyalty data: run it only against a test
+  branch, with a dev server: `E2E_BASE_URL=http://localhost:3417 npx tsx
+  --env-file=.env.local scripts/e2e-loyalty.ts`.
+- Sign-in codes go out by Twilio when `TWILIO_ACCOUNT_SID`,
+  `TWILIO_AUTH_TOKEN` and `TWILIO_FROM_NUMBER` are set; in development the
+  code shows on screen; in production without Twilio, sign-in is refused.
+
 ## Decisions & findings
 
 - 2026-08-12: Container restarted once mid-session; disk survived, background

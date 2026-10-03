@@ -4,7 +4,6 @@ import { useState, useSyncExternalStore } from "react";
 import { Check, Copy } from "lucide-react";
 import { Button } from "@/components/ui/button";
 
-/** A share link built from the current origin, with a copy button. */
 export function CopyLink({ path }: { path: string }) {
   const origin = useSyncExternalStore(
     () => () => {},
