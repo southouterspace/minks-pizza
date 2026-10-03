@@ -82,6 +82,21 @@ export default async function OrderPage({
       </p>
       <h1 className="mt-1 text-2xl font-bold tracking-tight">{label.title}</h1>
       <p className="mt-2 text-sm text-muted-foreground">{label.blurb}</p>
+      {order.status === "canceled" && order.cancelReason ? (
+        <p className="mt-2 text-sm" data-testid="cancel-reason">
+          Reason: {order.cancelReason}
+        </p>
+      ) : null}
+      {active && order.status !== "ready" && order.promisedAt ? (
+        <p className="mt-3 text-sm font-medium" data-testid="ready-around">
+          Ready around{" "}
+          {order.promisedAt.toLocaleTimeString("en-US", {
+            hour: "numeric",
+            minute: "2-digit",
+            timeZone: settings.timezone,
+          })}
+        </p>
+      ) : null}
 
       {order.status !== "canceled" ? (
         <ol className="mt-6 flex items-center gap-1.5" aria-label="Order progress">
