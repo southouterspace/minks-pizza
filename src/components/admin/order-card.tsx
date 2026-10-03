@@ -2,6 +2,7 @@ import type { InferSelectModel } from "drizzle-orm";
 import type { orderItems, orders } from "@/db";
 import { updateOrderStatus } from "@/app/admin/actions";
 import { formatCents } from "@/lib/money";
+import { canTransition, NEXT_ACTION, STATUS_META } from "@/lib/order-workflow";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -20,42 +21,6 @@ export type AdminOrder = InferSelectModel<typeof orders> & {
 };
 
 type OrderStatus = AdminOrder["status"];
-type BadgeVariant = "default" | "secondary" | "destructive" | "outline";
-
-export const STATUS_META: Record<
-  OrderStatus,
-  { label: string; variant: BadgeVariant; className?: string }
-> = {
-  new: {
-    label: "New",
-    variant: "outline",
-    className: "border-transparent! bg-warning/10 text-warning!",
-  },
-  confirmed: { label: "Confirmed", variant: "secondary" },
-  preparing: { label: "Preparing", variant: "secondary" },
-  ready: {
-    label: "Ready",
-    variant: "outline",
-    className: "border-transparent! bg-success/10 text-success!",
-  },
-  completed: {
-    label: "Completed",
-    variant: "secondary",
-    className: "text-muted-foreground!",
-  },
-  canceled: { label: "Canceled", variant: "destructive" },
-};
-
-const NEXT_ACTION: Partial<
-  Record<OrderStatus, { status: OrderStatus; label: string }>
-> = {
-  new: { status: "confirmed", label: "Confirm" },
-  confirmed: { status: "preparing", label: "Start preparing" },
-  preparing: { status: "ready", label: "Mark ready" },
-  ready: { status: "completed", label: "Complete" },
-};
-
-const CANCELABLE: readonly OrderStatus[] = ["new", "confirmed"];
 
 export function StatusBadge({ status }: { status: OrderStatus }) {
   const meta = STATUS_META[status];
@@ -113,7 +78,7 @@ function TotalRow({
 
 export function OrderCard({ order }: { order: AdminOrder }) {
   const next = NEXT_ACTION[order.status];
-  const cancelable = CANCELABLE.includes(order.status);
+  const cancelable = canTransition(order.status, "canceled");
   const isDelivery = order.orderType === "delivery";
 
   return (
@@ -227,7 +192,7 @@ export function OrderCard({ order }: { order: AdminOrder }) {
           {next ? (
             <form action={updateOrderStatus}>
               <input type="hidden" name="orderId" value={order.id} />
-              <input type="hidden" name="status" value={next.status} />
+              <input type="hidden" name="status" value={next.to} />
               <Button type="submit">{next.label}</Button>
             </form>
           ) : null}

@@ -2,7 +2,7 @@ import type { Metadata } from "next";
 import { eq } from "drizzle-orm";
 import { db, storeSettings, type DayHours } from "@/db";
 import { requireOperator } from "@/lib/auth";
-import { DAY_NAMES } from "@/lib/hours";
+import { DAY_NAMES, STORE_TIMEZONES } from "@/lib/hours";
 import {
   saveSettings,
   toggleAcceptingOrders,
@@ -23,6 +23,7 @@ import {
   FieldSet,
 } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
+import { NativeSelect, NativeSelectOption } from "@/components/ui/native-select";
 
 export const dynamic = "force-dynamic";
 
@@ -51,6 +52,7 @@ const DEFAULTS = {
   deliveryFeeCents: 0,
   deliveryMinimumCents: 0,
   taxRateBps: 0,
+  timezone: "America/Chicago",
   isPublished: false,
   isAcceptingOrders: true,
 };
@@ -261,6 +263,26 @@ export default async function SettingsPage({
             />
             <FieldDescription>
               Applied to the order subtotal, e.g. 8.75 for 8.75%.
+            </FieldDescription>
+          </Field>
+        </FieldSet>
+
+        <FieldSet>
+          <FieldLegend className="w-full border-b border-border pb-2 text-sm!">
+            Time zone
+          </FieldLegend>
+          <Field className="max-w-xs">
+            <FieldLabel htmlFor="s-timezone">Store time zone</FieldLabel>
+            <NativeSelect id="s-timezone" name="timezone" defaultValue={settings.timezone}>
+              {STORE_TIMEZONES.map((tz) => (
+                <NativeSelectOption key={tz.value} value={tz.value}>
+                  {tz.label} ({tz.value})
+                </NativeSelectOption>
+              ))}
+            </NativeSelect>
+            <FieldDescription>
+              Decides when the store&apos;s day starts for order stats, history
+              dates and promised times.
             </FieldDescription>
           </Field>
         </FieldSet>

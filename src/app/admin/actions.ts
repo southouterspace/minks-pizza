@@ -25,7 +25,9 @@ import {
   requireOperator,
   verifyPassword,
 } from "@/lib/auth";
+import { STORE_TIMEZONES } from "@/lib/hours";
 import { KITCHEN_STATIONS, type KitchenStation } from "@/lib/kds";
+import { canTransition, ORDER_STATUSES, statusTimestamps } from "@/lib/order-workflow";
 
 export type AuthFormState = { error?: string };
 
@@ -73,6 +75,11 @@ function dollarsToCents(fd: FormData, name: string): number {
 /** Kitchen-display routing for a category; blank or unknown → "kitchen". */
 function stationField(fd: FormData): KitchenStation {
   return z.enum(KITCHEN_STATIONS).catch("kitchen").parse(textField(fd, "station"));
+}
+
+function timezoneField(fd: FormData): string {
+  const zones = STORE_TIMEZONES.map((tz) => tz.value);
+  return z.enum(zones).catch("America/Chicago").parse(textField(fd, "timezone"));
 }
 
 function directionField(fd: FormData): "up" | "down" {
@@ -266,22 +273,7 @@ export async function changeOwnPassword(
 // Orders
 // ---------------------------------------------------------------------------
 
-const STATUS_TRANSITIONS: Record<string, readonly string[]> = {
-  new: ["confirmed", "canceled"],
-  confirmed: ["preparing", "canceled"],
-  preparing: ["ready"],
-  ready: ["completed"],
-  completed: [],
-  canceled: [],
-};
-
-const orderStatusSchema = z.enum([
-  "confirmed",
-  "preparing",
-  "ready",
-  "completed",
-  "canceled",
-]);
+const orderStatusSchema = z.enum(ORDER_STATUSES);
 
 export async function updateOrderStatus(formData: FormData): Promise<void> {
   await requireOperator();
@@ -293,7 +285,7 @@ export async function updateOrderStatus(formData: FormData): Promise<void> {
     .from(orders)
     .where(eq(orders.id, orderId));
   if (!order) return;
-  if (!STATUS_TRANSITIONS[order.status]?.includes(status)) return;
+  if (!canTransition(order.status, status)) return;
 
   const now = new Date();
   await db
@@ -301,7 +293,7 @@ export async function updateOrderStatus(formData: FormData): Promise<void> {
     .set({
       status,
       updatedAt: now,
-      ...(status === "ready" ? { readyAt: now } : {}),
+      ...statusTimestamps(status, now),
     })
     .where(eq(orders.id, orderId));
   revalidatePath("/admin");
@@ -790,6 +782,7 @@ export async function saveSettings(formData: FormData): Promise<void> {
     deliveryFeeCents: dollarsToCents(formData, "deliveryFee"),
     deliveryMinimumCents: dollarsToCents(formData, "deliveryMinimum"),
     taxRateBps: Math.round(taxPercent * 100),
+    timezone: timezoneField(formData),
     updatedAt: new Date(),
   };
 
