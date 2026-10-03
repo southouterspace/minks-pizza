@@ -202,7 +202,7 @@ async function main() {
       assert.deepEqual(await transitionOrder({ orderId: order.id, to: "completed", actor }), { ok: true });
       assert.deepEqual(await salesFor(order.id), [[mozz, -340200], [pep, -42525]]);
       assert.deepEqual(await lineCosts(order.id), [352]);
-      assert.deepEqual([...(await onHand([mozz, pep]))], [[mozz, 659800], [pep, 57475]]);
+      assert.deepEqual(await onHand([mozz, pep]), new Map([[mozz, 659800], [pep, 57475]]));
     });
 
     await test("running the sync again inserts nothing", async () => {
