@@ -295,12 +295,13 @@ export async function updateOrderStatus(formData: FormData): Promise<void> {
   if (!order) return;
   if (!STATUS_TRANSITIONS[order.status]?.includes(status)) return;
 
+  const now = new Date();
   await db
     .update(orders)
     .set({
       status,
-      updatedAt: new Date(),
-      ...(status === "ready" ? { readyAt: new Date() } : {}),
+      updatedAt: now,
+      ...(status === "ready" ? { readyAt: now } : {}),
     })
     .where(eq(orders.id, orderId));
   revalidatePath("/admin");

@@ -25,8 +25,7 @@ function toKdsOrder(o: OrderRow): KdsOrder {
   return {
     id: o.id,
     number: o.orderNumber,
-    // Callers only load kitchen-visible statuses; canceled never reaches here.
-    status: o.status as KdsOrder["status"],
+    status: o.status,
     type: o.orderType,
     customerName: o.customerName,
     customerPhone: o.customerPhone,

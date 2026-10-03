@@ -3,7 +3,7 @@
  * rules it applies to them (station routing, ticket timers, pizza-aware
  * modifier layout, all-day counts). Shared by server and client — no I/O.
  */
-import type { OrderItemModifier } from "@/db/schema";
+import type { OrderItemModifier, orders } from "@/db/schema";
 
 export const KITCHEN_STATIONS = ["pizza", "kitchen", "counter"] as const;
 export type KitchenStation = (typeof KITCHEN_STATIONS)[number];
@@ -42,7 +42,7 @@ export type KdsItem = {
 export type KdsOrder = {
   id: string;
   number: number;
-  status: "new" | "confirmed" | "preparing" | "ready" | "completed";
+  status: (typeof orders.$inferSelect)["status"];
   type: "pickup" | "delivery";
   customerName: string;
   customerPhone: string;
@@ -97,7 +97,6 @@ export function needsKitchen(item: Pick<KdsItem, "station">): boolean {
   return item.station !== "counter";
 }
 
-/** Items a view is responsible for. */
 export function itemsFor(order: KdsOrder, view: KdsView): KdsItem[] {
   switch (view) {
     case "all":
@@ -143,7 +142,6 @@ export function tapStage(item: KdsItem, view: KdsView): ItemStage {
   return targetStage(item, view);
 }
 
-/** Items a bump on this view moves, and where they go. */
 export function bumpPlan(order: KdsOrder, view: KdsView): { item: KdsItem; stage: ItemStage }[] {
   return itemsFor(order, view)
     .filter((i) => (view === "all" ? stageOf(i) !== "done" : isPending(i, view)))
