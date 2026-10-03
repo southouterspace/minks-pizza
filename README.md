@@ -138,6 +138,73 @@ operator can replace it from the same page. Two things to know:
   least one operator always exists — at zero accounts `/admin/setup` would
   unlock itself and the store could be claimed by anyone.
 
+#### Inventory and food cost
+
+**Toppings by half and portion.** A modifier group's kind (Modifiers page)
+decides how it behaves: **Size** picks which recipe quantities apply,
+**Toppings** lets customers put each topping on the whole pizza or one half
+and choose light, regular or extra. A half topping costs the share of its
+price set in Settings (50% by default); extra is offered only on toppings that
+have an extra price. The server reprices every choice at checkout, and the
+order line records which modifier, which half and how much, so the kitchen
+display groups toppings under WHOLE, L and R.
+
+**Ingredients and recipes** (`/admin/inventory/ingredients`, item editor,
+Modifiers page). An ingredient has a base unit (grams, millilitres or each),
+a cost entered per any purchase unit or custom pack ("case of 4 × 5 lb"), a
+storage area and shelf order, and optional low-stock and 86 thresholds. Items
+and topping modifiers carry a recipe per size; a size column overrides "All
+sizes". Halves and portions scale a topping's quantity by the factors in
+Settings (half 50%, light 50%, extra 150% by default). A negative quantity on
+an option ("No onions") removes that much from the pizza. The item editor
+shows plate cost and margin for each size.
+
+**The stock ledger.** Every change to stock is an appended
+`inventory_moves` row: a sale, a delivery, waste or a count. On hand is the
+sum; nothing is overwritten. A completed order holds its recipe usage, and any
+other status holds none. Every status change brings the order's sale moves in
+line in the same database transaction, so the kitchen display's recall gives
+the stock back and completing again takes it once. Each order line keeps its
+food cost from the moment it completed.
+
+**Counts, waste and deliveries** (`/admin/inventory`). Full counts run by
+storage area in shelf order; a spot count lists the five ingredients with the
+most sales dollars in the last 7 days. Each entry is saved on the device as
+it's typed. A count posts counted minus on hand, so the count itself is the
+variance since the last one. Deliveries update each ingredient's cost and warn
+when it moved more than 5% from the last delivery.
+
+**Auto-86.** Once an ingredient has been received or counted, falling to its
+86 threshold turns off every item and option whose recipe uses it, notes it on
+the order that crossed it, and shows a red banner across the admin. Turning an
+item back on by hand sticks. A delivery or count that lifts the stock above
+the threshold turns back on exactly what inventory turned off.
+
+**Reports** (`/admin/reports`). Food cost % by day, actual vs theoretical
+usage for any count (largest cost first, so mozzarella usually leads), topping
+mix by size (attach rate, halves, light and extra), and margin by item and
+size, flagged below the minimum margin in Settings. Each exports to CSV.
+
+##### Deploying the inventory schema
+
+Additive: new enums and tables, nullable or defaulted columns on
+`modifier_groups`, `modifiers`, `order_items` and `store_settings`. Migrate
+before deploying the code, then mark the size and topping groups:
+
+```bash
+MINKS_DATABASE_URL=<production url> npm run db:push
+```
+
+```sql
+update modifier_groups set kind = 'size'     where name ilike 'size%';
+update modifier_groups set kind = 'toppings' where name ilike '%topping%';
+```
+
+`npx tsx --env-file=<env file> scripts/seed-inventory.ts` adds a starter set of
+ingredients and per-size recipes for the seeded menu. It is idempotent and
+sets no 86 thresholds. Orders placed before the migration have no modifier
+ids, so they render as before and are never depleted.
+
 ### Kitchen display (KDS)
 
 `/kitchen` is a full-screen, dark, touch-first kitchen display built from
@@ -242,10 +309,14 @@ src/
                  order-workflow.ts (order lifecycle rules, pure),
                  order-writes.ts (logged status/ETA/payment/note writes),
                  order-queries.ts (board, history search, export, detail, day stats),
-                 kds.ts (kitchen display rules, pure), kds-server.ts (queries + actions)
+                 kds.ts (kitchen display rules, pure), kds-server.ts (queries + actions),
+                 units.ts, unit-entry.ts, toppings.ts, recipes.ts (inventory rules, pure),
+                 inventory.ts (stock ledger, counts, deliveries, auto-86),
+                 inventory-reports.ts (food cost, variance, topping mix, margins)
   app/(store)/   customer storefront (menu, cart, checkout, order status)
   app/admin/     operator dashboard (orders board, history + detail, menu,
-                 modifiers, settings, team); CSV export in app/api/admin/orders
+                 modifiers, inventory, reports, settings, team); CSV exports in
+                 app/api/admin
   app/kitchen/   kitchen display (KDS); data via app/api/kds
   components/    cart context, storefront + admin UI
 ```
@@ -255,19 +326,17 @@ src/
 Informed by industry research (see `docs/RESEARCH.md`), roughly in order:
 
 1. **Stripe payment capture** — the seam is ready (see above)
-2. **Half-and-half toppings & per-size topping pricing** — the most
-   pizza-specific gaps; both touch the pricing engine, build together
-3. **Scheduled orders** (ASAP vs later) and rush-aware prep-time estimates
-4. **SMS status notifications** — cuts "where's my order" calls
-5. **Delivery zones** (radius/ZIP validation, tiered fees)
-6. **Allergen/dietary tags & item photos** (schema already has `imageUrl`)
-7. **Customer accounts with saved addresses & one-tap reorder** — optional,
+2. **Scheduled orders** (ASAP vs later) and rush-aware prep-time estimates
+3. **SMS status notifications** — cuts "where's my order" calls
+4. **Delivery zones** (radius/ZIP validation, tiered fees)
+5. **Allergen/dietary tags & item photos** (schema already has `imageUrl`)
+6. **Customer accounts with saved addresses & one-tap reorder** — optional,
    post-purchase (guest checkout stays the default)
-8. **Coupons/promo codes**; refunds (the `refunded` payment status exists but
-   nothing sets it yet)
-9. **KDS follow-ups** (from `docs/kds-research.md`): half-and-half pizzas end
-   to end (ordering, pricing and a left/right ticket layout, the most-requested
-   pizza KDS feature); a kitchen-only role so the display tablet doesn't carry
-   full admin access; promised-time sorting once scheduled orders exist
+7. **Coupons/promo codes**; refunds (the `refunded` payment status exists but
+   nothing sets it yet; the stock ledger already treats a refunded order as
+   using nothing, so a refund action only needs to batch the same inventory
+   sync that status changes do)
+8. **KDS follow-ups** (from `docs/kds-research.md`): a kitchen-only role so
+   the display tablet doesn't carry full admin access; promised-time sorting once scheduled orders exist
 
 See `NOTES.md` for the build log and decision record.

@@ -345,6 +345,51 @@ reasons, payment recording, printing, day stats and a new-order alert.
 - The e2e creates and deletes its own operator. On a database that already
   has operators, `e2e-kds.ts` needs `kitchen@minks.example` to exist.
 
+## Session 6 — Pizza topping inventory (issue #11)
+
+**Ask:** issue #11. Toppings by half and portion, ingredients with per-size
+recipes, stock depleted by completed orders, counts, waste and deliveries,
+food-cost reports and auto-86. See README → Inventory and food cost.
+
+- **Group kind, not names.** `modifier_groups.kind` (choice, size, toppings)
+  decides which group sizes recipes and which offers halves and portions. The
+  KDS name regexes remain only for order lines placed before #11.
+- **Structured choice on the order line.** `OrderItemModifier` gains
+  `modifierId`, `placement` and `portion`. The client sends `{id, placement,
+  portion}`; `priceCart` reprices with `toppingPriceCents`, the same pure
+  function the dialog uses, so the displayed total is the charged total.
+- **Integer units everywhere.** Quantities are milli base units (1 g = 1000),
+  costs are millicents per base unit. Each ingredient's usage for an order is
+  rounded once, at the end.
+- **Recipes per owner per size.** A size line beats the "all sizes" line.
+  Halves and portions are factors in Settings. Negative lines on an option
+  model removals, and a line's usage is clamped at zero.
+- **Append-only ledger, convergent sync.** On hand is the sum of
+  `inventory_moves`. `inventorySyncStatement` brings an order's sale moves to
+  "full usage if completed and not refunded, else nothing" and inserts only
+  the difference. It runs in the same `db.batch` as every status move (admin,
+  KDS handoff, KDS recall), reads the status inside the statement, and running
+  it twice changes nothing. Recall from completed gives the stock back.
+- **A count is the variance.** A count posts counted − on hand, computed in the
+  insert statement, so the count move *is* the variance since the previous
+  count. The variance report reads it straight off the ledger.
+- **Auto-86 with crossing semantics.** `syncStockOuts` keeps one `stock_outs`
+  row per out ingredient, listing what it turned off. Restoring turns those
+  back on unless another stock-out still lists them. An operator re-enabling
+  an item leaves the row, so later sales don't re-86 it. Only ingredients
+  that have been received or counted are judged: before that, on hand is just
+  minus sales, and a threshold would 86 the menu on day one.
+- **Food cost % divides by costed sales**, the line totals with a known
+  cost. Coverage is shown beside it, so unknown-cost lines never pass as free.
+
+**Tested** against throwaway branches of the `minks-kds-test` Neon project:
+`test-inventory-domain` (12), `test-ticket-line` (4), `test-unit-entry` (5),
+`test-inventory-db` (12), `test-inventory-reports` (10) and the e2e scripts
+`e2e-toppings` (19), `e2e-recipes` (40), `e2e-inventory-ops` (28),
+`e2e-reports` (22) and `e2e-inventory-story` (32: storefront order → KDS
+handoff → depletion → recall → auto-86 banner → delivery restores → variance
+report, run twice). All earlier scripts still pass.
+
 ## Gotchas hit (for future sessions)
 
 - Playwright `getByRole(name:)` is substring-matching: "Publish store" also
@@ -378,6 +423,18 @@ reasons, payment recording, printing, day stats and a new-order alert.
 - Destructive e2e (creating/removing operator accounts) must not run against the
   production database. `mcp__Neon__create_branch` makes an isolated copy in
   seconds; point `MINKS_DATABASE_URL` at it and delete the branch afterwards.
+- `db.execute(sql…)` is a thenable. Returned from an async function, the
+  caller's `await` runs it, so it is gone before `db.batch` sees it. Build
+  batch statements synchronously (`inventorySyncStatement(plan)`).
+- drizzle-kit 0.31 can't read back `UNIQUE NULLS NOT DISTINCT`. Every push
+  offered to truncate the table to re-add it, and a non-interactive push
+  failed. `recipe_lines` uses a `coalesce` expression index instead, which
+  push rebuilds each time, harmlessly.
+- React resets a form after its action finishes, which snapped controlled
+  unit selects back to their first option. The count and receive forms submit
+  through `onSubmit` + `useTransition` instead.
+- `e2e-operator.ts` expects an order on the live board and `owner@minks.example`
+  / `pizza-test-1234` to exist. On a fresh test branch, create both first.
 
 ## Decisions & findings
 
