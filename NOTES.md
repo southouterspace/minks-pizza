@@ -251,6 +251,112 @@ handoff with database state checked at every step, recall, Undo, bump-bar
 keys, a new order appearing live, the cancel alert, and the offline banner
 appearing and clearing.
 
+## Session 5 — Employee time tracking
+
+**Ask:** let the owner schedule hourly staff around the rush, see who is on
+the clock, keep labor % in check and hand overtime-correct hours to payroll,
+and let staff clock in on a shared tablet with a PIN and no login of their
+own.
+
+**Built:** `/admin/staff` (Overview, Schedule, Timesheets, Employees, Time
+off), the `/timeclock` kiosk, a Staff & payroll settings card, and the CSV
+export at `/api/admin/timesheets`. See README → Staff: scheduling and time
+clock.
+
+- **Data model.** `employees` (separate from `operators`), `employee_roles`
+  with a rate per role, `shifts` (null employee = open shift, null
+  `published_at` = draft), `time_entries` with `time_breaks`,
+  `time_entry_audit`, and `time_off_requests`. New `store_settings` columns
+  hold the timezone and the payroll rules. Everything is additive.
+- **Pure domain** (`src/lib/timeclock.ts`, `src/lib/zoned.ts`): the clock
+  state machine, payroll math, timesheet flags, schedule conflicts,
+  punch-to-shift matching and calendar math. `scripts/test-timeclock.ts`
+  checks them against hand-computed values.
+
+**Design decisions and why:**
+
+- **The clock is a state machine.** `ClockState` is off, working or on a
+  break, and `ALLOWED` lists the actions each state accepts. `planClock`
+  sorts every request into apply, replay or refuse. A replay is an action
+  that finds the clock already where it leads, such as a second clock-in,
+  and it answers with the current view instead of an error. The kiosk draws
+  its buttons from the same table. Clocking out from a break is refused, so
+  every break record gets closed.
+- **The database owns "one open punch".** A partial unique index on
+  `time_entries(employee_id) where clock_out_at is null`, and the same for
+  open breaks. The state check handles retries; the index handles two
+  tablets racing, and its violation is caught and answered as a replay.
+- **Calendar math in the store's zone, with Intl only.** Server, tablet and
+  manager may sit in different zones. Every day boundary goes through
+  `zoned.ts`, and `zonedInstant` re-checks the offset once, so a DST night
+  shift comes out an hour short or long, as it really is.
+- **A punch belongs to the day it started.** This is a common payroll
+  convention, and it keeps a 5 PM to 1 AM close on one day.
+- **Overtime without double counting.** Daily overtime and double time come
+  first. Weekly overtime then converts only regular minutes past the weekly
+  threshold, walking the days in order. Pay uses the FLSA weighted average:
+  straight time at each punch's rate, then half (or a full) regular rate as
+  the premium. Cents are rounded once, at the end, with integer arithmetic.
+- **Rates are snapshotted at clock-in**, so a raise never rewrites past pay.
+  A manager edit that changes the role takes that role's current rate.
+- **Every manager change to time is audited with a reason**, with before
+  and after snapshots, and the audit row survives the punch's deletion.
+  Editing an approved punch clears the approval and logs that too.
+- **PINs are HMAC digests, not bcrypt.** The kiosk looks an employee up by
+  PIN alone, which needs a deterministic digest, and the unique index on it
+  rejects duplicates. The key is `SESSION_SECRET`. Brute force is limited
+  only by requiring an operator session on the tablet (see Not built).
+- **Archiving, not deleting.** Payroll history references the employee
+  (`time_entries` uses `on delete restrict`). Archiving refuses while they
+  are on the clock and turns their upcoming shifts into open shifts.
+- **Edits keep a shift's published state**, so staff see a moved shift at
+  once instead of it vanishing until the next publish.
+
+**Spec changes made while building:**
+
+- `computeWeek` takes `now`. Open punches count up to now, and a pure
+  function can't read the clock. It returns per-punch minutes and an `open`
+  marker. Flags come from `entryFlags`, which needs the shift and the audit
+  history that `computeWeek` doesn't have.
+- `shiftConflicts` takes the weekly overtime threshold and week start. The
+  `overtime` conflict can't be decided without them.
+- Added `punchProblem` (validation for hand-entered punches),
+  `remainingShiftMinutes` (the rest of a shift already under way counts
+  toward projected hours) and a partial unique index on open breaks.
+- The CSV is one rectangular table with a `Line` column (`entry` or
+  `total`), so entry lines and summary lines import into one sheet.
+
+**Tested:**
+
+- `scripts/test-timeclock.ts`: 29 pure checks. Covered: zoned helpers
+  across both 2026 New York DST changes and an overnight shift; 45 h →
+  5 h overtime and $712.50; two rates → a $41.67 weighted-average premium;
+  California 8/12 plus weekly 40; paid and unpaid breaks; every state ×
+  action; every conflict and flag.
+- `scripts/e2e-timeclock.ts`: 51 checks in a real browser against the
+  `timeclock-test` branch of `autumn-bar-62526195`, asserting both screen
+  and database. Covered: employee with two roles and a PIN, duplicate PIN,
+  schedule and publish, kiosk wrong PIN, clock in, break, clock out with
+  tips, approve, edit with reason (audit and cleared approval), CSV, kiosk
+  time off through approval to the schedule cell, two concurrent clock-ins
+  leaving one open punch, the database refusing a second open punch,
+  manager clock-out, settings, the early clock-in refusal, and 375px
+  layouts.
+
+**Not built:**
+
+- Payroll provider integration (Gusto, ADP). The CSV is the hand-off.
+- Tip pooling ([#5](https://github.com/southouterspace/minks-pizza/issues/5)).
+  Declared tips are recorded per punch only.
+- SMS shift notifications.
+- Shift swaps between staff ([#6](https://github.com/southouterspace/minks-pizza/issues/6)).
+- Geofenced mobile clock-in. The clock is the shared tablet.
+- PIN brute-force lockout and manager reset
+  ([#7](https://github.com/southouterspace/minks-pizza/issues/7)). Today
+  the only protection is that the tablet needs an operator session.
+- California seventh-consecutive-day overtime, and split-shift or
+  meal-penalty pay. The no-meal-break flag only flags.
+
 ## Gotchas hit (for future sessions)
 
 - Playwright `getByRole(name:)` is substring-matching: "Publish store" also
@@ -274,6 +380,12 @@ appearing and clearing.
   instead of reading it once.
 - Screenshots taken right after a tab click can catch `transition-colors`
   halfway, so two tabs look selected. Check `aria-pressed`, not pixels.
+- `tsx` scripts can't import modules marked `import "server-only"` (it
+  throws outside Next). The time clock e2e recomputes the PIN digest with
+  `node:crypto` instead of importing `timeclock-server.ts`.
+- `npx tsc --noEmit` on a fresh checkout fails on `LayoutProps` and
+  `PageProps` until `npx next typegen` (or `next dev` / `next build`) has
+  generated the route types.
 - Destructive e2e (creating/removing operator accounts) must not run against the
   production database. `mcp__Neon__create_branch` makes an isolated copy in
   seconds; point `MINKS_DATABASE_URL` at it and delete the branch afterwards.

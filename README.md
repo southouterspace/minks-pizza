@@ -65,6 +65,9 @@ npm run dev
    [Kitchen display](#kitchen-display-kds) below.
 7. **Team** (`/admin/team`) — add or remove operator accounts, and change your
    own password. See [Operator accounts](#operator-accounts) below.
+8. **Staff** (`/admin/staff`) — employees, the weekly schedule, timesheets and
+   time off, plus the shared time clock at `/timeclock`. See
+   [Staff: scheduling and time clock](#staff-scheduling-and-time-clock) below.
 
 #### Operator accounts
 
@@ -156,6 +159,64 @@ update categories set station = 'counter' where name ilike '%drink%' or name ili
 
 Orders placed before the migration default to the Kitchen station.
 
+### Staff: scheduling and time clock
+
+Employees are not operators. They never sign in to the admin. Each one gets
+a 4 to 6 digit PIN for the shared time clock, and the PIN is stored hashed
+(HMAC-SHA256 keyed by `SESSION_SECRET`), so it is shown only once.
+
+**Manager side (`/admin/staff`).**
+
+| Tab | What it does |
+|---|---|
+| Overview | Who is on the clock now (with a manager clock-out that needs a reason), late and no-show shifts, today's labor cost against today's sales as labor %, this week's worked against scheduled hours, overtime risk, and counts that need attention. Refreshes every 30 seconds. |
+| Schedule | A week grid with one row per active employee plus open shifts. Shift chips show draft or published state and conflicts: overlap, approved or requested time off, outside availability, overtime. **Copy last week** adds drafts and skips shifts already there. **Publish** makes the week's drafts visible to staff. Footer rows show hours, labor cost, forecast sales (the same weekday's average over the previous four weeks) and projected labor %. |
+| Timesheets | Per employee: daily paid hours, regular, overtime and double-time hours, tips, estimated gross, flags and approval. Expand a row to edit or delete a punch, or add a missed one. Every change needs a reason and is kept in an audit log under the punch. Editing an approved punch clears the approval. **Export CSV** downloads the payroll file. |
+| Employees | Contact details, roles with a rate for each, a primary role, weekly availability and the PIN. Archive someone who leaves: their history stays, they drop off the schedule and the clock, and their upcoming shifts become open shifts. |
+| Time off | Pending requests with the shifts they conflict with, approve or deny, and time off entered on someone's behalf (approved at once). |
+
+Store rules live in **Settings → Staff & payroll**: the store timezone, the
+payroll week start, weekly overtime (40 h), optional daily overtime and double
+time (California: 8 h and 12 h), the no-meal-break flag, the late and
+early-out grace, and an optional block on clocking in early.
+
+**Payroll rules.** Each punch counts toward the store-local day it started on,
+so an overnight close belongs to the day it opened. Paid minutes are the
+punch minus unpaid breaks, in whole minutes with no rounding to the quarter
+hour. Daily overtime comes first, then weekly overtime converts only regular
+minutes past the weekly threshold. Someone who works two rates in a week gets
+overtime at the FLSA weighted-average regular rate. Open punches count up to
+now on screen but are left out of the CSV.
+
+**Time clock (`/timeclock`).** Open it on a tablet signed in as an operator,
+as with the kitchen display. Staff then:
+
+1. Enter their PIN on the pad (a keyboard works too).
+2. Clock in. The role defaults to the scheduled shift's role, then to their
+   primary role. Someone with more than one role can pick another.
+3. Start a meal break (unpaid) or a rest break (paid), and end it. Clocking
+   out is offered only after the break ends.
+4. Clock out, optionally declaring cash tips, and see the shift summary.
+5. Check today's shift, the next 7 days of published shifts and this week's
+   hours, and request time off.
+
+The screen returns to the PIN pad 20 seconds after the last touch, and 4
+seconds after each confirmation. The tablet never holds an employee session:
+the PIN is sent with every request. A double tap or a second tablet can't
+open two punches, because the database allows one open punch per employee.
+
+#### Deploying the staff schema
+
+The staff tables and settings columns are additive, so migrate before
+deploying this code:
+
+```bash
+MINKS_DATABASE_URL=<production url> npm run db:push   # new enums and tables, settings columns with defaults
+```
+
+Then open **Settings → Staff & payroll** and set the store timezone. It
+defaults to America/New_York, and every shift, day and payroll week uses it.
+
 ### Customer (`/`)
 
 Menu browsing with category navigation → item customization dialog (sizes,
@@ -185,10 +246,13 @@ minimums, and recomputes every price at order time.
 src/
   db/            schema.ts (Drizzle), seed.ts, index.ts (client)
   lib/           menu.ts, orders.ts (pricing + creation), auth.ts, validation.ts,
-                 kds.ts (kitchen display rules, pure), kds-server.ts (queries + actions)
+                 kds.ts (kitchen display rules, pure), kds-server.ts (queries + actions),
+                 zoned.ts (store-timezone calendar math), timeclock.ts (staff rules and
+                 payroll math, pure), timeclock-server.ts (staff queries + actions)
   app/(store)/   customer storefront (menu, cart, checkout, order status)
-  app/admin/     operator dashboard (orders, menu, modifiers, settings, team)
+  app/admin/     operator dashboard (orders, menu, modifiers, settings, team, staff)
   app/kitchen/   kitchen display (KDS); data via app/api/kds
+  app/timeclock/ staff time clock kiosk; data via app/api/timeclock
   components/    cart context, storefront + admin UI
 ```
 
@@ -210,5 +274,11 @@ Informed by industry research (see `docs/RESEARCH.md`), roughly in order:
    to end (ordering, pricing and a left/right ticket layout, the most-requested
    pizza KDS feature); a kitchen-only role so the display tablet doesn't carry
    full admin access; promised-time sorting once scheduled orders exist
+10. **Staff follow-ups**: tip pooling
+    ([#5](https://github.com/southouterspace/minks-pizza/issues/5)), shift swaps
+    between staff ([#6](https://github.com/southouterspace/minks-pizza/issues/6)),
+    PIN lockout and manager reset
+    ([#7](https://github.com/southouterspace/minks-pizza/issues/7)), payroll
+    provider export (Gusto, ADP), SMS shift notifications
 
 See `NOTES.md` for the build log and decision record.
