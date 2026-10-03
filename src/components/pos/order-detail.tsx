@@ -13,6 +13,7 @@ import { PaymentChip, StatusChip, orderLabel } from "./board";
 import { usePos } from "./context";
 import { PromptDialog, type PromptSpec } from "./prompt-dialog";
 import { TenderDialog } from "./tender-dialog";
+import { ChargeRows } from "./totals";
 import { Tap } from "./touch";
 
 const VOID_REASONS = ["Customer changed mind", "Rang in wrong", "Made wrong", "Took too long"];
@@ -212,28 +213,7 @@ export function OrderDetail({
             })}
           </ul>
           <dl className="grid grid-cols-2 gap-y-0.5 border-t px-4 py-3 text-sm tabular-nums">
-            <dt className="text-muted-foreground">Subtotal</dt>
-            <dd className="text-right">{formatCents(order.totals.subtotalCents)}</dd>
-            {order.totals.discountCents > 0 && (
-              <>
-                <dt className="text-muted-foreground">Discounts</dt>
-                <dd className="text-right">−{formatCents(order.totals.discountCents)}</dd>
-              </>
-            )}
-            <dt className="text-muted-foreground">Tax</dt>
-            <dd className="text-right">{formatCents(order.totals.taxCents)}</dd>
-            {order.totals.deliveryFeeCents > 0 && (
-              <>
-                <dt className="text-muted-foreground">Delivery</dt>
-                <dd className="text-right">{formatCents(order.totals.deliveryFeeCents)}</dd>
-              </>
-            )}
-            {order.totals.tipCents > 0 && (
-              <>
-                <dt className="text-muted-foreground">Tip</dt>
-                <dd className="text-right">{formatCents(order.totals.tipCents)}</dd>
-              </>
-            )}
+            <ChargeRows totals={order.totals} />
             <dt className="font-semibold">Total</dt>
             <dd className="text-right font-semibold">{formatCents(order.totals.totalCents)}</dd>
             <dt className="text-muted-foreground">Paid</dt>

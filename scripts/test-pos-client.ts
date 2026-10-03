@@ -10,6 +10,8 @@ import { cyclePlacement, defaultSelections, tapTopping } from "../src/lib/pos-cl
 import { draftLine, draftProblem, draftReducer, draftTotals, emptyDraft, firePlan, lineSummary, toSubmitRequest, type Draft, type NewOrderDraft } from "../src/lib/pos-client/draft";
 import { reorderLines, type MenuItem, type PricingPolicy } from "../src/lib/pricing";
 import { withCounts } from "../src/lib/reports";
+import { parseCents } from "../src/lib/money";
+import { chargeRows } from "../src/components/pos/totals";
 import { formatStoreClock, formatStoreTime, nextStoreTime, storeHhmm } from "../src/lib/store-time";
 
 let failures = 0;
@@ -159,6 +161,17 @@ check(
   "reorder comes back priced, with its ticket text, ready to drop in the draft",
   [reordered.lines.map((l) => [l.name, l.unitPriceCents, lineSummary(l.modifiers)]), reordered.unavailable],
   [[["Cheese Pizza", 1862, 'Large 14" · Hand Tossed · L: Pepperoni · R: Mushrooms']], [{ name: "Calzone", reason: "No longer on the menu" }]],
+);
+
+check("typed money parses to cents", ["12.5", "$1,200", "0.07", "1.234", "", ".", "abc"].map(parseCents), [1250, 120000, 7, null, null, null, null]);
+check(
+  "a check's charge rows skip a zero fee and sign the discount",
+  chargeRows({ subtotalCents: 1699, discountCents: 800, taxCents: 74, deliveryFeeCents: 0, tipCents: 0 }),
+  [
+    { label: "Subtotal", amount: "$16.99" },
+    { label: "Discounts", amount: "−$8.00" },
+    { label: "Tax", amount: "$0.74" },
+  ],
 );
 
 console.log(failures === 0 ? "\nAll POS client checks passed." : `\n${failures} check(s) failed.`);

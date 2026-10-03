@@ -4,15 +4,16 @@
  * replayable `SubmitOrderRequest`. Prices come from `priceLine`, the same
  * function the server runs, so the panel never waits on the network.
  */
-import type {
-  Address,
-  Channel,
-  FirePlan,
-  Fulfillment,
-  PosMenu,
-  SubmitLine,
-  SubmitOrderRequest,
-  TenderInput,
+import {
+  digitsOf,
+  type Address,
+  type Channel,
+  type FirePlan,
+  type Fulfillment,
+  type PosMenu,
+  type SubmitLine,
+  type SubmitOrderRequest,
+  type TenderInput,
 } from "@/lib/orders";
 import { ticketLine } from "@/lib/kds";
 import { priceLine, type LineModifier, type MenuItem, type PricingPolicy, type Selection } from "@/lib/pricing";
@@ -208,15 +209,13 @@ export function draftTotals(d: Draft, menu: Pick<PosMenu, "taxRateBps" | "delive
   return { subtotalCents, taxCents, deliveryFeeCents, totalCents: subtotalCents + taxCents + deliveryFeeCents };
 }
 
-const digits = (s: string) => s.replace(/\D/g, "");
-
 /** The first thing stopping this draft from being sent, or null. */
 export function draftProblem(d: Draft): string | null {
   if (d.lines.length === 0) return "Add an item first.";
   if (d.kind === "append") return null;
   const mode = MODES[d.mode];
   if (mode.phoneFirst) {
-    if (digits(d.customer.phone).length < 7) return "Enter the caller's phone number.";
+    if (digitsOf(d.customer.phone).length < 7) return "Enter the caller's phone number.";
     if (!d.customer.name.trim()) return "Enter the caller's name.";
   }
   if (mode.fulfillment === "delivery" && (!d.address.line1.trim() || !d.address.zip.trim())) {
@@ -263,7 +262,7 @@ export function toSubmitRequest(d: NewOrderDraft, quoteMinutes: number, tenders:
     channel: mode.channel,
     fulfillment: fulfillmentOf(d),
     customer:
-      digits(phone).length >= 7
+      digitsOf(phone).length >= 7
         ? { phone, name: d.customer.name.trim() || "Guest", email: null, saveAddress: mode.fulfillment === "delivery" }
         : null,
     notes: d.notes.trim() || null,

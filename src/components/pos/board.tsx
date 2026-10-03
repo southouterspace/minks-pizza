@@ -3,7 +3,7 @@
 import { useMemo, useState } from "react";
 import { Search } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
-import { channelLabel, dueCents, PAYMENT_LABEL, paymentState, type KitchenStatus, type OrderView } from "@/lib/orders";
+import { channelLabel, digitsOf, dueCents, PAYMENT_LABEL, paymentState, type KitchenStatus, type OrderView } from "@/lib/orders";
 import { formatCents } from "@/lib/money";
 import { formatStoreTime } from "@/lib/store-time";
 import { cn } from "@/lib/utils";
@@ -64,7 +64,7 @@ export function OrdersBoard() {
 
   const shown = useMemo(() => {
     const q = query.trim().toLowerCase();
-    const qDigits = q.replace(/\D/g, "");
+    const qDigits = digitsOf(q);
     const test = LANES.find((l) => l.value === lane)!.test;
     return orders.filter(
       (o) =>
@@ -72,7 +72,7 @@ export function OrdersBoard() {
         (!q ||
           orderLabel(o).toLowerCase().includes(q) ||
           String(o.number) === q.replace(/^#/, "") ||
-          (qDigits.length >= 3 && o.customer.phone.replace(/\D/g, "").includes(qDigits))),
+          (qDigits.length >= 3 && digitsOf(o.customer.phone).includes(qDigits))),
     );
   }, [orders, lane, query]);
 

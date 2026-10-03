@@ -7,6 +7,7 @@ import { formatCents } from "@/lib/money";
 import { formatStoreTime, nextStoreTime, storeHhmm } from "@/lib/store-time";
 import { cn } from "@/lib/utils";
 import { usePos } from "./context";
+import { ChargeRows } from "./totals";
 import { Segmented, Tap } from "./touch";
 
 export function OrderPanel({
@@ -73,16 +74,7 @@ export function OrderPanel({
       <div className="flex flex-col gap-2 border-t p-3">
         {!appending && <NewOrderFooter draft={draft} dispatch={dispatch} />}
         <dl className="grid grid-cols-2 gap-y-0.5 text-sm tabular-nums" data-testid="totals">
-          <dt className="text-muted-foreground">Subtotal</dt>
-          <dd className="text-right">{formatCents(totals.subtotalCents)}</dd>
-          <dt className="text-muted-foreground">Tax</dt>
-          <dd className="text-right">{formatCents(totals.taxCents)}</dd>
-          {totals.deliveryFeeCents > 0 && (
-            <>
-              <dt className="text-muted-foreground">Delivery</dt>
-              <dd className="text-right">{formatCents(totals.deliveryFeeCents)}</dd>
-            </>
-          )}
+          <ChargeRows totals={totals} />
           <dt className="text-lg font-semibold">{appending ? "Adds" : "Total"}</dt>
           <dd className="text-right text-lg font-semibold" data-testid="draft-total">
             {formatCents(totals.totalCents)}

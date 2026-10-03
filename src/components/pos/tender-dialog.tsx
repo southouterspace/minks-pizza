@@ -3,18 +3,11 @@
 import { useState } from "react";
 import { Banknote, CreditCard, Printer, Users } from "lucide-react";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
-import type { TenderInput } from "@/lib/orders";
+import { digitsOf, type TenderInput } from "@/lib/orders";
 import { shareByItem, splitEvenly } from "@/lib/pricing";
-import { formatCents } from "@/lib/money";
+import { formatCents, parseCents } from "@/lib/money";
 import { cn } from "@/lib/utils";
 import { Segmented, Tap } from "./touch";
-
-/** "12.5" → 1250; null when it isn't money. */
-export function parseCents(s: string): number | null {
-  const t = s.replace(/[$,\s]/g, "");
-  if (!/^\d*(\.\d{0,2})?$/.test(t) || t === "" || t === ".") return null;
-  return Math.round(Number(t) * 100);
-}
 
 const QUICK_CASH = [2000, 5000, 10000];
 
@@ -99,6 +92,7 @@ export function TenderDialog({
     void apply({ method: "cash", amountCents, tenderedCents, tipCents: 0, last4: null });
   };
 
+  const typedCash = parseCents(cashText);
   const cardAmount = parseCents(card.amount) ?? applying;
   const cardTip = parseCents(card.tip) ?? 0;
 
@@ -224,14 +218,13 @@ export function TenderDialog({
                     value={cashText}
                     onChange={(e) => setCashText(e.target.value)}
                     onKeyDown={(e) => {
-                      const c = parseCents(cashText);
-                      if (e.key === "Enter" && c) cash(c);
+                      if (e.key === "Enter" && typedCash) cash(typedCash);
                     }}
                     placeholder="Other amount handed over"
                     aria-label="Cash handed over"
                     className="h-12 flex-1 rounded-xl border bg-background px-3 text-lg outline-none focus:ring-3 focus:ring-ring/40"
                   />
-                  <Tap disabled={busy || !parseCents(cashText)} onClick={() => cash(parseCents(cashText)!)}>
+                  <Tap disabled={busy || !typedCash} onClick={() => typedCash && cash(typedCash)}>
                     <Banknote className="size-5" /> Take cash
                   </Tap>
                 </div>
@@ -249,7 +242,7 @@ export function TenderDialog({
                   </label>
                   <label className="flex flex-col gap-1 text-sm text-muted-foreground">
                     Last 4 (optional)
-                    <input inputMode="numeric" maxLength={4} value={card.last4} onChange={(e) => setCard({ ...card, last4: e.target.value.replace(/\D/g, "") })} aria-label="Card last 4" className="h-12 rounded-xl border bg-background px-3 text-lg text-foreground outline-none" />
+                    <input inputMode="numeric" maxLength={4} value={card.last4} onChange={(e) => setCard({ ...card, last4: digitsOf(e.target.value) })} aria-label="Card last 4" className="h-12 rounded-xl border bg-background px-3 text-lg text-foreground outline-none" />
                   </label>
                 </div>
                 <Tap

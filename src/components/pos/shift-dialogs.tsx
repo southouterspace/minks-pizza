@@ -8,10 +8,10 @@ import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } f
 import { closeShift, drawerEvent, openShift, previewShift } from "@/app/pos/actions";
 import { DRAWER_ROLE, type DrawerEventKind } from "@/lib/orders";
 import { withCounts, type ShiftReport } from "@/lib/reports";
-import { formatCents } from "@/lib/money";
+import { formatCents, parseCents } from "@/lib/money";
 import { cn } from "@/lib/utils";
 import { failureText, usePos } from "./context";
-import { parseCents } from "./tender-dialog";
+import { PromptDialog, type PromptSpec } from "./prompt-dialog";
 import { Tap } from "./touch";
 
 const field = "h-12 rounded-xl border bg-background px-3 text-lg text-foreground outline-none focus:ring-3 focus:ring-ring/40";
@@ -69,49 +69,23 @@ const DRAWER: Record<DrawerEventKind, { title: string; amount: boolean; reasons:
 
 export function DrawerDialog({ kind, onClose }: { kind: DrawerEventKind; onClose: () => void }) {
   const { act } = usePos();
-  const spec = DRAWER[kind];
-  const [amount, setAmount] = useState("");
-  const [reason, setReason] = useState("");
-  const [id] = useState(() => crypto.randomUUID());
-  const cents = spec.amount ? parseCents(amount) : 0;
-  const ok = reason.trim() && cents !== null && (!spec.amount || cents > 0);
-
-  return (
-    <Dialog open onOpenChange={(o) => !o && onClose()}>
-      <DialogContent className="w-[min(440px,calc(100vw-2rem))] gap-4 sm:max-w-none!">
-        <DialogHeader>
-          <DialogTitle className="text-lg">{spec.title}</DialogTitle>
-          <DialogDescription>{DRAWER_ROLE[kind] === "manager" ? "Needs a manager. Recorded against this shift's drawer." : "Recorded against this shift's drawer."}</DialogDescription>
-        </DialogHeader>
-        {spec.amount && <input inputMode="decimal" autoFocus value={amount} onChange={(e) => setAmount(e.target.value)} placeholder="Amount" aria-label="Amount" className={field} />}
-        <div className="flex flex-wrap gap-2">
-          {spec.reasons.map((r) => (
-            <button key={r} type="button" onClick={() => setReason(r)} className={cn("h-11 rounded-xl border px-3 text-sm", reason === r ? "border-primary bg-primary text-primary-foreground" : "hover:bg-muted")}>
-              {r}
-            </button>
-          ))}
-        </div>
-        <input value={reason} onChange={(e) => setReason(e.target.value)} placeholder="Reason" aria-label="Reason" className={field} />
-        <div className="grid grid-cols-2 gap-2">
-          <Tap variant="outline" onClick={onClose}>
-            Back
-          </Tap>
-          <Tap
-            disabled={!ok}
-            onClick={async () => {
-              const r = await act(spec.title, (approval) => drawerEvent({ id, kind, cents: cents ?? 0, reason: reason.trim(), approval }));
-              if (r) {
-                notify.success(`${spec.title} recorded`);
-                onClose();
-              }
-            }}
-          >
-            Record
-          </Tap>
-        </div>
-      </DialogContent>
-    </Dialog>
-  );
+  // One id per dialog, so a retry records one drawer event.
+  const [spec] = useState((): PromptSpec => {
+    const { title, amount, reasons } = DRAWER[kind];
+    const id = crypto.randomUUID();
+    return {
+      title,
+      description: `${DRAWER_ROLE[kind] === "manager" ? "Needs a manager. " : ""}Recorded against this shift's drawer.`,
+      confirm: "Record",
+      reasons,
+      amount: amount ? {} : undefined,
+      onSubmit: async ({ reason, cents }) => {
+        const r = await act(title, (approval) => drawerEvent({ id, kind, cents, reason, approval }));
+        if (r) notify.success(`${title} recorded`);
+      },
+    };
+  });
+  return <PromptDialog spec={spec} onClose={onClose} />;
 }
 
 function Money({ label, cents, tone }: { label: string; cents: number | null; tone?: "good" | "bad" }) {

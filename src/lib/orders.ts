@@ -357,9 +357,11 @@ export type CustomerLookup = {
   recentOrders: OrderView[];
 };
 
+export const digitsOf = (s: string) => s.replace(/\D/g, "");
+
 /** "+1 (555) 010-2233" → "5550102233". The customers table keys on this. */
 export function normalizePhone(raw: string): string {
-  const digits = raw.replace(/\D/g, "");
+  const digits = digitsOf(raw);
   return digits.length === 11 && digits.startsWith("1") ? digits.slice(1) : digits;
 }
 

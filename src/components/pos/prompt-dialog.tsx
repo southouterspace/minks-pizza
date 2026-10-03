@@ -3,9 +3,8 @@
 import { useState } from "react";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import type { TenderMethod } from "@/lib/orders";
-import { formatCents } from "@/lib/money";
+import { formatCents, parseCents } from "@/lib/money";
 import { cn } from "@/lib/utils";
-import { parseCents } from "./tender-dialog";
 import { Segmented, Tap } from "./touch";
 
 export type PromptSpec = {
@@ -14,7 +13,7 @@ export type PromptSpec = {
   confirm: string;
   destructive?: boolean;
   reasons: string[];
-  amount?: { max: number; initial?: number };
+  amount?: { max?: number; initial?: number };
   method?: boolean;
   onSubmit: (v: { reason: string; cents: number; method: TenderMethod }) => void;
 };
@@ -24,7 +23,8 @@ export function PromptDialog({ spec, onClose }: { spec: PromptSpec; onClose: () 
   const [amount, setAmount] = useState(spec.amount?.initial ? (spec.amount.initial / 100).toFixed(2) : "");
   const [method, setMethod] = useState<TenderMethod>("cash");
   const cents = spec.amount ? parseCents(amount) : 0;
-  const amountOk = !spec.amount || (cents !== null && cents > 0 && cents <= spec.amount.max);
+  const max = spec.amount?.max;
+  const amountOk = !spec.amount || (cents !== null && cents > 0 && (max === undefined || cents <= max));
   const ok = reason.trim().length > 0 && amountOk;
 
   return (
@@ -36,7 +36,7 @@ export function PromptDialog({ spec, onClose }: { spec: PromptSpec; onClose: () 
         </DialogHeader>
         {spec.amount && (
           <label className="flex flex-col gap-1 text-sm text-muted-foreground">
-            Amount (up to {formatCents(spec.amount.max)})
+            {max === undefined ? "Amount" : `Amount (up to ${formatCents(max)})`}
             <input inputMode="decimal" autoFocus value={amount} onChange={(e) => setAmount(e.target.value)} aria-label="Amount" className="h-12 rounded-xl border bg-background px-3 text-xl text-foreground outline-none focus:ring-3 focus:ring-ring/40" />
           </label>
         )}

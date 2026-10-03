@@ -8,6 +8,7 @@ import * as outbox from "@/lib/pos-outbox";
 import { formatStoreTime } from "@/lib/store-time";
 import { cn } from "@/lib/utils";
 import { notify } from "./notify";
+import { shortId } from "./print";
 
 /** The outbox as React state, and a drain that announces what got through. */
 export function useOutboxQueue(): { queue: outbox.OutboxEntry[]; drain: () => Promise<void> } {
@@ -40,7 +41,7 @@ export function NotSentList({ queue, onOpen }: { queue: outbox.OutboxEntry[]; on
       <ul className="text-sm">
         {queue.map((e) => (
           <li key={e.orderId}>
-            ID {e.orderId.slice(-6).toUpperCase()} · {e.request.customer?.name ?? "Walk-in"} · {e.request.lines.length} line{e.request.lines.length === 1 ? "" : "s"}
+            ID {shortId(e.orderId)} · {e.request.customer?.name ?? "Walk-in"} · {e.request.lines.length} line{e.request.lines.length === 1 ? "" : "s"}
             {e.state === "rejected" && <b className="text-destructive"> · refused: {e.lastError}</b>}
           </li>
         ))}
@@ -85,7 +86,7 @@ export function OutboxDialog({
               <li key={e.orderId} className="flex items-center gap-3 p-3">
                 <div className="min-w-0 flex-1">
                   <p className={cn("font-semibold", "text-destructive")}>
-                    {e.state === "pending" ? "NOT SENT" : "REFUSED"} · ID {e.orderId.slice(-6).toUpperCase()}
+                    {e.state === "pending" ? "NOT SENT" : "REFUSED"} · ID {shortId(e.orderId)}
                   </p>
                   <p className="truncate text-sm text-muted-foreground">
                     {e.request.customer?.name ?? "Walk-in"} · {e.request.lines.length} line(s) · {e.request.tenders.length > 0 ? `paid ${formatCents(e.request.tenders.reduce((s, t) => s + t.amountCents, 0))}` : "unpaid"} · {e.attempts} tr

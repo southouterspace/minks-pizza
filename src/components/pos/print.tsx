@@ -14,6 +14,7 @@ import { formatCents } from "@/lib/money";
 import { priceLine } from "@/lib/pricing";
 import { formatStoreDateTime, formatStoreTime } from "@/lib/store-time";
 import type { StoreInfo } from "./context";
+import { chargeRows } from "./totals";
 
 export function usePrinter() {
   const [job, setJob] = useState<{ node: ReactNode; n: number } | null>(null);
@@ -89,11 +90,9 @@ export function Receipt({ order, store }: { order: OrderView; store: StoreInfo }
         </div>
       ))}
       <Rule />
-      <Row left="Subtotal" right={formatCents(t.subtotalCents)} />
-      {t.discountCents > 0 && <Row left="Discounts" right={`−${formatCents(t.discountCents)}`} />}
-      <Row left="Tax" right={formatCents(t.taxCents)} />
-      {t.deliveryFeeCents > 0 && <Row left="Delivery" right={formatCents(t.deliveryFeeCents)} />}
-      {t.tipCents > 0 && <Row left="Tip" right={formatCents(t.tipCents)} />}
+      {chargeRows(t).map((r) => (
+        <Row key={r.label} left={r.label} right={r.amount} />
+      ))}
       <Row left="TOTAL" right={formatCents(t.totalCents)} bold />
       <Rule />
       {order.tenders.map((tn) => (
@@ -117,6 +116,9 @@ export function Receipt({ order, store }: { order: OrderView; store: StoreInfo }
     </div>
   );
 }
+
+/** What a queued order goes by until the server numbers it: the last six of its client id. */
+export const shortId = (orderId: string) => orderId.slice(-6).toUpperCase();
 
 export type SlipLine = { name: string; quantity: number; summary: string; notes: string | null };
 
@@ -145,7 +147,7 @@ export function FallbackTicket({ req, lines, at, timeZone }: { req: SubmitOrderR
       <div style={{ fontSize: "16pt", fontWeight: 800, textAlign: "center" }}>NOT SENT · PAPER TICKET</div>
       <div style={{ textAlign: "center" }}>Kitchen screen did not get this order</div>
       <Rule />
-      <Row left={<b>ID {req.orderId.slice(-6).toUpperCase()}</b>} right={formatStoreTime(new Date(at), timeZone)} />
+      <Row left={<b>ID {shortId(req.orderId)}</b>} right={formatStoreTime(new Date(at), timeZone)} />
       <Fulfillment
         order={{
           fulfillment: f,

@@ -3,7 +3,7 @@
 import { useEffect, useRef, useState, type Dispatch } from "react";
 import { notify } from "./notify";
 import { AlertTriangle, ArrowRight, History, MapPin, Phone, RotateCcw } from "lucide-react";
-import type { CustomerLookup } from "@/lib/orders";
+import { digitsOf, type CustomerLookup } from "@/lib/orders";
 import { allItems, lineSummary, MODES, type DraftAction, type NewOrderDraft } from "@/lib/pos-client/draft";
 import { formatCents } from "@/lib/money";
 import { reorderLines } from "@/lib/pricing";
@@ -11,8 +11,6 @@ import { formatStoreDateTime } from "@/lib/store-time";
 import { cn } from "@/lib/utils";
 import { usePos } from "./context";
 import { Tap } from "./touch";
-
-const digits = (s: string) => s.replace(/\D/g, "");
 
 type Lookup = { phone: string; state: "loading" } | { phone: string; state: "done"; result: CustomerLookup } | { phone: string; state: "error" };
 
@@ -25,7 +23,7 @@ export function CallerPanel({ draft, dispatch, onContinue }: { draft: NewOrderDr
   const [lookup, setLookup] = useState<Lookup | null>(null);
   const [unavailable, setUnavailable] = useState<{ name: string; reason: string }[]>([]);
   const phoneInput = useRef<HTMLInputElement>(null);
-  const phoneDigits = digits(draft.customer.phone);
+  const phoneDigits = digitsOf(draft.customer.phone);
   const delivery = MODES[draft.mode].fulfillment === "delivery";
 
   useEffect(() => {
@@ -88,7 +86,7 @@ export function CallerPanel({ draft, dispatch, onContinue }: { draft: NewOrderDr
             value={draft.customer.phone}
             onChange={(e) => dispatch({ type: "customer", patch: { phone: e.target.value } })}
             onBlur={(e) => {
-              const d = digits(e.target.value);
+              const d = digitsOf(e.target.value);
               if (d.length === 10) dispatch({ type: "customer", patch: { phone: `(${d.slice(0, 3)}) ${d.slice(3, 6)}-${d.slice(6)}` } });
             }}
             placeholder="(555) 010-2233"
