@@ -2,7 +2,7 @@ import type { Metadata } from "next";
 import Link from "next/link";
 import { Cake, Gift, Sparkles, Users } from "lucide-react";
 import { getSettings } from "@/lib/orders";
-import { getCurrentMember } from "@/lib/member-auth";
+import { getRefreshedCurrentMember } from "@/lib/member-auth";
 import {
   LEDGER_KIND_RULES,
   formatMultiplier,
@@ -26,7 +26,6 @@ import {
   memberLedger,
   memberOrders,
   memberStatus,
-  refreshMember,
   type LoyaltyMember,
   type LoyaltySettings,
 } from "@/lib/loyalty-server";
@@ -82,7 +81,7 @@ export default async function RewardsPage({ searchParams }: PageProps<"/rewards"
   const next = typeof params.next === "string" && params.next.startsWith("/") ? params.next : "/rewards";
   const ref = typeof params.ref === "string" ? params.ref.slice(0, 20) : null;
   const [signedIn, rewards, promo] = await Promise.all([
-    getCurrentMember(),
+    getRefreshedCurrentMember(),
     listRewards({ activeOnly: true }).then((rs) => rs.map((r) => toPublicReward(r, store.timezone))),
     currentPromotion(store.timezone),
   ]);
@@ -190,7 +189,7 @@ function PitchView({
 }
 
 async function MemberView({
-  member: signedIn,
+  member,
   loyalty,
   rewards,
   timezone,
@@ -200,7 +199,6 @@ async function MemberView({
   rewards: PublicReward[];
   timezone: string;
 }) {
-  const member = (await refreshMember(signedIn.id)) ?? signedIn;
   const [status, ledger, recentOrders, birthdayArrived] = await Promise.all([
     memberStatus(member, loyalty),
     memberLedger(member.id),

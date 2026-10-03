@@ -5,7 +5,7 @@ import { StoreMark } from "@/components/store-mark";
 import { CartBadge } from "@/components/store/cart-badge";
 import { Separator } from "@/components/ui/separator";
 import { getSettings } from "@/lib/orders";
-import { getCurrentMember } from "@/lib/member-auth";
+import { getRefreshedCurrentMember } from "@/lib/member-auth";
 import { getLoyaltySettings } from "@/lib/loyalty-server";
 
 export default async function StoreLayout({ children }: LayoutProps<"/">) {
@@ -13,7 +13,7 @@ export default async function StoreLayout({ children }: LayoutProps<"/">) {
   const [settings, loyalty, member] = await Promise.all([
     getSettings(),
     getLoyaltySettings(),
-    getCurrentMember(),
+    getRefreshedCurrentMember(),
   ]);
 
   return (

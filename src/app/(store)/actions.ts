@@ -1,7 +1,6 @@
 "use server";
 
-import { z } from "zod";
-import { cartLineSchema, checkoutSchema } from "@/lib/validation";
+import { checkoutSchema, previewSchema } from "@/lib/validation";
 import { createOrder, getSettings, OrderError, quoteOrder } from "@/lib/orders";
 import { getCurrentMember } from "@/lib/member-auth";
 import { rewardOptions, type RewardOption } from "@/lib/loyalty-server";
@@ -40,12 +39,6 @@ export async function placeOrder(input: unknown): Promise<PlaceOrderResult> {
   }
 }
 
-const previewSchema = z.object({
-  orderType: z.enum(["pickup", "delivery"]),
-  lines: z.array(cartLineSchema).min(1).max(50),
-  rewardId: z.number().int().positive().nullable(),
-});
-
 export type CheckoutPreview =
   | {
       ok: true;
@@ -57,7 +50,7 @@ export type CheckoutPreview =
       pointsEarned: number | null;
       promoName: string | null;
       rewardError: string | null;
-      /** Signed-in members only: each active reward and whether it fits this cart. */
+      /** With `withRewards`, for signed-in members: each active reward and whether it fits this cart. */
       rewards: RewardOption[];
     }
   | { ok: false; error: string };
@@ -68,7 +61,8 @@ export async function previewCheckout(input: unknown): Promise<CheckoutPreview> 
   try {
     const [member, store] = await Promise.all([getCurrentMember(), getSettings()]);
     const q = await quoteOrder(parsed.data, member);
-    const rewards = member && q.loyalty ? await rewardOptions(q.lines, store.timezone) : [];
+    const rewards =
+      parsed.data.withRewards && member && q.loyalty ? await rewardOptions(q.lines, store.timezone) : [];
     return {
       ok: true,
       rewards,

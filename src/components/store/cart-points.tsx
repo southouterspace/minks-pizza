@@ -1,10 +1,9 @@
 "use client";
 
-import { useEffect, useState } from "react";
 import { Gift } from "lucide-react";
-import { previewCheckout } from "@/app/(store)/actions";
 import type { CartLine } from "@/components/cart-context";
 import { ProgressBar } from "@/components/store/reward-row";
+import { useCheckoutPreview } from "@/components/store/use-checkout-preview";
 
 export type CartLoyalty = {
   balance: number | null;
@@ -13,24 +12,9 @@ export type CartLoyalty = {
 
 /** "This order earns ~N points", and for members, progress to the next reward. */
 export function CartPoints({ lines, loyalty }: { lines: CartLine[]; loyalty: CartLoyalty }) {
-  const [earn, setEarn] = useState<number | null>(null);
-  const cartKey = JSON.stringify(lines.map((l) => [l.itemId, l.quantity, l.modifiers.map((m) => m.id)]));
-
-  useEffect(() => {
-    let stale = false;
-    previewCheckout({
-      orderType: "pickup",
-      rewardId: null,
-      lines: lines.map((l) => ({ itemId: l.itemId, quantity: l.quantity, modifierIds: l.modifiers.map((m) => m.id) })),
-    }).then((p) => {
-      if (!stale && p.ok) setEarn(p.pointsEarned);
-    });
-    return () => {
-      stale = true;
-    };
-    // cartKey stands in for `lines`, whose identity changes every render.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [cartKey]);
+  const preview = useCheckoutPreview(lines, "pickup", null, { withRewards: false });
+  const quote = preview.status === "ok" ? preview.quote : preview.status === "loading" ? preview.previous : null;
+  const earn = quote?.pointsEarned ?? null;
 
   if (earn === null) return null;
   const { balance, nextReward } = loyalty;

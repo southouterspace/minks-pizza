@@ -5,6 +5,7 @@
  * that caused it. Not server-only: the order pipeline and scripts import it.
  */
 import { randomInt, randomUUID } from "node:crypto";
+import { cache } from "react";
 import { and, asc, count, desc, eq, gte, inArray, isNull, sql, type AnyColumn, type SQL } from "drizzle-orm";
 import {
   categories,
@@ -134,7 +135,8 @@ export function isInsufficientPoints(err: unknown): boolean {
 // Settings and catalog
 // ---------------------------------------------------------------------------
 
-export async function getLoyaltySettings(): Promise<LoyaltySettings> {
+/** Read once per request (React cache); creates the row on first use. */
+export const getLoyaltySettings = cache(async (): Promise<LoyaltySettings> => {
   const [row] = await db.select().from(loyaltySettings).where(eq(loyaltySettings.id, 1));
   if (row) return row;
   const [created] = await db
@@ -143,7 +145,7 @@ export async function getLoyaltySettings(): Promise<LoyaltySettings> {
     .onConflictDoUpdate({ target: loyaltySettings.id, set: { id: 1 } })
     .returning();
   return created;
-}
+});
 
 function parseReward(row: typeof loyaltyRewards.$inferSelect): LoyaltyReward {
   return { ...row, effect: rewardEffectSchema.parse(row.effect), price: rewardPrice(row, new Date()) };

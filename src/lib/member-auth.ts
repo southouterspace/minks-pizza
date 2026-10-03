@@ -1,6 +1,7 @@
 import "server-only";
 import { createHmac, randomInt, timingSafeEqual } from "node:crypto";
 import { cookies } from "next/headers";
+import { cache } from "react";
 import { SignJWT, jwtVerify } from "jose";
 import { and, count, desc, eq, gt, isNull, sql } from "drizzle-orm";
 import { db, loyaltyLoginCodes } from "@/db";
@@ -134,7 +135,7 @@ async function setMemberSession(memberId: number): Promise<void> {
   });
 }
 
-export async function getCurrentMemberId(): Promise<number | null> {
+export const getCurrentMemberId = cache(async (): Promise<number | null> => {
   const token = (await cookies()).get(MEMBER_COOKIE)?.value;
   if (!token) return null;
   try {
@@ -145,14 +146,23 @@ export async function getCurrentMemberId(): Promise<number | null> {
   } catch {
     return null;
   }
-}
+});
 
 /** The signed-in member, or null when signed out or the program is off. */
-export async function getCurrentMember() {
+export const getCurrentMember = cache(async () => {
   const id = await getCurrentMemberId();
   if (id === null || !(await getLoyaltySettings()).enabled) return null;
   return getMember(id);
-}
+});
+
+/**
+ * The signed-in member after any expiry or birthday grant now due. Pages and
+ * the store header share one refresh per request, so they show one balance.
+ */
+export const getRefreshedCurrentMember = cache(async () => {
+  const member = await getCurrentMember();
+  return member && refreshMember(member.id);
+});
 
 export async function signOutMember(): Promise<void> {
   (await cookies()).delete(MEMBER_COOKIE);

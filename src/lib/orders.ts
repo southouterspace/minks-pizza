@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { cache } from "react";
 import { eq, inArray } from "drizzle-orm";
 import {
   categories,
@@ -61,14 +62,15 @@ export type PricedCart = {
 
 export class OrderError extends Error {}
 
-export async function getSettings() {
+/** Read once per request (React cache); outside a render it reads every time. */
+export const getSettings = cache(async () => {
   const [settings] = await db
     .select()
     .from(storeSettings)
     .where(eq(storeSettings.id, 1));
   if (!settings) throw new OrderError("Store is not configured yet.");
   return settings;
-}
+});
 
 /**
  * Server-side pricing: the client's cart carries only ids + quantities; every
