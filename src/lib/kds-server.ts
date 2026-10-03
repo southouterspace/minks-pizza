@@ -1,5 +1,5 @@
 import "server-only";
-import { and, asc, desc, eq, gte, inArray, isNull, ne, sql } from "drizzle-orm";
+import { and, asc, desc, eq, gte, inArray, isNull, or, sql } from "drizzle-orm";
 import { db, orderItems, orders, storeSettings } from "@/db";
 import {
   bumpPlan,
@@ -8,8 +8,9 @@ import {
   type KdsOrder,
   type KdsSnapshot,
 } from "@/lib/kds";
+import { fireDue, syncStatus } from "@/lib/orders-server";
 
-const LINE_STATUSES = ["new", "confirmed", "preparing"] as const;
+const LINE_STATUSES = ["new", "preparing"] as const;
 const RECENT_WINDOW_MS = 2 * 60 * 60 * 1000;
 const CANCELED_WINDOW_MS = 30 * 60 * 1000;
 
@@ -27,6 +28,10 @@ function toKdsOrder(o: OrderRow): KdsOrder {
     number: o.orderNumber,
     status: o.status,
     type: o.orderType,
+    channel: o.channel,
+    table: o.tableLabel,
+    fireAt: o.fireAt?.toISOString() ?? null,
+    promisedAt: o.promisedAt?.toISOString() ?? null,
     customerName: o.customerName,
     customerPhone: o.customerPhone,
     address,
@@ -34,6 +39,7 @@ function toKdsOrder(o: OrderRow): KdsOrder {
     placedAt: o.placedAt.toISOString(),
     readyAt: o.readyAt?.toISOString() ?? null,
     items: o.items
+      .filter((i) => i.firedAt !== null)
       .toSorted((a, b) => a.id - b.id)
       .map((i) => ({
         id: i.id,
@@ -44,12 +50,46 @@ function toKdsOrder(o: OrderRow): KdsOrder {
         notes: i.notes,
         ovenAt: i.ovenAt?.toISOString() ?? null,
         doneAt: i.doneAt?.toISOString() ?? null,
+        voidedAt: i.voidedAt?.toISOString() ?? null,
       })),
   };
 }
 
+const ticketKey = (o: Pick<OrderRow, "id" | "ticketOrderId">) => o.ticketOrderId ?? o.id;
+
+/**
+ * Folds checks split off a parent back onto the parent's ticket, so the
+ * kitchen keeps seeing one ticket for one table's food.
+ */
+function toTickets(rows: OrderRow[]): KdsOrder[] {
+  const byTicket = new Map<string, OrderRow[]>();
+  for (const row of rows) byTicket.set(ticketKey(row), [...(byTicket.get(ticketKey(row)) ?? []), row]);
+  return [...byTicket.entries()].map(([key, group]) => {
+    const head = group.find((o) => o.id === key) ?? group[0];
+    const ticket = toKdsOrder(head);
+    return {
+      ...ticket,
+      id: key,
+      status: group.some((o) => o.status === "preparing") ? "preparing" : ticket.status,
+      items: group.flatMap((o) => toKdsOrder(o).items).toSorted((a, b) => a.id - b.id),
+    };
+  });
+}
+
+/** The orders on one ticket that are still on the line. */
+function lineGroup(ticketId: string) {
+  return db.query.orders.findMany({
+    where: and(
+      or(eq(orders.id, ticketId), eq(orders.ticketOrderId, ticketId)),
+      inArray(orders.status, [...LINE_STATUSES]),
+    ),
+    with: { items: true },
+  });
+}
+
 export async function getKdsSnapshot(): Promise<KdsSnapshot> {
   const now = new Date();
+  await fireDue(now);
   const recentSince = new Date(now.getTime() - RECENT_WINDOW_MS);
   const canceledSince = new Date(now.getTime() - CANCELED_WINDOW_MS);
 
@@ -97,7 +137,7 @@ export async function getKdsSnapshot(): Promise<KdsSnapshot> {
   return {
     serverNow: now.toISOString(),
     timing,
-    line: line.map(toKdsOrder),
+    line: toTickets(line),
     ready: ready.map(toKdsOrder),
     recent: recent.map(toKdsOrder),
     canceled,
@@ -117,57 +157,6 @@ function stageColumns(stage: ItemStage, now: Date) {
   }
 }
 
-/**
- * Brings an order's status in line with its items: any kitchen activity
- * starts it (the customer's tracker shows "preparing"), and finishing every
- * item that needs cooking bumps it to ready. Un-finishing an item on a ready
- * order is impossible from the line view, so there is no ready → preparing
- * edge here; that is what recall is for.
- */
-function syncStatus(orderId: string, now: Date) {
-  const pending = db
-    .select({ one: sql`1` })
-    .from(orderItems)
-    .where(
-      and(
-        eq(orderItems.orderId, orderId),
-        ne(orderItems.station, "counter"),
-        isNull(orderItems.doneAt),
-      ),
-    );
-  const touched = db
-    .select({ one: sql`1` })
-    .from(orderItems)
-    .where(
-      and(
-        eq(orderItems.orderId, orderId),
-        sql`(${orderItems.ovenAt} is not null or ${orderItems.doneAt} is not null)`,
-      ),
-    );
-  return [
-    db
-      .update(orders)
-      .set({ status: "preparing", updatedAt: now })
-      .where(
-        and(
-          eq(orders.id, orderId),
-          inArray(orders.status, ["new", "confirmed"]),
-          sql`exists (${touched})`,
-        ),
-      ),
-    db
-      .update(orders)
-      .set({ status: "ready", readyAt: now, updatedAt: now })
-      .where(
-        and(
-          eq(orders.id, orderId),
-          inArray(orders.status, [...LINE_STATUSES]),
-          sql`not exists (${pending})`,
-        ),
-      ),
-  ] as const;
-}
-
 /** Applies one display action. Every action is idempotent: replays are harmless. */
 export async function applyKdsAction(action: KdsAction): Promise<void> {
   const now = new Date();
@@ -177,24 +166,28 @@ export async function applyKdsAction(action: KdsAction): Promise<void> {
       .select({ orderId: orderItems.orderId, station: orderItems.station })
       .from(orderItems)
       .innerJoin(orders, eq(orders.id, orderItems.orderId))
-      .where(and(eq(orderItems.id, action.itemId), inArray(orders.status, [...LINE_STATUSES])));
+      .where(
+        and(
+          eq(orderItems.id, action.itemId),
+          isNull(orderItems.voidedAt),
+          inArray(orders.status, [...LINE_STATUSES]),
+        ),
+      );
     if (!item) return;
     // Only pies go through the oven.
     const stage = action.stage === "oven" && item.station !== "pizza" ? "done" : action.stage;
     await db.batch([
       db.update(orderItems).set(stageColumns(stage, now)).where(eq(orderItems.id, action.itemId)),
-      ...syncStatus(item.orderId, now),
+      ...syncStatus(item.orderId),
     ]);
     return;
   }
 
   if (action.type === "bump") {
-    const order = await db.query.orders.findFirst({
-      where: and(eq(orders.id, action.orderId), inArray(orders.status, [...LINE_STATUSES])),
-      with: { items: true },
-    });
-    if (!order) return;
-    const plan = bumpPlan(toKdsOrder(order), action.view);
+    const group = await lineGroup(action.orderId);
+    if (group.length === 0) return;
+    const [ticket] = toTickets(group);
+    const plan = bumpPlan(ticket, action.view);
     const ids = (stage: ItemStage) => plan.filter((p) => p.stage === stage).map((p) => p.item.id);
     const moves = (["oven", "done"] as const)
       .map((stage) => ({ stage, ids: ids(stage) }))
@@ -203,27 +196,29 @@ export async function applyKdsAction(action: KdsAction): Promise<void> {
         db.update(orderItems).set(stageColumns(m.stage, now)).where(inArray(orderItems.id, m.ids)),
       );
     // syncStatus always contributes statements, so the batch is never empty.
-    const [first, ...rest] = [...moves, ...syncStatus(order.id, now)];
+    const [first, ...rest] = [...moves, ...group.flatMap((o) => syncStatus(o.id))];
     await db.batch([first, ...rest]);
     return;
   }
 
+  const onTicket = or(eq(orders.id, action.orderId), eq(orders.ticketOrderId, action.orderId));
   if (action.type === "recall") {
-    const [order] = await db
-      .select({ status: orders.status })
+    const recallable = await db
+      .select({ id: orders.id })
       .from(orders)
-      .where(eq(orders.id, action.orderId));
-    if (order?.status !== "ready" && order?.status !== "completed") return;
+      .where(and(onTicket, inArray(orders.status, ["ready", "completed"])));
+    if (recallable.length === 0) return;
+    const ids = recallable.map((o) => o.id);
     // Back on the line from scratch: a recalled ticket usually means a remake.
     await db.batch([
       db
         .update(orders)
         .set({ status: "preparing", readyAt: null, updatedAt: now })
-        .where(eq(orders.id, action.orderId)),
+        .where(inArray(orders.id, ids)),
       db
         .update(orderItems)
         .set({ ovenAt: null, doneAt: null })
-        .where(eq(orderItems.orderId, action.orderId)),
+        .where(inArray(orderItems.orderId, ids)),
     ]);
     return;
   }
@@ -231,5 +226,5 @@ export async function applyKdsAction(action: KdsAction): Promise<void> {
   await db
     .update(orders)
     .set({ status: "completed", updatedAt: now })
-    .where(and(eq(orders.id, action.orderId), eq(orders.status, "ready")));
+    .where(and(onTicket, eq(orders.status, "ready")));
 }

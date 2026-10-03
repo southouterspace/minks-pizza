@@ -3,7 +3,8 @@
  * rules it applies to them (station routing, ticket timers, pizza-aware
  * modifier layout, all-day counts). Shared by server and client — no I/O.
  */
-import type { OrderItemModifier, orders } from "@/db/schema";
+import type { Channel, KitchenStatus } from "@/lib/orders";
+import type { LineModifier } from "@/lib/pricing";
 
 export const KITCHEN_STATIONS = ["pizza", "kitchen", "counter"] as const;
 export type KitchenStation = (typeof KITCHEN_STATIONS)[number];
@@ -33,17 +34,24 @@ export type KdsItem = {
   name: string;
   quantity: number;
   station: KitchenStation;
-  modifiers: OrderItemModifier[];
+  modifiers: LineModifier[];
   notes: string | null;
   ovenAt: string | null;
   doneAt: string | null;
+  /** A line voided after it was sent stays on the ticket, struck through. */
+  voidedAt: string | null;
 };
 
+/** One ticket. Lines split onto another check ride on their parent's ticket. */
 export type KdsOrder = {
   id: string;
   number: number;
-  status: (typeof orders.$inferSelect)["status"];
-  type: "pickup" | "delivery";
+  status: KitchenStatus;
+  type: "pickup" | "delivery" | "dine_in";
+  channel: Channel;
+  table: string | null;
+  fireAt: string | null;
+  promisedAt: string | null;
   customerName: string;
   customerPhone: string;
   address: string | null;
@@ -92,9 +100,9 @@ export function stageOf(item: Pick<KdsItem, "ovenAt" | "doneAt">): ItemStage {
   return "queued";
 }
 
-/** Counter items never hold an order back: nothing to cook. */
-export function needsKitchen(item: Pick<KdsItem, "station">): boolean {
-  return item.station !== "counter";
+/** Counter items and voided lines never hold an order back: nothing to cook. */
+export function needsKitchen(item: Pick<KdsItem, "station" | "voidedAt">): boolean {
+  return item.station !== "counter" && item.voidedAt === null;
 }
 
 export function itemsFor(order: KdsOrder, view: KdsView): KdsItem[] {
@@ -119,6 +127,7 @@ function targetStage(item: KdsItem, view: KdsView): ItemStage {
 
 /** Whether a view still has work on this item. */
 export function isPending(item: KdsItem, view: KdsView): boolean {
+  if (item.voidedAt !== null) return false;
   const stage = stageOf(item);
   if (view === "make") return stage === "queued";
   if (view === "oven") return stage === "oven";
@@ -144,12 +153,12 @@ export function tapStage(item: KdsItem, view: KdsView): ItemStage {
 
 export function bumpPlan(order: KdsOrder, view: KdsView): { item: KdsItem; stage: ItemStage }[] {
   return itemsFor(order, view)
-    .filter((i) => (view === "all" ? stageOf(i) !== "done" : isPending(i, view)))
+    .filter((i) => (view === "all" ? stageOf(i) !== "done" && i.voidedAt === null : isPending(i, view)))
     .map((item) => ({ item, stage: view === "all" ? "done" : targetStage(item, view) }));
 }
 
 /** An order is ready once every item that needs cooking is finished. */
-export function kitchenComplete(items: Pick<KdsItem, "station" | "doneAt">[]): boolean {
+export function kitchenComplete(items: Pick<KdsItem, "station" | "doneAt" | "voidedAt">[]): boolean {
   return items.every((i) => !needsKitchen(i) || i.doneAt !== null);
 }
 
@@ -180,43 +189,46 @@ export function formatElapsed(ms: number): string {
 // Pizza-aware ticket layout
 // ---------------------------------------------------------------------------
 
+export type TicketMod = { label: string; kind: "add" | "remove" | "amount" | "option" };
+
 export type TicketLine = {
   /** Size and crust lead the ticket: they decide which dough ball to grab. */
   size: string | null;
   crust: string | null;
-  /**
-   * Everything else, in order. Removals and amount changes (extra, light,
-   * on the side) are flagged so the display can make them impossible to miss.
-   */
-  mods: { label: string; kind: "add" | "remove" | "amount" | "option" }[];
+  /** Whole-pie toppings and every other option, in entry order. */
+  whole: TicketMod[];
+  /** Half toppings, in their own blocks so a half can't be misread. */
+  left: TicketMod[];
+  right: TicketMod[];
 };
 
-const SIZE_GROUP = /\bsize\b/i;
-const CRUST_GROUP = /\bcrust\b|\bdough\b/i;
-const TOPPING_GROUP = /topping/i;
-const REMOVAL = /^(no|hold|without)\b/i;
-const AMOUNT = /^(extra|light|easy|double|side of|on the side)\b/i;
+function placedMod(m: Extract<LineModifier, { kind: "placed" }>): TicketMod {
+  switch (m.amount) {
+    case "regular":
+      return { label: m.modifierName, kind: "add" };
+    case "extra":
+      return { label: `Extra ${m.modifierName}`, kind: "amount" };
+    case "light":
+      return { label: `Light ${m.modifierName}`, kind: "amount" };
+    case "none":
+      return { label: `No ${m.modifierName}`, kind: "remove" };
+  }
+}
 
-export function ticketLine(modifiers: OrderItemModifier[]): TicketLine {
-  let size: string | null = null;
-  let crust: string | null = null;
-  const mods: TicketLine["mods"] = [];
+export function ticketLine(modifiers: LineModifier[]): TicketLine {
+  const line: TicketLine = { size: null, crust: null, whole: [], left: [], right: [] };
   for (const m of modifiers) {
-    if (size === null && SIZE_GROUP.test(m.groupName)) {
-      size = m.modifierName;
-    } else if (crust === null && CRUST_GROUP.test(m.groupName)) {
-      crust = m.modifierName;
-    } else if (REMOVAL.test(m.modifierName)) {
-      mods.push({ label: m.modifierName, kind: "remove" });
-    } else if (AMOUNT.test(m.modifierName)) {
-      mods.push({ label: m.modifierName, kind: "amount" });
-    } else if (TOPPING_GROUP.test(m.groupName)) {
-      mods.push({ label: m.modifierName, kind: "add" });
+    if (m.kind === "placed") {
+      line[m.placement].push(placedMod(m));
+    } else if (m.role === "size" && line.size === null) {
+      line.size = m.modifierName;
+    } else if (m.role === "crust" && line.crust === null) {
+      line.crust = m.modifierName;
     } else {
-      mods.push({ label: `${m.groupName}: ${m.modifierName}`, kind: "option" });
+      line.whole.push({ label: `${m.groupName}: ${m.modifierName}`, kind: "option" });
     }
   }
-  return { size, crust, mods };
+  return line;
 }
 
 // ---------------------------------------------------------------------------
@@ -287,7 +299,9 @@ function settle(snapshot: KdsSnapshot, order: KdsOrder, nowIso: string): KdsSnap
 export function applyLocally(snapshot: KdsSnapshot, action: KdsAction, nowIso: string): KdsSnapshot {
   switch (action.type) {
     case "item": {
-      const order = snapshot.line.find((o) => o.items.some((i) => i.id === action.itemId));
+      const order = snapshot.line.find((o) =>
+        o.items.some((i) => i.id === action.itemId && i.voidedAt === null),
+      );
       if (!order) return snapshot;
       const items = order.items.map((i) =>
         i.id === action.itemId ? withStage(i, action.stage, nowIso) : i,

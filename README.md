@@ -5,9 +5,11 @@ where customers browse the menu, customize pizzas, and place pickup/delivery
 orders, plus an operator dashboard for menu management, store settings, and a
 live orders inbox.
 
-Payments are intentionally **not** captured yet — orders are persisted with
-`payment_status = 'pending'` and the checkout path has a clean seam where
-Stripe will slot in (see [Stripe readiness](#stripe-readiness)).
+Online payments are intentionally **not** captured yet: online orders are
+paid at pickup, and payments are recorded at the counter as tenders (see
+[Front-of-house POS](#front-of-house-pos-server-layer)). The checkout path
+has a clean seam where Stripe will slot in (see
+[Stripe readiness](#stripe-readiness)).
 
 ## Stack
 
@@ -31,8 +33,9 @@ by the `style-nova` class on `<html>`; design tokens live in
 ```bash
 npm install
 cp .env.example .env.local   # fill in values (see below)
+npm run db:migrate-pos       # existing databases only; a no-op on a fresh one
 npm run db:push              # create tables in your Neon database
-npm run db:seed              # optional: store settings + starter pizzeria menu
+npm run db:seed              # optional: store settings, demo POS staff, starter menu
 npm run dev
 ```
 
@@ -59,8 +62,11 @@ npm run dev
    fee/minimum, tax rate — and the **Publish** switch that takes the storefront
    live (before that, customers see a coming-soon page). A separate
    **Accepting orders** switch pauses ordering without unpublishing.
-5. **Orders** (`/admin`) — live inbox that auto-refreshes; move orders through
-   `new → confirmed → preparing → ready → completed` (or cancel).
+5. **Orders** (`/admin`) — live inbox that auto-refreshes. Each card shows
+   the kitchen status (driven by the KDS: `new → preparing → ready →
+   completed`), a channel badge (Online, Phone, Walk-in, Dine-in) and the
+   payment state (Unpaid, Part paid, Paid, Refunded). Scheduled orders wait in
+   their own lane until they fire.
 6. **Kitchen display** (`/kitchen`) — the full-screen KDS for the line. See
    [Kitchen display](#kitchen-display-kds) below.
 7. **Team** (`/admin/team`) — add or remove operator accounts, and change your
@@ -156,6 +162,68 @@ update categories set station = 'counter' where name ilike '%drink%' or name ili
 
 Orders placed before the migration default to the Kitchen station.
 
+### Front-of-house POS (server layer)
+
+The counter POS (walk-in, phone, some dine-in) shares one order seam with the
+storefront and the KDS. The screens are not built yet; the server layer is.
+
+- **Staff and PINs.** A device signed in as an operator unlocks the POS;
+  staff then switch with a 4-digit PIN, which sets a short `minks_staff`
+  cookie (`store_settings.pos_lock_seconds`). PINs are stored as
+  `HMAC-SHA256(SESSION_SECRET, pin)`, so rotating `SESSION_SECRET` means
+  re-setting every PIN. Five wrong PINs in five minutes lock the device for
+  the rest of the window. `npm run db:seed` adds two demo staff:
+
+  | Name | Role | PIN |
+  |---|---|---|
+  | Morgan Manager | manager | `1234` |
+  | Casey Cashier | cashier | `5678` |
+
+- **Manager approval.** Voiding a line already sent to the kitchen, comps,
+  discounts over `discount_approval_cents`, refunds, no-sale, paid-out and
+  shift close need a manager. The server checks at the moment of the action;
+  a cashier gets `needs_manager` and resends the same request with the
+  manager's PIN. Who acted and who approved are stored on the fact row.
+- **Money.** Tenders (cash, card on the external terminal), refunds,
+  discounts and comps are rows. `orders.subtotal/discount/tax/total/paid/
+  refunded_cents` are folds over them, written only by the fold statement
+  that ends every write; payment state (`unpaid / partial / paid / refunded`)
+  is derived, never stored.
+- **Halves.** Each topping on a line carries `placement` (whole, left,
+  right) and `amount` (regular, extra, light, none). Placement is allowed
+  only in sauce, cheese and topping groups (`modifier_groups.role`). The
+  half rule is `store_settings.half_topping_rule`: `average` (also what
+  "half price per half topping" works out to) or `highest`. A Large Cheese
+  ($16.99) with Pepperoni ($1.75) on the left and Mushrooms ($1.50) on the
+  right is $18.62 under `average` and $18.74 under `highest`.
+- **Scheduled and held orders.** An order with a fire time is `held` and
+  stays off the KDS until a KDS or POS board poll fires it.
+- **Replays.** Every POS write carries client-minted UUIDs and is one
+  convergent `db.batch`, so a retried submit, tender or void lands once.
+
+Wire API: `POST /api/pos/orders` (the replayable submit), `GET
+/api/pos/menu`, `GET /api/pos/customers?phone=`, `GET /api/pos/board`; the
+interactive verbs are server actions in `src/app/pos/actions.ts`.
+
+#### Deploying the POS schema
+
+The POS changes the order status enum, drops `orders.payment_status`, and
+reshapes stored line modifiers, so **migrate before deploying this code**,
+in this order:
+
+```bash
+MINKS_DATABASE_URL=<production url> npm run db:migrate-pos  # enum swap, backfills; safe to re-run
+MINKS_DATABASE_URL=<production url> npm run db:push         # additive rest: new tables and columns
+MINKS_DATABASE_URL=<production url> npm run db:seed         # optional: demo staff (skips existing menu)
+```
+
+`scripts/migrate-pos.sql` is one `DO` block (also runnable with `psql -f`).
+It maps `confirmed` orders to `new`, refuses to run if any order has a
+`payment_status` other than `pending` (no code path ever wrote one), sets
+group roles from their names (Size, Crust, `*topping*`), marks existing lines
+as fired at their order's placed time, and backfills `customers` from every
+phone number already on an order.
+
 ### Customer (`/`)
 
 Menu browsing with category navigation → item customization dialog (sizes,
@@ -171,11 +239,11 @@ minimums, and recomputes every price at order time.
 ## Stripe readiness
 
 - Money is integer cents everywhere; `orders` carries a full breakdown
-  (subtotal, tax, delivery fee, tip, total) and `payment_status`
-  (`pending`/`paid`/`refunded`).
-- `src/lib/orders.ts` → `createOrder()` is the single seam: create a
-  PaymentIntent for `totalCents` there, store its id, and flip
-  `payment_status` from a Stripe webhook. `placeOrder` in
+  (subtotal, discount, tax, delivery fee, tip, total) and the ledger folds
+  `paid_cents` / `refunded_cents` over the `tenders` table.
+- `submitOrder()` in `src/lib/orders-server.ts` is the single seam: create a
+  PaymentIntent for the total after it, and record the captured payment as a
+  `tenders` row (with no shift) from the Stripe webhook. `placeOrder` in
   `src/app/(store)/actions.ts` already returns a structured result to which a
   client secret can be added.
 
@@ -184,11 +252,16 @@ minimums, and recomputes every price at order time.
 ```
 src/
   db/            schema.ts (Drizzle), seed.ts, index.ts (client)
-  lib/           menu.ts, orders.ts (pricing + creation), auth.ts, validation.ts,
+  lib/           menu.ts, auth.ts, validation.ts (zod at the boundaries),
+                 pricing.ts (line pricing + half rule, pure),
+                 orders.ts (order domain: payment state, role policy, shift report, pure),
+                 orders-server.ts (submitOrder / mutateOrder seam, folds, reads),
+                 staff.ts + pin.ts (staff cookie, PIN lookup and lockout),
                  kds.ts (kitchen display rules, pure), kds-server.ts (queries + actions)
   app/(store)/   customer storefront (menu, cart, checkout, order status)
   app/admin/     operator dashboard (orders, menu, modifiers, settings, team)
   app/kitchen/   kitchen display (KDS); data via app/api/kds
+  app/pos/       POS server actions; data via app/api/pos/*
   components/    cart context, storefront + admin UI
 ```
 

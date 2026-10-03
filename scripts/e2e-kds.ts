@@ -10,8 +10,43 @@
  */
 import { chromium, type Page } from "playwright";
 import { eq } from "drizzle-orm";
-import { db, menuItems, modifierGroups, modifiers, orderItems, orders } from "../src/db";
-import { createOrder } from "../src/lib/orders";
+import { randomUUID } from "node:crypto";
+import { db, employees, menuItems, modifierGroups, modifiers, operators, orderItems, orders } from "../src/db";
+import { mutateOrder, submitOrder } from "../src/lib/orders-server";
+import type { Fulfillment } from "../src/lib/orders";
+
+/** Places an online order through the same seam the storefront uses. */
+async function createOrder(o: {
+  customerName: string;
+  customerPhone: string;
+  fulfillment: Fulfillment;
+  notes?: string;
+  lines: { itemId: number; quantity: number; modifierIds: number[]; notes?: string }[];
+}) {
+  const result = await submitOrder(
+    {
+      orderId: randomUUID(),
+      channel: "online",
+      fulfillment: o.fulfillment,
+      customer: { name: o.customerName, phone: o.customerPhone, email: null, saveAddress: false },
+      notes: o.notes ?? null,
+      fire: { kind: "now" },
+      promisedAt: null,
+      tipCents: 0,
+      lines: o.lines.map((l) => ({
+        lineId: randomUUID(),
+        itemId: l.itemId,
+        quantity: l.quantity,
+        notes: l.notes ?? null,
+        selections: l.modifierIds.map((modifierId) => ({ modifierId, placement: "whole" as const, amount: "regular" as const })),
+      })),
+      tenders: [],
+    },
+    { kind: "online" },
+  );
+  if (!result.ok) throw new Error(`order rejected: ${JSON.stringify(result)}`);
+  return { id: result.order.id, orderNumber: result.order.number };
+}
 
 const BASE = process.env.E2E_BASE_URL ?? "http://localhost:3000";
 const SHOT_DIR = process.env.E2E_SHOT_DIR ?? "/tmp";
@@ -50,10 +85,10 @@ async function placeOrders() {
   const pick = (group: string, name: string) =>
     mods.find((m) => m.groupId === groups.find((g) => g.name === group)!.id && m.name === name)!.id;
 
-  const base = { customerPhone: "(555) 010-2222", tipCents: 0 } as const;
+  const base = { customerPhone: "(555) 010-2222" } as const;
   const a = await createOrder({
     ...base,
-    orderType: "pickup",
+    fulfillment: { kind: "pickup" },
     customerName: "Alice Pickup",
     lines: [
       {
@@ -68,12 +103,12 @@ async function placeOrders() {
   });
   const b = await createOrder({
     ...base,
-    orderType: "delivery",
+    fulfillment: {
+      kind: "delivery",
+      address: { line1: "1 Main St", line2: null, city: "The Woodlands", zip: "77354" },
+    },
     customerName: "Bob Delivery",
-    addressLine1: "1 Main St",
-    city: "The Woodlands",
-    zip: "77354",
-    orderNotes: "Peanut allergy",
+    notes: "Peanut allergy",
     lines: [
       {
         itemId: item("Margherita"),
@@ -105,7 +140,6 @@ async function signIn(page: Page) {
 async function main() {
   // Clear the line so ticket positions are predictable.
   await db.update(orders).set({ status: "completed" }).where(eq(orders.status, "new"));
-  await db.update(orders).set({ status: "completed" }).where(eq(orders.status, "confirmed"));
   await db.update(orders).set({ status: "completed" }).where(eq(orders.status, "preparing"));
   await db.update(orders).set({ status: "completed" }).where(eq(orders.status, "ready"));
 
@@ -220,10 +254,9 @@ async function main() {
 
   // --- Live arrival + cancel alert ----------------------------------------
   const c = await createOrder({
-    orderType: "pickup",
+    fulfillment: { kind: "pickup" },
     customerName: "Carol Late",
     customerPhone: "(555) 010-3333",
-    tipCents: 0,
     lines: [{ itemId: item("Cheese Pizza"), quantity: 1, modifierIds: [pick("Size", 'Small 10"'), pick("Crust", "Hand Tossed")] }],
   });
   const ticketC = page.getByTestId(`kds-ticket-${c.orderNumber}`);
@@ -236,6 +269,70 @@ async function main() {
   await alert.waitFor({ timeout: 10_000 });
   check("canceling an on-screen order raises an alert", await alert.isVisible());
   await shot("kds-4-cancel-alert");
+
+  // --- Counter orders: halves, held, voids ---------------------------------
+  const [operator] = await db.select().from(operators).limit(1);
+  const [manager] = await db.select().from(employees).where(eq(employees.role, "manager")).limit(1);
+  const staff = {
+    operatorId: operator.id,
+    actor: { employeeId: manager.id, name: manager.name, role: manager.role },
+  };
+  const counterLine = (itemId: number, selections: { modifierId: number; placement: "whole" | "left" | "right" }[]) => ({
+    lineId: randomUUID(),
+    itemId,
+    quantity: 1,
+    notes: null,
+    selections: selections.map((x) => ({ ...x, amount: "regular" as const })),
+  });
+  const pie = counterLine(item("Cheese Pizza"), [
+    { modifierId: pick("Size", 'Large 14"'), placement: "whole" },
+    { modifierId: pick("Crust", "Hand Tossed"), placement: "whole" },
+    { modifierId: pick("Extra Toppings", "Pepperoni"), placement: "left" },
+    { modifierId: pick("Extra Toppings", "Mushrooms"), placement: "right" },
+  ]);
+  const wings = counterLine(item("Chicken Wings (8)"), [{ modifierId: pick("Sauce", "BBQ"), placement: "whole" }]);
+  const counterOrder = (fire: { kind: "now" } | { kind: "at"; at: string }, lines: ReturnType<typeof counterLine>[]) =>
+    submitOrder(
+      {
+        orderId: randomUUID(),
+        channel: "phone",
+        fulfillment: { kind: "pickup" },
+        customer: { name: "Dana Phone", phone: "(555) 010-4444", email: null, saveAddress: false },
+        notes: null,
+        fire,
+        promisedAt: null,
+        tipCents: 0,
+        lines,
+        tenders: [],
+      },
+      { kind: "pos", staff },
+    );
+  const d = await counterOrder({ kind: "now" }, [pie, wings]);
+  const later = await counterOrder({ kind: "at", at: new Date(Date.now() + 3_600_000).toISOString() }, [
+    counterLine(item("Cheese Pizza"), [
+      { modifierId: pick("Size", 'Small 10"'), placement: "whole" },
+      { modifierId: pick("Crust", "Hand Tossed"), placement: "whole" },
+    ]),
+  ]);
+  if (!d.ok || !later.ok) throw new Error("counter orders rejected");
+  const ticketD = page.getByTestId(`kds-ticket-${d.order.number}`);
+  await ticketD.waitFor({ timeout: 10_000 });
+  const left = await ticketD.getByTestId("kds-half-left").innerText();
+  const right = await ticketD.getByTestId("kds-half-right").innerText();
+  check("half toppings print in LEFT and RIGHT blocks", /LEFT HALF/i.test(left) && left.includes("+ Pepperoni") && /RIGHT HALF/i.test(right) && right.includes("+ Mushrooms"), `${left} | ${right}`);
+  await page.waitForTimeout(5_000);
+  check("a scheduled order stays off the line", (await page.getByTestId(`kds-ticket-${later.order.number}`).count()) === 0);
+  const wingsId = (await db.select().from(orderItems).where(eq(orderItems.lineUid, wings.lineId)))[0].id;
+  const voided = await mutateOrder({ orderId: d.order.id, mutation: { kind: "void_line", lineId: wings.lineId, reason: "changed mind" } }, staff);
+  check("manager voids a sent line", voided.ok);
+  const wingsRow = page.getByTestId(`kds-item-${wingsId}`);
+  check(
+    "voided line stays on the ticket, struck and marked VOID",
+    await eventually(async () => (await wingsRow.getAttribute("data-stage")) === "void"),
+    await wingsRow.innerText(),
+  );
+  check("VOID label shown", (await wingsRow.innerText()).includes("VOID"));
+  await shot("kds-4b-halves-void");
 
   // --- Offline banner -------------------------------------------------------
   await page.context().setOffline(true);

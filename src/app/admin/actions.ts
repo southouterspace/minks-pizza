@@ -12,7 +12,6 @@ import {
   modifierGroups,
   modifiers,
   operators,
-  orders,
   storeLogo,
   storeSettings,
   type DayHours,
@@ -260,51 +259,6 @@ export async function changeOwnPassword(
     .where(eq(operators.id, current.id));
 
   redirect("/admin/team?notice=password");
-}
-
-// ---------------------------------------------------------------------------
-// Orders
-// ---------------------------------------------------------------------------
-
-const STATUS_TRANSITIONS: Record<string, readonly string[]> = {
-  new: ["confirmed", "canceled"],
-  confirmed: ["preparing", "canceled"],
-  preparing: ["ready"],
-  ready: ["completed"],
-  completed: [],
-  canceled: [],
-};
-
-const orderStatusSchema = z.enum([
-  "confirmed",
-  "preparing",
-  "ready",
-  "completed",
-  "canceled",
-]);
-
-export async function updateOrderStatus(formData: FormData): Promise<void> {
-  await requireOperator();
-  const orderId = z.uuid().parse(textField(formData, "orderId"));
-  const status = orderStatusSchema.parse(textField(formData, "status"));
-
-  const [order] = await db
-    .select({ id: orders.id, status: orders.status })
-    .from(orders)
-    .where(eq(orders.id, orderId));
-  if (!order) return;
-  if (!STATUS_TRANSITIONS[order.status]?.includes(status)) return;
-
-  const now = new Date();
-  await db
-    .update(orders)
-    .set({
-      status,
-      updatedAt: now,
-      ...(status === "ready" ? { readyAt: now } : {}),
-    })
-    .where(eq(orders.id, orderId));
-  revalidatePath("/admin");
 }
 
 // ---------------------------------------------------------------------------

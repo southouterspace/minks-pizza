@@ -3,7 +3,7 @@ import { CartProvider } from "@/components/cart-context";
 import { StoreMark } from "@/components/store-mark";
 import { CartBadge } from "@/components/store/cart-badge";
 import { Separator } from "@/components/ui/separator";
-import { getSettings } from "@/lib/orders";
+import { getSettings } from "@/lib/orders-server";
 
 export default async function StoreLayout({ children }: LayoutProps<"/">) {
   const settings = await getSettings();

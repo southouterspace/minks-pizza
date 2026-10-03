@@ -1,18 +1,33 @@
 "use server";
 
-import { checkoutSchema } from "@/lib/validation";
-import { createOrder, OrderError } from "@/lib/orders";
+import { randomUUID } from "node:crypto";
+import { checkoutSchema, type CheckoutInput } from "@/lib/validation";
+import { submitOrder, type SubmitOrderRequest } from "@/lib/orders-server";
+import type { Fulfillment } from "@/lib/orders";
 
 export type PlaceOrderResult =
   | { ok: true; orderId: string }
   | { ok: false; error: string };
+
+function fulfillmentOf(input: CheckoutInput): Fulfillment {
+  if (input.orderType === "pickup") return { kind: "pickup" };
+  return {
+    kind: "delivery",
+    address: {
+      line1: input.addressLine1 ?? "",
+      line2: input.addressLine2 || null,
+      city: input.city || null,
+      zip: input.zip ?? "",
+    },
+  };
+}
 
 /**
  * Customer order submission. Everything is re-validated and re-priced
  * server-side; the client cart is only a proposal.
  *
  * STRIPE SEAM: once payments are added, this action will create the
- * PaymentIntent after `createOrder` and return its client secret alongside
+ * PaymentIntent after `submitOrder` and return its client secret alongside
  * the orderId for confirmation on the client.
  */
 export async function placeOrder(input: unknown): Promise<PlaceOrderResult> {
@@ -21,14 +36,33 @@ export async function placeOrder(input: unknown): Promise<PlaceOrderResult> {
     const first = parsed.error.issues[0];
     return { ok: false, error: first?.message ?? "Invalid order." };
   }
+  const data = parsed.data;
+  const request: SubmitOrderRequest = {
+    orderId: randomUUID(),
+    channel: "online",
+    fulfillment: fulfillmentOf(data),
+    customer: {
+      phone: data.customerPhone,
+      name: data.customerName,
+      email: data.customerEmail || null,
+      saveAddress: data.orderType === "delivery",
+    },
+    notes: data.orderNotes || null,
+    fire: { kind: "now" },
+    promisedAt: null,
+    tipCents: data.tipCents,
+    lines: data.lines.map((l) => ({ ...l, lineId: randomUUID() })),
+    tenders: [],
+  };
 
   try {
-    const order = await createOrder(parsed.data);
-    return { ok: true, orderId: order.id };
+    const result = await submitOrder(request, { kind: "online" });
+    if (result.ok) return { ok: true, orderId: result.order.id };
+    return {
+      ok: false,
+      error: result.reason === "rejected" ? result.message : "We couldn't place your order. Please try again.",
+    };
   } catch (err) {
-    if (err instanceof OrderError) {
-      return { ok: false, error: err.message };
-    }
     console.error("placeOrder failed:", err);
     return {
       ok: false,

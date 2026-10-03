@@ -4,7 +4,8 @@ import { notFound } from "next/navigation";
 import { eq } from "drizzle-orm";
 import { db, orderItems, orders } from "@/db";
 import { formatCents } from "@/lib/money";
-import { getSettings } from "@/lib/orders";
+import { getSettings } from "@/lib/orders-server";
+import { dueCents, paymentState, type KitchenStatus } from "@/lib/orders";
 import { OrderAutoRefresh } from "@/components/store/order-auto-refresh";
 import { buttonVariants } from "@/components/ui/button";
 import {
@@ -19,16 +20,16 @@ import { cn } from "@/lib/utils";
 export const metadata: Metadata = { title: "Order status" };
 export const dynamic = "force-dynamic";
 
-const STATUS_STEPS = ["new", "confirmed", "preparing", "ready", "completed"] as const;
+const PROGRESS_STEPS = ["new", "preparing", "ready"] as const;
 
-const STATUS_LABELS: Record<string, { title: string; blurb: string }> = {
+const STATUS_LABELS: Record<KitchenStatus, { title: string; blurb: string }> = {
+  held: {
+    title: "Scheduled",
+    blurb: "We'll start making it closer to your time.",
+  },
   new: {
     title: "Order received",
-    blurb: "We've got your order — the kitchen will confirm it shortly.",
-  },
-  confirmed: {
-    title: "Order confirmed",
-    blurb: "The kitchen has confirmed your order.",
+    blurb: "We've got your order and sent it to the kitchen.",
   },
   preparing: {
     title: "In the kitchen",
@@ -66,11 +67,17 @@ export default async function OrderPage({
     .where(eq(orderItems.orderId, order.id));
   const settings = await getSettings();
 
-  const stepIndex = STATUS_STEPS.indexOf(
-    order.status as (typeof STATUS_STEPS)[number],
-  );
+  const stepIndex =
+    order.status === "completed"
+      ? PROGRESS_STEPS.length
+      : PROGRESS_STEPS.indexOf(order.status as (typeof PROGRESS_STEPS)[number]);
   const active = order.status !== "completed" && order.status !== "canceled";
-  const label = STATUS_LABELS[order.status] ?? STATUS_LABELS.new;
+  const label = STATUS_LABELS[order.status];
+  const payment = paymentState(order);
+  const pickupOrDelivery = order.orderType === "delivery" ? "delivery" : "pickup";
+  const readyBy = order.promisedAt
+    ? order.promisedAt.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" })
+    : null;
 
   return (
     <div className="mx-auto max-w-2xl px-4 py-10 sm:px-6">
@@ -78,14 +85,19 @@ export default async function OrderPage({
 
       <p className="text-sm text-muted-foreground">
         Order <span className="font-mono">#{order.orderNumber}</span> ·{" "}
-        {order.orderType === "pickup" ? "Pickup" : "Delivery"}
+        {order.orderType === "delivery" ? "Delivery" : order.orderType === "dine_in" ? "Dine-in" : "Pickup"}
       </p>
       <h1 className="mt-1 text-2xl font-bold tracking-tight">{label.title}</h1>
-      <p className="mt-2 text-sm text-muted-foreground">{label.blurb}</p>
+      <p className="mt-2 text-sm text-muted-foreground">
+        {label.blurb}
+        {readyBy && (order.status === "held" || order.status === "new" || order.status === "preparing")
+          ? ` Estimated ready by ${readyBy}.`
+          : ""}
+      </p>
 
       {order.status !== "canceled" ? (
         <ol className="mt-6 flex items-center gap-1.5" aria-label="Order progress">
-          {STATUS_STEPS.slice(0, 4).map((step, i) => (
+          {PROGRESS_STEPS.map((step, i) => (
             <li
               key={step}
               className={cn(
@@ -120,7 +132,7 @@ export default async function OrderPage({
         </CardHeader>
         <CardContent>
           <ul className="divide-y divide-border">
-            {items.map((item) => (
+            {items.filter((item) => item.voidedAt === null).map((item) => (
               <li
                 key={item.id}
                 className="flex justify-between gap-3 py-3 text-sm first:pt-0"
@@ -134,7 +146,13 @@ export default async function OrderPage({
                   </p>
                   {item.modifiers.length > 0 ? (
                     <p className="mt-0.5 text-xs text-muted-foreground">
-                      {item.modifiers.map((m) => m.modifierName).join(" · ")}
+                      {item.modifiers
+                        .map((m) =>
+                          m.kind === "placed" && m.placement !== "whole"
+                            ? `${m.modifierName} (${m.placement} half)`
+                            : m.modifierName,
+                        )
+                        .join(" · ")}
                     </p>
                   ) : null}
                   {item.notes ? (
@@ -156,6 +174,12 @@ export default async function OrderPage({
               <dt className="text-muted-foreground">Subtotal</dt>
               <dd className="tabular-nums">{formatCents(order.subtotalCents)}</dd>
             </div>
+            {order.discountCents > 0 ? (
+              <div className="flex justify-between">
+                <dt className="text-muted-foreground">Discounts</dt>
+                <dd className="tabular-nums">−{formatCents(order.discountCents)}</dd>
+              </div>
+            ) : null}
             {order.taxCents > 0 ? (
               <div className="flex justify-between">
                 <dt className="text-muted-foreground">Tax</dt>
@@ -183,9 +207,11 @@ export default async function OrderPage({
             <div className="flex justify-between pt-1">
               <dt className="text-muted-foreground">Payment</dt>
               <dd className="text-muted-foreground">
-                {order.paymentStatus === "paid"
-                  ? "Paid online"
-                  : `Due at ${order.orderType === "pickup" ? "pickup" : "delivery"}`}
+                {payment === "paid"
+                  ? "Paid"
+                  : payment === "refunded"
+                    ? "Refunded"
+                    : `${formatCents(dueCents(order))} due at ${pickupOrDelivery}`}
               </dd>
             </div>
           </dl>

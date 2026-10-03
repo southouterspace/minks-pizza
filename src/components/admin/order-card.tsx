@@ -1,9 +1,8 @@
 import type { InferSelectModel } from "drizzle-orm";
 import type { orderItems, orders } from "@/db";
-import { updateOrderStatus } from "@/app/admin/actions";
 import { formatCents } from "@/lib/money";
+import { PAYMENT_LABEL, channelLabel, dueCents, paymentState, type PaymentState } from "@/lib/orders";
 import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
 import {
   Card,
   CardAction,
@@ -12,7 +11,6 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
-import { ConfirmButton } from "./confirm-button";
 import { formatDateTime } from "./ui";
 
 export type AdminOrder = InferSelectModel<typeof orders> & {
@@ -26,12 +24,12 @@ export const STATUS_META: Record<
   OrderStatus,
   { label: string; variant: BadgeVariant; className?: string }
 > = {
+  held: { label: "Scheduled", variant: "outline" },
   new: {
     label: "New",
     variant: "outline",
     className: "border-transparent! bg-warning/10 text-warning!",
   },
-  confirmed: { label: "Confirmed", variant: "secondary" },
   preparing: { label: "Preparing", variant: "secondary" },
   ready: {
     label: "Ready",
@@ -46,16 +44,18 @@ export const STATUS_META: Record<
   canceled: { label: "Canceled", variant: "destructive" },
 };
 
-const NEXT_ACTION: Partial<
-  Record<OrderStatus, { status: OrderStatus; label: string }>
-> = {
-  new: { status: "confirmed", label: "Confirm" },
-  confirmed: { status: "preparing", label: "Start preparing" },
-  preparing: { status: "ready", label: "Mark ready" },
-  ready: { status: "completed", label: "Complete" },
+const TYPE_LABEL: Record<AdminOrder["orderType"], string> = {
+  pickup: "Pickup",
+  delivery: "Delivery",
+  dine_in: "Dine-in",
 };
 
-const CANCELABLE: readonly OrderStatus[] = ["new", "confirmed"];
+function modifierLabel(m: AdminOrder["items"][number]["modifiers"][number]): string {
+  if (m.kind === "option") return `${m.groupName}: ${m.modifierName}`;
+  const amount = m.amount === "regular" ? "" : `${m.amount} `;
+  const half = m.placement === "whole" ? "" : ` (${m.placement} half)`;
+  return `${amount}${m.modifierName}${half}`;
+}
 
 export function StatusBadge({ status }: { status: OrderStatus }) {
   const meta = STATUS_META[status];
@@ -66,24 +66,20 @@ export function StatusBadge({ status }: { status: OrderStatus }) {
   );
 }
 
-function PaymentPill({ status }: { status: AdminOrder["paymentStatus"] }) {
-  if (status === "paid") {
-    return (
-      <Badge variant="outline" className="text-success!">
-        Paid
-      </Badge>
-    );
-  }
-  if (status === "refunded") {
-    return (
-      <Badge variant="outline" className="text-muted-foreground!">
-        Refunded
-      </Badge>
-    );
-  }
+const PAYMENT_TONE: Record<PaymentState, string> = {
+  paid: "text-success!",
+  partial: "text-warning!",
+  unpaid: "text-warning!",
+  refunded: "text-muted-foreground!",
+};
+
+function PaymentPill({ order }: { order: AdminOrder }) {
+  const state = paymentState(order);
+  const due = dueCents(order);
   return (
-    <Badge variant="outline" className="text-warning!">
-      Payment pending
+    <Badge variant="outline" className={PAYMENT_TONE[state]}>
+      {PAYMENT_LABEL[state]}
+      {state === "partial" || (state === "unpaid" && due > 0) ? ` · ${formatCents(due)} due` : ""}
     </Badge>
   );
 }
@@ -112,8 +108,6 @@ function TotalRow({
 }
 
 export function OrderCard({ order }: { order: AdminOrder }) {
-  const next = NEXT_ACTION[order.status];
-  const cancelable = CANCELABLE.includes(order.status);
   const isDelivery = order.orderType === "delivery";
 
   return (
@@ -124,13 +118,21 @@ export function OrderCard({ order }: { order: AdminOrder }) {
             #{order.orderNumber}
           </span>
           <StatusBadge status={order.status} />
+          <Badge variant="secondary">{channelLabel(order.channel, order.orderType)}</Badge>
           <Badge variant="outline" className="text-muted-foreground!">
-            {isDelivery ? "Delivery" : "Pickup"}
+            {TYPE_LABEL[order.orderType]}
+            {order.orderType === "dine_in" && order.tableLabel ? ` · Table ${order.tableLabel}` : ""}
           </Badge>
-          <PaymentPill status={order.paymentStatus} />
+          <PaymentPill order={order} />
         </CardTitle>
-        <CardAction className="text-xs text-muted-foreground">
+        <CardAction className="text-right text-xs text-muted-foreground">
           {formatDateTime(order.placedAt)}
+          {order.status === "held" && order.fireAt ? (
+            <span className="block">Fires {formatDateTime(order.fireAt)}</span>
+          ) : null}
+          {order.promisedAt ? (
+            <span className="block">Promised {formatDateTime(order.promisedAt)}</span>
+          ) : null}
         </CardAction>
       </CardHeader>
 
@@ -154,9 +156,15 @@ export function OrderCard({ order }: { order: AdminOrder }) {
 
         <ul className="mt-3 space-y-2">
           {order.items.map((line) => (
-            <li key={line.id} className="text-sm">
+            <li
+              key={line.id}
+              className={line.voidedAt ? "text-sm text-muted-foreground line-through" : "text-sm"}
+            >
               <div className="flex items-baseline justify-between gap-4">
                 <span>
+                  {line.voidedAt ? (
+                    <span className="mr-1 font-semibold text-destructive no-underline">VOID</span>
+                  ) : null}
                   <span className="font-medium tabular-nums">
                     {line.quantity} ×
                   </span>{" "}
@@ -168,9 +176,7 @@ export function OrderCard({ order }: { order: AdminOrder }) {
               </div>
               {line.modifiers.length > 0 ? (
                 <p className="mt-0.5 text-xs text-muted-foreground">
-                  {line.modifiers
-                    .map((m) => `${m.groupName}: ${m.modifierName}`)
-                    .join(" · ")}
+                  {line.modifiers.map(modifierLabel).join(" · ")}
                 </p>
               ) : null}
               {line.notes ? (
@@ -194,6 +200,9 @@ export function OrderCard({ order }: { order: AdminOrder }) {
       <CardFooter className="flex-wrap items-end justify-between gap-4">
         <dl className="space-y-0.5 text-xs">
           <TotalRow label="Subtotal" value={formatCents(order.subtotalCents)} />
+          {order.discountCents > 0 ? (
+            <TotalRow label="Discounts" value={`−${formatCents(order.discountCents)}`} />
+          ) : null}
           <TotalRow label="Tax" value={formatCents(order.taxCents)} />
           {isDelivery || order.deliveryFeeCents > 0 ? (
             <TotalRow
@@ -211,27 +220,6 @@ export function OrderCard({ order }: { order: AdminOrder }) {
           />
         </dl>
 
-        <div className="flex items-center gap-2">
-          {cancelable ? (
-            <form action={updateOrderStatus}>
-              <input type="hidden" name="orderId" value={order.id} />
-              <input type="hidden" name="status" value="canceled" />
-              <ConfirmButton
-                label="Cancel"
-                confirmLabel="Confirm cancel"
-                size="default"
-                variant="outline"
-              />
-            </form>
-          ) : null}
-          {next ? (
-            <form action={updateOrderStatus}>
-              <input type="hidden" name="orderId" value={order.id} />
-              <input type="hidden" name="status" value={next.status} />
-              <Button type="submit">{next.label}</Button>
-            </form>
-          ) : null}
-        </div>
       </CardFooter>
     </Card>
   );

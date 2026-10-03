@@ -1,9 +1,10 @@
 import type { Metadata } from "next";
-import { desc, inArray } from "drizzle-orm";
+import { asc, desc, eq, inArray } from "drizzle-orm";
 import { Inbox } from "lucide-react";
 import { db, orders } from "@/db";
 import { requireOperator } from "@/lib/auth";
 import { formatCents } from "@/lib/money";
+import { channelLabel } from "@/lib/orders";
 import { AutoRefresh } from "@/components/admin/auto-refresh";
 import {
   OrderCard,
@@ -27,11 +28,18 @@ export const metadata: Metadata = { title: "Orders" };
 export default async function OrdersPage() {
   await requireOperator();
 
-  const activeOrders: AdminOrder[] = await db.query.orders.findMany({
-    where: inArray(orders.status, ["new", "confirmed", "preparing", "ready"]),
-    with: { items: true },
-    orderBy: [desc(orders.placedAt)],
-  });
+  const [activeOrders, scheduledOrders]: AdminOrder[][] = await Promise.all([
+    db.query.orders.findMany({
+      where: inArray(orders.status, ["new", "preparing", "ready"]),
+      with: { items: true },
+      orderBy: [desc(orders.placedAt)],
+    }),
+    db.query.orders.findMany({
+      where: eq(orders.status, "held"),
+      with: { items: true },
+      orderBy: [asc(orders.fireAt)],
+    }),
+  ]);
 
   const recentOrders = await db
     .select()
@@ -73,6 +81,22 @@ export default async function OrdersPage() {
         )}
       </section>
 
+      {scheduledOrders.length > 0 ? (
+        <section className="mt-8">
+          <h2 className="text-sm font-medium text-muted-foreground">
+            Scheduled ({scheduledOrders.length})
+          </h2>
+          <p className="mt-1 text-xs text-muted-foreground">
+            Held back from the kitchen until their fire time.
+          </p>
+          <div className="mt-3 space-y-4">
+            {scheduledOrders.map((order) => (
+              <OrderCard key={order.id} order={order} />
+            ))}
+          </div>
+        </section>
+      ) : null}
+
       {/* Recent */}
       <section className="mt-8">
         <details>
@@ -97,7 +121,7 @@ export default async function OrdersPage() {
                     <StatusBadge status={order.status} />
                     <span className="min-w-0 flex-1 truncate text-muted-foreground">
                       {order.customerName} ·{" "}
-                      {order.orderType === "delivery" ? "Delivery" : "Pickup"}
+                      {channelLabel(order.channel, order.orderType)}
                     </span>
                     <span className="tabular-nums">
                       {formatCents(order.totalCents)}

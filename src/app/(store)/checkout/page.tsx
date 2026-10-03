@@ -1,5 +1,5 @@
 import type { Metadata } from "next";
-import { getSettings } from "@/lib/orders";
+import { getSettings } from "@/lib/orders-server";
 import { ComingSoon } from "@/components/store/coming-soon";
 import { CheckoutForm } from "@/components/store/checkout-form";
 
