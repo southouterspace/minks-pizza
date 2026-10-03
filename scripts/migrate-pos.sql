@@ -15,6 +15,22 @@ BEGIN
     RETURN;
   END IF;
 
+  -- Two backfills below each need these rules. pg_temp keeps one copy of
+  -- each without adding anything to the schema; both are dropped at the end.
+  CREATE OR REPLACE FUNCTION pg_temp.modifier_role_of(group_name text) RETURNS text
+    LANGUAGE sql IMMUTABLE AS $f$
+      SELECT CASE
+        WHEN group_name ~* '\msize\M' THEN 'size'
+        WHEN group_name ~* '\m(crust|dough)\M' THEN 'crust'
+        WHEN group_name ~* 'topping' THEN 'topping'
+        ELSE 'option' END
+    $f$;
+  -- The same rule as normalizePhone in src/lib/orders.ts.
+  CREATE OR REPLACE FUNCTION pg_temp.normalize_phone(raw text) RETURNS text
+    LANGUAGE sql IMMUTABLE AS $f$
+      SELECT regexp_replace(regexp_replace(raw, '\D', '', 'g'), '^1(\d{10})$', '\1')
+    $f$;
+
   -- payment_status → tenders ledger. No code path ever wrote anything but
   -- 'pending', so there is nothing to carry over; refuse rather than drop a
   -- real payment if one exists.
@@ -52,11 +68,7 @@ BEGIN
   IF NOT EXISTS (SELECT 1 FROM information_schema.columns
                  WHERE table_name = 'modifier_groups' AND column_name = 'role') THEN
     ALTER TABLE modifier_groups ADD COLUMN role modifier_role DEFAULT 'option' NOT NULL;
-    UPDATE modifier_groups SET role = (CASE
-      WHEN name ~* '\msize\M' THEN 'size'
-      WHEN name ~* '\m(crust|dough)\M' THEN 'crust'
-      WHEN name ~* 'topping' THEN 'topping'
-      ELSE 'option' END)::modifier_role;
+    UPDATE modifier_groups SET role = pg_temp.modifier_role_of(name)::modifier_role;
   END IF;
 
   -- Lines placed before the POS were sent to the kitchen when placed.
@@ -90,12 +102,7 @@ BEGIN
           'priceDeltaCents', (r.m->>'priceDeltaCents')::int)
       END ORDER BY r.ord), '[]'::jsonb)
     FROM (
-      SELECT e.m, e.ord,
-        CASE
-          WHEN e.m->>'groupName' ~* '\msize\M' THEN 'size'
-          WHEN e.m->>'groupName' ~* '\m(crust|dough)\M' THEN 'crust'
-          WHEN e.m->>'groupName' ~* 'topping' THEN 'topping'
-          ELSE 'option' END AS role,
+      SELECT e.m, e.ord, pg_temp.modifier_role_of(e.m->>'groupName') AS role,
         (SELECT md.id FROM modifiers md
            JOIN modifier_groups g ON g.id = md.group_id
            JOIN item_modifier_groups img ON img.group_id = g.id
@@ -143,7 +150,7 @@ BEGIN
     INSERT INTO customers (phone, name, email, last_order_at)
     SELECT DISTINCT ON (p.phone) p.phone, p.customer_name, p.customer_email, p.placed_at
     FROM (
-      SELECT regexp_replace(regexp_replace(customer_phone, '\D', '', 'g'), '^1(\d{10})$', '\1') AS phone,
+      SELECT pg_temp.normalize_phone(customer_phone) AS phone,
              customer_name, customer_email, placed_at
       FROM orders
     ) p
@@ -154,7 +161,10 @@ BEGIN
     ALTER TABLE orders ADD CONSTRAINT "orders_customer_id_customers_id_fk"
       FOREIGN KEY ("customer_id") REFERENCES "public"."customers"("id") ON DELETE set null ON UPDATE no action;
     UPDATE orders o SET customer_id = c.id FROM customers c
-    WHERE c.phone = regexp_replace(regexp_replace(o.customer_phone, '\D', '', 'g'), '^1(\d{10})$', '\1');
+    WHERE c.phone = pg_temp.normalize_phone(o.customer_phone);
   END IF;
+
+  DROP FUNCTION pg_temp.modifier_role_of(text);
+  DROP FUNCTION pg_temp.normalize_phone(text);
 END
 $migrate$;
