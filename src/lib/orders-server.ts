@@ -31,7 +31,6 @@ import {
   dueCents,
   requiredRole,
   roleSatisfies,
-  shiftReport,
   type Approval,
   type Channel,
   type CustomerInput,
@@ -41,12 +40,11 @@ import {
   type KitchenStatus,
   type OrderMutation,
   type OrderView,
-  type ReportFacts,
   type RequiredRole,
-  type ShiftReport,
   type SubmitLine,
   type TenderInput,
 } from "@/lib/orders";
+import { shiftReport, type ReportFacts, type ShiftReport } from "@/lib/reports";
 import {
   PricingError,
   priceLine,

@@ -1,14 +1,14 @@
 import type { ReactNode } from "react";
 import { formatCents } from "@/lib/money";
+import { SALES_CHANNEL_LABEL } from "@/lib/orders";
 import {
   AUDIT_SECTIONS,
-  SALES_CHANNEL_LABEL,
   TENDER_METHOD_LABEL,
   type AuditEntry,
   type AuditKind,
   type DrawerReconciliation,
   type SalesReport,
-} from "@/lib/orders";
+} from "@/lib/reports";
 import { formatStoreTime } from "@/lib/store-time";
 import { cn } from "@/lib/utils";
 import { STATUS_META } from "./order-card";

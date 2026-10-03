@@ -12,7 +12,8 @@ import {
   type MutationResult,
   type ShiftResult,
 } from "@/lib/orders-server";
-import type { Actor, OrderView, ShiftReport } from "@/lib/orders";
+import type { Actor, OrderView } from "@/lib/orders";
+import type { ShiftReport } from "@/lib/reports";
 import { getStaff, lockTerminal as clearStaff, renewStaff, unlockStaff, type StaffContext } from "@/lib/staff";
 import {
   closeShiftSchema,
