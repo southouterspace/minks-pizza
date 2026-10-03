@@ -1,4 +1,5 @@
 /** Reading server-action FormData: trimmed strings, ids, cents. */
+import { parseDollars } from "@/lib/money";
 
 export function textField(fd: FormData, name: string): string {
   const v = fd.get(name);
@@ -28,11 +29,19 @@ export function intField(fd: FormData, name: string, fallback: number): number {
   return Math.max(0, n);
 }
 
-/** Dollars string ("12.50") → integer cents. Blank = 0. */
+/** Dollars string ("12.50") → integer cents. Blank = 0. Throws on bad input. */
 export function dollarsToCents(fd: FormData, name: string): number {
-  const raw = textField(fd, name);
-  if (raw === "") return 0;
-  const n = Number.parseFloat(raw);
-  if (Number.isNaN(n) || n < 0) throw new Error(`Invalid ${name}`);
-  return Math.round(n * 100);
+  const cents = parseDollars(textField(fd, name));
+  if (cents === null) throw new Error(`Invalid ${name}`);
+  return cents;
+}
+
+/** Dollars string → integer cents, or null when it isn't a non-negative amount. Blank = 0. */
+export function centsField(fd: FormData, name: string): number | null {
+  return parseDollars(textField(fd, name));
+}
+
+/** A blank hidden id is null (a new row); otherwise it must be a valid id. */
+export function optionalIdField(fd: FormData, name: string): number | null {
+  return textField(fd, name) === "" ? null : idField(fd, name);
 }

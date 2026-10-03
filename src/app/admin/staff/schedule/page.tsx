@@ -9,13 +9,8 @@ import {
   ROLE_LABEL,
   ROLE_TONE,
 } from "@/lib/timeclock";
-import {
-  getScheduleWeek,
-  getStaffConfig,
-  resolveWeek,
-  type ScheduleShift,
-  type ScheduleWeek,
-} from "@/lib/timeclock-server";
+import { getStaffConfig, resolveWeek } from "@/lib/staff/config";
+import { getScheduleWeek, type ScheduleShift, type ScheduleWeek } from "@/lib/staff/schedule";
 import { dayOfWeek, formatDay, localDateOf, type LocalDate } from "@/lib/zoned";
 import { ShiftDialog, type ShiftDialogEmployee } from "@/components/staff/shift-dialog";
 import { WeekNav } from "@/components/staff/week-nav";

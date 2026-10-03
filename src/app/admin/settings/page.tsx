@@ -10,7 +10,7 @@ import {
 } from "@/app/admin/actions";
 import { ToggleSwitchForm } from "@/components/admin/toggle-switch-form";
 import { LogoField } from "@/components/admin/logo-field";
-import { centsToDollars } from "@/components/admin/ui";
+import { centsToDollars } from "@/lib/money";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Checkbox } from "@/components/ui/checkbox";

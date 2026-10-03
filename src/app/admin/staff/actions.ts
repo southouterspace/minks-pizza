@@ -8,21 +8,12 @@ import { db, employeeRoles, employees, shifts, timeEntries } from "@/db";
 import { requireOperator } from "@/lib/auth";
 import { checkbox, dollarsToCents, idField, textField, textOrNull } from "@/lib/form-data";
 import { ANY_TIME, availabilityToStored, JOB_ROLES, ROLE_LABEL, type JobRole, type StoredAvailability, type WeeklyAvailability } from "@/lib/timeclock";
-import {
-  approveWeek,
-  copyPreviousWeek,
-  decideTimeOff,
-  deleteManagerPunch,
-  generatePin,
-  getStaffConfig,
-  isUniqueViolation,
-  managerClockOut,
-  pinDigest,
-  publishWeek,
-  requestTimeOff,
-  resolveWeek,
-  saveManagerPunch,
-} from "@/lib/timeclock-server";
+import { isUniqueViolation } from "@/db/errors";
+import { getStaffConfig, resolveWeek } from "@/lib/staff/config";
+import { generatePin, pinDigest } from "@/lib/staff/employees";
+import { copyPreviousWeek, publishWeek } from "@/lib/staff/schedule";
+import { decideTimeOff, requestTimeOff } from "@/lib/staff/time-off";
+import { approveWeek, deleteManagerPunch, managerClockOut, saveManagerPunch } from "@/lib/staff/timesheets";
 import { DAY_NAMES, hhmmSchema, localDateSchema, shiftInstants, WEEKDAYS, zonedInstant } from "@/lib/zoned";
 
 export type StaffFormState = { error?: string; savedId?: number; pin?: string; notice?: string };

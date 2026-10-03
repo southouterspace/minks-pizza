@@ -4,7 +4,7 @@ import { db, employees, shifts, timeOffRequests } from "@/db";
 import { requireOperator } from "@/lib/auth";
 import { decideTimeOffRequest } from "@/app/admin/staff/actions";
 import { ROLE_LABEL } from "@/lib/timeclock";
-import { getStaffConfig } from "@/lib/timeclock-server";
+import { getStaffConfig } from "@/lib/staff/config";
 import { addDays, formatClock, formatDay, localDateOf, zonedInstant, type LocalDate } from "@/lib/zoned";
 import { AddTimeOffForm } from "@/components/staff/add-time-off-form";
 import { Badge } from "@/components/ui/badge";

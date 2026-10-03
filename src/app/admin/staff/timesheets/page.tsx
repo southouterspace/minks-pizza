@@ -6,12 +6,8 @@ import { requireOperator } from "@/lib/auth";
 import { approveTimesheet, deletePunch } from "@/app/admin/staff/actions";
 import { formatCents } from "@/lib/money";
 import { decimalHours, FLAG_META, formatDuration, ROLE_LABEL, type Severity } from "@/lib/timeclock";
-import {
-  getStaffConfig,
-  getTimesheetWeek,
-  resolveWeek,
-  type TimesheetEntry,
-} from "@/lib/timeclock-server";
+import { getStaffConfig, resolveWeek } from "@/lib/staff/config";
+import { getTimesheetWeek, type TimesheetEntry } from "@/lib/staff/timesheets";
 import { formatClock, formatDay, hhmmOf, localDateOf, weekDates } from "@/lib/zoned";
 import { ConfirmButton } from "@/components/admin/confirm-button";
 import { PunchDialog, type PunchEmployee } from "@/components/staff/punch-dialog";

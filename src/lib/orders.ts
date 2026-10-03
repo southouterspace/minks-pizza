@@ -1,4 +1,4 @@
-import { eq, inArray } from "drizzle-orm";
+import { and, eq, gte, inArray, lt, ne, sql } from "drizzle-orm";
 import {
   categories,
   db,
@@ -14,6 +14,7 @@ import {
 import type { KitchenStation } from "@/lib/kds";
 import { taxFromBps } from "@/lib/money";
 import type { CheckoutInput } from "@/lib/validation";
+import type { LocalDate } from "@/lib/zoned";
 
 export type PricedLine = {
   itemId: number;
@@ -239,4 +240,15 @@ export async function createOrder(input: CheckoutInput) {
   );
 
   return order;
+}
+
+/** Non-canceled order subtotals per store-local date, for [from, to). */
+export async function salesByDate(from: Date, to: Date, tz: string): Promise<Map<LocalDate, number>> {
+  const day = sql<string>`to_char(${orders.placedAt} at time zone ${tz}, 'YYYY-MM-DD')`;
+  const rows = await db
+    .select({ day, cents: sql<number>`sum(${orders.subtotalCents})::int` })
+    .from(orders)
+    .where(and(ne(orders.status, "canceled"), gte(orders.placedAt, from), lt(orders.placedAt, to)))
+    .groupBy(sql`1`);
+  return new Map(rows.map((r) => [r.day, r.cents]));
 }

@@ -1,6 +1,7 @@
 import type { Metadata, Viewport } from "next";
 import { requireOperator } from "@/lib/auth";
-import { getKioskBoard, getStaffConfig } from "@/lib/timeclock-server";
+import { getStaffConfig } from "@/lib/staff/config";
+import { getKioskBoard } from "@/lib/staff/kiosk";
 import { TimeClock } from "@/components/timeclock/time-clock";
 
 export const dynamic = "force-dynamic";

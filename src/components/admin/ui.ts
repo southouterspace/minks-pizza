@@ -35,7 +35,3 @@ export function formatDelta(cents: number): string {
   return cents > 0 ? `+${abs}` : `−${abs}`;
 }
 
-/** Dollars string for defaultValue of a money input. */
-export function centsToDollars(cents: number): string {
-  return (cents / 100).toFixed(2);
-}

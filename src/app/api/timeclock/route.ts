@@ -1,13 +1,8 @@
 import { z } from "zod";
 import { getCurrentOperator } from "@/lib/auth";
 import { JOB_ROLES, type KioskRequest } from "@/lib/timeclock";
-import {
-  applyKioskAction,
-  employeeByPin,
-  getKioskBoard,
-  getKioskView,
-  getStaffConfig,
-} from "@/lib/timeclock-server";
+import { getStaffConfig } from "@/lib/staff/config";
+import { applyKioskAction, employeeByPin, getKioskBoard, getKioskView } from "@/lib/staff/kiosk";
 import { localDateSchema } from "@/lib/zoned";
 
 export const dynamic = "force-dynamic";
