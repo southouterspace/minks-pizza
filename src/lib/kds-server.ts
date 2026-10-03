@@ -8,7 +8,7 @@ import {
   type KdsOrder,
   type KdsSnapshot,
 } from "@/lib/kds";
-import { fireDue, syncStatus } from "@/lib/orders-server/folds";
+import { complete, fireDue, recall, run, syncStatus } from "@/lib/orders-server/folds";
 
 const LINE_STATUSES = ["new", "preparing"] as const;
 const RECENT_WINDOW_MS = 2 * 60 * 60 * 1000;
@@ -208,23 +208,9 @@ export async function applyKdsAction(action: KdsAction): Promise<void> {
       .from(orders)
       .where(and(onTicket, inArray(orders.status, ["ready", "completed"])));
     if (recallable.length === 0) return;
-    const ids = recallable.map((o) => o.id);
-    // Back on the line from scratch: a recalled ticket usually means a remake.
-    await db.batch([
-      db
-        .update(orders)
-        .set({ status: "preparing", readyAt: null, updatedAt: now })
-        .where(inArray(orders.id, ids)),
-      db
-        .update(orderItems)
-        .set({ ovenAt: null, doneAt: null })
-        .where(inArray(orderItems.orderId, ids)),
-    ]);
+    await run(recall(recallable.map((o) => o.id)));
     return;
   }
 
-  await db
-    .update(orders)
-    .set({ status: "completed", updatedAt: now })
-    .where(and(onTicket, eq(orders.status, "ready")));
+  await run([complete(onTicket)]);
 }

@@ -1,8 +1,9 @@
 /**
  * The folds: convergent statements that derive an order's money columns
- * from its facts and its kitchen status from its line stamps. Every write
- * batch ends with them, so a replayed or half-retried write lands on the
- * same end state.
+ * from its facts and its kitchen status from its line stamps. Every order
+ * write batch ends with them, so a replayed or half-retried write lands on
+ * the same end state. Kitchen status otherwise moves only along the named
+ * edges at the end of this file.
  */
 import { and, eq, inArray, isNull, lte, sql, type SQL } from "drizzle-orm";
 import type { BatchItem } from "drizzle-orm/batch";
@@ -114,4 +115,35 @@ export async function fireDue(now: Date): Promise<number> {
   const ids = due.map((d) => d.id);
   await run([fireStamp(inArray(orderItems.orderId, ids)), ...ids.flatMap(folds)]);
   return ids.length;
+}
+
+// ---------------------------------------------------------------------------
+// Named status edges: explicit transitions the line stamps can't express
+// ---------------------------------------------------------------------------
+
+/** Ready → completed: handed to the customer (POS handoff, KDS bump off the ready shelf). */
+export function complete(where: SQL | undefined): Statement {
+  return db
+    .update(orders)
+    .set({ status: "completed", updatedAt: sql`now()` })
+    .where(and(where, eq(orders.status, "ready")));
+}
+
+/** Back on the line from scratch: a recalled ticket usually means a remake. */
+export function recall(orderIds: string[]): Statement[] {
+  return [
+    db
+      .update(orders)
+      .set({ status: "preparing", readyAt: null, updatedAt: sql`now()` })
+      .where(inArray(orders.id, orderIds)),
+    db.update(orderItems).set({ ovenAt: null, doneAt: null }).where(inArray(orderItems.orderId, orderIds)),
+  ];
+}
+
+/** Terminal. The fee and tip go too, so recomputeTotals folds the total to zero once lines are voided. */
+export function cancel(orderId: string): Statement {
+  return db
+    .update(orders)
+    .set({ status: "canceled", deliveryFeeCents: 0, tipCents: 0, updatedAt: sql`now()` })
+    .where(eq(orders.id, orderId));
 }

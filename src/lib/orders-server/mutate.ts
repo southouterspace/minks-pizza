@@ -17,7 +17,7 @@ import { authorize } from "@/lib/pin";
 import { getSettings, policyOf, type Settings } from "@/lib/settings-server";
 import { getOpenShift, type Shift } from "@/lib/shifts-server";
 import type { StaffContext } from "@/lib/staff";
-import { fireStamp, folds, run, type Statement } from "./folds";
+import { cancel, complete, fireStamp, folds, run, type Statement } from "./folds";
 import { getOrderView } from "./views";
 import {
   addressUpsert,
@@ -164,10 +164,7 @@ const MUTATIONS: Handlers = {
         .update(orderItems)
         .set(voidStamp(now, actor.employeeId, m.reason, approvedBy))
         .where(eq(orderItems.orderId, order.id)),
-      db
-        .update(orders)
-        .set({ status: "canceled", deliveryFeeCents: 0, tipCents: 0, updatedAt: sql`now()` })
-        .where(eq(orders.id, order.id)),
+      cancel(order.id),
     ]),
 
   split_by_item: (m, { order, actor }) => {
@@ -203,12 +200,7 @@ const MUTATIONS: Handlers = {
 
   handoff: (_m, { order }) => {
     if (order.status !== "ready") return rejected("Only a ready order can be handed off.");
-    return ok([
-      db
-        .update(orders)
-        .set({ status: "completed", updatedAt: sql`now()` })
-        .where(and(eq(orders.id, order.id), eq(orders.status, "ready"))),
-    ]);
+    return ok([complete(eq(orders.id, order.id))]);
   },
 };
 
