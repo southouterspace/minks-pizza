@@ -25,6 +25,8 @@ import {
   verifyPassword,
 } from "@/lib/auth";
 import { KITCHEN_STATIONS, type KitchenStation } from "@/lib/kds";
+import { HALF_TOPPING_RULES } from "@/lib/pricing";
+import { isTimeZone } from "@/lib/store-time";
 
 export type AuthFormState = { error?: string };
 
@@ -693,8 +695,45 @@ function logoUrlOrNull(formData: FormData): string | null {
   return /^https:\/\/\S+$/i.test(raw) ? raw : null;
 }
 
+const num = (fd: FormData, name: string) => Number(textField(fd, name) || NaN);
+
+const posSettingsSchema = z.object({
+  halfToppingRule: z.enum(HALF_TOPPING_RULES, "Pick a half-topping rule."),
+  extraToppingBps: z
+    .number("Enter the extra-topping multiplier.")
+    .int()
+    .min(10_000, "Extra toppings can't cost less than a regular portion (1×).")
+    .max(50_000, "Extra-topping multiplier tops out at 5×."),
+  discountApprovalCents: z
+    .number("Enter a discount approval threshold.")
+    .int()
+    .min(0, "The discount threshold can't be negative.")
+    .max(100_000, "The discount threshold tops out at $1,000."),
+  ovenCapacityPies: z.number("Enter oven capacity.").int().min(1, "Oven capacity is at least 1 pie.").max(50, "Oven capacity tops out at 50 pies."),
+  makeMinutes: z.number("Enter make time.").int().min(0, "Make time can't be negative.").max(60, "Make time tops out at 60 minutes."),
+  posLockSeconds: z
+    .number("Enter the auto-lock time.")
+    .int()
+    .min(15, "Auto-lock is at least 15 seconds.")
+    .max(3600, "Auto-lock tops out at 3600 seconds (an hour)."),
+  timezone: z.string().refine(isTimeZone, "Pick a timezone."),
+});
+
 export async function saveSettings(formData: FormData): Promise<void> {
   await requireOperator();
+
+  const pos = posSettingsSchema.safeParse({
+    halfToppingRule: textField(formData, "halfToppingRule"),
+    extraToppingBps: Math.round(num(formData, "extraToppingMultiplier") * 10_000),
+    discountApprovalCents: Math.round(num(formData, "discountApproval") * 100),
+    ovenCapacityPies: num(formData, "ovenCapacityPies"),
+    makeMinutes: num(formData, "makeMinutes"),
+    posLockSeconds: num(formData, "posLockSeconds"),
+    timezone: textField(formData, "timezone"),
+  });
+  if (!pos.success) {
+    redirect(`/admin/settings?error=${encodeURIComponent(pos.error.issues[0]?.message ?? "Check the POS settings.")}`);
+  }
 
   const taxPercentRaw = textField(formData, "taxPercent");
   const taxPercent = taxPercentRaw === "" ? 0 : Number.parseFloat(taxPercentRaw);
@@ -744,6 +783,7 @@ export async function saveSettings(formData: FormData): Promise<void> {
     deliveryFeeCents: dollarsToCents(formData, "deliveryFee"),
     deliveryMinimumCents: dollarsToCents(formData, "deliveryMinimum"),
     taxRateBps: Math.round(taxPercent * 100),
+    ...pos.data,
     updatedAt: new Date(),
   };
 

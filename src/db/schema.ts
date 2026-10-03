@@ -124,6 +124,8 @@ export const storeSettings = pgTable("store_settings", {
   makeMinutes: integer("make_minutes").notNull().default(3),
   /** The POS drops back to the PIN pad after this long. */
   posLockSeconds: integer("pos_lock_seconds").notNull().default(120),
+  /** IANA zone: where report days start and end, and how times print. */
+  timezone: text("timezone").notNull().default("America/Chicago"),
   isPublished: boolean("is_published").notNull().default(false),
   isAcceptingOrders: boolean("is_accepting_orders").notNull().default(true),
   updatedAt: timestamp("updated_at", { withTimezone: true })

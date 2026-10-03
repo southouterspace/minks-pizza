@@ -23,10 +23,27 @@ import {
   FieldSet,
 } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
+import { NativeSelect, NativeSelectOption } from "@/components/ui/native-select";
+import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
+import type { HalfToppingRule } from "@/lib/pricing";
+import { US_TIMEZONES } from "@/lib/store-time";
 
 export const dynamic = "force-dynamic";
 
 export const metadata: Metadata = { title: "Settings" };
+
+const HALF_RULES: { value: HalfToppingRule; label: string; example: string }[] = [
+  {
+    value: "average",
+    label: "Average of the halves",
+    example: "$2.00 topping on the left, $1.00 on the right charges $1.50.",
+  },
+  {
+    value: "highest",
+    label: "Higher half",
+    example: "$2.00 topping on the left, $1.00 on the right charges $2.00.",
+  },
+];
 
 const DEFAULTS = {
   name: "My Pizzeria",
@@ -51,6 +68,13 @@ const DEFAULTS = {
   deliveryFeeCents: 0,
   deliveryMinimumCents: 0,
   taxRateBps: 0,
+  halfToppingRule: "average" as HalfToppingRule,
+  extraToppingBps: 20_000,
+  discountApprovalCents: 500,
+  ovenCapacityPies: 6,
+  makeMinutes: 3,
+  posLockSeconds: 120,
+  timezone: "America/Chicago",
   isPublished: false,
   isAcceptingOrders: true,
 };
@@ -61,7 +85,9 @@ export default async function SettingsPage({
   searchParams: Promise<Record<string, string | string[] | undefined>>;
 }) {
   await requireOperator();
-  const saved = (await searchParams).saved === "1";
+  const params = await searchParams;
+  const saved = params.saved === "1";
+  const error = typeof params.error === "string" ? params.error : null;
 
   const [row] = await db
     .select()
@@ -76,6 +102,11 @@ export default async function SettingsPage({
   return (
     <div>
       <h1 className="text-xl font-semibold tracking-tight">Settings</h1>
+      {error ? (
+        <p role="alert" className="mt-2 text-sm font-medium text-destructive">
+          Not saved: {error}
+        </p>
+      ) : null}
 
       {/* Storefront controls */}
       <Card className="mt-6 gap-0! py-0!">
@@ -363,6 +394,123 @@ export default async function SettingsPage({
 
         <FieldSet>
           <FieldLegend className="w-full border-b border-border pb-2 text-sm!">
+            Point of sale
+          </FieldLegend>
+          <Field>
+            <FieldLabel>Half-and-half topping price</FieldLabel>
+            <RadioGroup
+              name="halfToppingRule"
+              defaultValue={settings.halfToppingRule}
+              className="grid gap-2 sm:grid-cols-2"
+            >
+              {HALF_RULES.map((rule) => (
+                <label
+                  key={rule.value}
+                  className="flex cursor-pointer items-start gap-3 rounded-lg border border-border px-3 py-2.5 has-data-checked:border-primary"
+                >
+                  <RadioGroupItem value={rule.value} className="mt-0.5" />
+                  <span>
+                    <span className="block text-sm font-medium">{rule.label}</span>
+                    <span className="block text-xs text-muted-foreground">{rule.example}</span>
+                  </span>
+                </label>
+              ))}
+            </RadioGroup>
+          </Field>
+          <div className="grid gap-4 sm:grid-cols-3">
+            <Field>
+              <FieldLabel htmlFor="s-extra">Extra topping (× price)</FieldLabel>
+              <Input
+                id="s-extra"
+                name="extraToppingMultiplier"
+                type="number"
+                min="1"
+                max="5"
+                step="0.25"
+                required
+                defaultValue={settings.extraToppingBps / 10_000}
+                className="tabular-nums"
+              />
+              <FieldDescription>2 = extra costs twice the topping.</FieldDescription>
+            </Field>
+            <Field>
+              <FieldLabel htmlFor="s-discount">Discount approval over ($)</FieldLabel>
+              <Input
+                id="s-discount"
+                name="discountApproval"
+                type="number"
+                min="0"
+                max="1000"
+                step="0.01"
+                required
+                defaultValue={centsToDollars(settings.discountApprovalCents)}
+                className="tabular-nums"
+              />
+              <FieldDescription>Above this needs a manager.</FieldDescription>
+            </Field>
+            <Field>
+              <FieldLabel htmlFor="s-lock">Auto-lock after (seconds)</FieldLabel>
+              <Input
+                id="s-lock"
+                name="posLockSeconds"
+                type="number"
+                min="15"
+                max="3600"
+                step="1"
+                required
+                defaultValue={settings.posLockSeconds}
+                className="tabular-nums"
+              />
+              <FieldDescription>Back to the PIN pad when idle.</FieldDescription>
+            </Field>
+            <Field>
+              <FieldLabel htmlFor="s-oven-cap">Oven capacity (pies)</FieldLabel>
+              <Input
+                id="s-oven-cap"
+                name="ovenCapacityPies"
+                type="number"
+                min="1"
+                max="50"
+                step="1"
+                required
+                defaultValue={settings.ovenCapacityPies}
+                className="tabular-nums"
+              />
+            </Field>
+            <Field>
+              <FieldLabel htmlFor="s-make">Make time per pie (min)</FieldLabel>
+              <Input
+                id="s-make"
+                name="makeMinutes"
+                type="number"
+                min="0"
+                max="60"
+                step="1"
+                required
+                defaultValue={settings.makeMinutes}
+                className="tabular-nums"
+              />
+              <FieldDescription>With oven capacity, sets the quoted wait.</FieldDescription>
+            </Field>
+            <Field>
+              <FieldLabel htmlFor="s-timezone">Store timezone</FieldLabel>
+              <NativeSelect id="s-timezone" name="timezone" defaultValue={settings.timezone} className="w-full">
+                {(US_TIMEZONES.some((z) => z.tz === settings.timezone)
+                  ? US_TIMEZONES
+                  : [{ tz: settings.timezone, label: settings.timezone }, ...US_TIMEZONES]
+                ).map((z) => (
+                  <NativeSelectOption key={z.tz} value={z.tz}>
+                    {z.label} ({z.tz.split("/").pop()?.replace("_", " ")})
+                  </NativeSelectOption>
+                ))}
+              </NativeSelect>
+              <FieldDescription>Where report days start and end.</FieldDescription>
+            </Field>
+          </div>
+        </FieldSet>
+
+        <FieldSet>
+          <FieldLegend className="w-full border-b border-border pb-2 text-sm!">
             Kitchen display
           </FieldLegend>
           <Card>
@@ -469,6 +617,7 @@ export default async function SettingsPage({
 
         <div className="flex items-center gap-3 border-t border-border pt-5">
           <Button type="submit">Save settings</Button>
+
           {saved ? (
             <span className="text-sm font-medium text-success" role="status">
               Saved
