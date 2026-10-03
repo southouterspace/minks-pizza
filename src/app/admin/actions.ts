@@ -26,6 +26,7 @@ import {
   verifyPassword,
 } from "@/lib/auth";
 import { KITCHEN_STATIONS, type KitchenStation } from "@/lib/kds";
+import { EMPLOYEE_ROLES } from "@/lib/orders";
 import { pinDigest } from "@/lib/pin";
 import { HALF_TOPPING_RULES } from "@/lib/pricing";
 import { isTimeZone } from "@/lib/store-time";
@@ -280,22 +281,13 @@ const pinSchema = z.string().regex(/^\d{4}$/, "A PIN is exactly 4 digits.");
 
 const employeeSchema = z.object({
   name: z.string().trim().min(1, "Name is required").max(80),
-  role: z.enum(["cashier", "manager", "owner"], "Pick a role."),
+  role: z.enum(EMPLOYEE_ROLES, "Pick a role."),
   pin: pinSchema,
 });
 
-/** The active employee already using this PIN, other than `exceptId`. */
-async function pinHolder(pin: string, exceptId: number | null): Promise<boolean> {
-  const [row] = await db
-    .select({ id: employees.id })
-    .from(employees)
-    .where(and(eq(employees.pinDigest, pinDigest(pin)), eq(employees.isActive, true)));
-  return row !== undefined && row.id !== exceptId;
-}
-
 const PIN_TAKEN = "That PIN belongs to someone else. Pick another.";
 
-/** Postgres unique_violation: the partial index caught a PIN taken in a race. */
+/** Postgres unique_violation: the partial index on active PINs refused a taken PIN. */
 function isUniqueViolation(err: unknown): boolean {
   const cause = (err as { cause?: { code?: string } })?.cause;
   return (err as { code?: string })?.code === "23505" || cause?.code === "23505";
@@ -310,7 +302,6 @@ export async function addEmployee(_prev: StaffFormState, formData: FormData): Pr
   });
   const kept = { name: textField(formData, "name"), role: textField(formData, "role") };
   if (!parsed.success) return { error: parsed.error.issues[0]?.message ?? "Check the form.", ...kept };
-  if (await pinHolder(parsed.data.pin, null)) return { error: PIN_TAKEN, ...kept };
   try {
     await db.insert(employees).values({
       name: parsed.data.name,
@@ -330,7 +321,6 @@ export async function changeEmployeePin(_prev: StaffFormState, formData: FormDat
   const employeeId = idField(formData, "employeeId");
   const parsed = pinSchema.safeParse(textField(formData, "pin"));
   if (!parsed.success) return { error: parsed.error.issues[0]?.message };
-  if (await pinHolder(parsed.data, employeeId)) return { error: PIN_TAKEN };
   try {
     await db
       .update(employees)

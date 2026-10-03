@@ -12,6 +12,7 @@ import {
 } from "drizzle-orm/pg-core";
 import { relations, sql } from "drizzle-orm";
 import { KITCHEN_STATIONS } from "../lib/kds";
+import { EMPLOYEE_ROLES } from "../lib/orders";
 import { GROUP_ROLES, HALF_TOPPING_RULES, type LineModifier } from "../lib/pricing";
 import { DEFAULT_TIMEZONE } from "../lib/store-time";
 
@@ -40,7 +41,7 @@ export const modifierRoleEnum = pgEnum("modifier_role", GROUP_ROLES);
 
 export const halfToppingRuleEnum = pgEnum("half_topping_rule", HALF_TOPPING_RULES);
 
-export const employeeRoleEnum = pgEnum("employee_role", ["cashier", "manager", "owner"]);
+export const employeeRoleEnum = pgEnum("employee_role", EMPLOYEE_ROLES);
 
 export const tenderDirectionEnum = pgEnum("tender_direction", ["payment", "refund"]);
 

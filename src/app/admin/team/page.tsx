@@ -10,6 +10,7 @@ import {
   ChangePasswordForm,
   ChangePinForm,
 } from "@/components/admin/team-forms";
+import { ROLE_LABEL } from "@/lib/orders";
 import { getStoreBasics } from "@/lib/settings-server";
 import { formatStoreDateTime } from "@/lib/store-time";
 import { Badge } from "@/components/ui/badge";
@@ -40,7 +41,6 @@ const NOTICES: Record<string, { text: string; tone: "success" | "warning" }> = {
   },
 };
 
-const ROLE_LABEL = { cashier: "Cashier", manager: "Manager", owner: "Owner" } as const;
 
 const rowClass = (i: number) =>
   i === 0

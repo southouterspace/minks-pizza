@@ -9,7 +9,9 @@ import type { LineModifier, MenuItem, PricingPolicy, Selection } from "@/lib/pri
 
 export type KitchenStatus = "held" | "new" | "preparing" | "ready" | "completed" | "canceled";
 export type Channel = "online" | "walk_in" | "phone";
-export type EmployeeRole = "cashier" | "manager" | "owner";
+export const EMPLOYEE_ROLES = ["cashier", "manager", "owner"] as const;
+export type EmployeeRole = (typeof EMPLOYEE_ROLES)[number];
+export const ROLE_LABEL: Record<EmployeeRole, string> = { cashier: "Cashier", manager: "Manager", owner: "Owner" };
 export type TenderMethod = "cash" | "card_external";
 export type DrawerEventKind = "no_sale" | "paid_in" | "paid_out";
 

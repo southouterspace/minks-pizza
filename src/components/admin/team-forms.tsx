@@ -19,6 +19,7 @@ import {
 } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import { NativeSelect, NativeSelectOption } from "@/components/ui/native-select";
+import { EMPLOYEE_ROLES, ROLE_LABEL } from "@/lib/orders";
 
 const INITIAL: AuthFormState = {};
 
@@ -170,9 +171,11 @@ export function AddEmployeeForm() {
               defaultValue={state.role ?? "cashier"}
               className="w-full"
             >
-              <NativeSelectOption value="cashier">Cashier</NativeSelectOption>
-              <NativeSelectOption value="manager">Manager</NativeSelectOption>
-              <NativeSelectOption value="owner">Owner</NativeSelectOption>
+              {EMPLOYEE_ROLES.map((role) => (
+                <NativeSelectOption key={role} value={role}>
+                  {ROLE_LABEL[role]}
+                </NativeSelectOption>
+              ))}
             </NativeSelect>
           </Field>
           <Field>
