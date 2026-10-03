@@ -212,11 +212,11 @@ export async function insertOrder(o: NewOrder, guard: SQL): Promise<typeof order
   const orderId = crypto.randomUUID();
   const place = db.execute(sql`
     with placed as (
-      insert into ${orders} (id, placed_at, promised_at, order_type, customer_name, customer_phone, customer_key, customer_email,
+      insert into ${orders} (id, placed_at, promised_at, order_type, customer_name, customer_phone, customer_email,
         address_line1, address_line2, city, zip, order_notes, subtotal_cents, discount_cents, tax_cents,
         delivery_fee_cents, tip_cents, total_cents, payment_status)
       select ${orderId}::uuid, ${at}::timestamptz, ${promisedAt}::timestamptz, ${input.orderType}::order_type,
-        ${input.customerName}::text, ${input.customerPhone}::text, ${o.customerKey}::text, ${input.customerEmail || null}::text,
+        ${input.customerName}::text, ${input.customerPhone}::text, ${input.customerEmail || null}::text,
         ${input.addressLine1 || null}::text, ${input.addressLine2 || null}::text, ${input.city || null}::text,
         ${input.zip || null}::text, ${input.orderNotes || null}::text, ${o.subtotalCents}::integer,
         ${o.discountCents}::integer, ${o.taxCents}::integer, ${o.deliveryFeeCents}::integer,

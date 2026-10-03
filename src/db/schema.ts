@@ -235,8 +235,14 @@ export const orders = pgTable(
     orderType: orderTypeEnum("order_type").notNull(),
     customerName: text("customer_name").notNull(),
     customerPhone: text("customer_phone").notNull(),
-    /** The phone's last ten digits (customerKeyFromPhone): who promotion limits count against. */
-    customerKey: text("customer_key").notNull(),
+    /**
+     * The phone's last ten digits, who promotion limits count against. Generated
+     * so every order has one, including orders placed before the column existed;
+     * customerKeyFromPhone is the same rule for quotes made before an order exists.
+     */
+    customerKey: text("customer_key").generatedAlwaysAs(
+      sql`right(regexp_replace(customer_phone, '\\D', '', 'g'), 10)`,
+    ),
     customerEmail: text("customer_email"),
     addressLine1: text("address_line1"),
     addressLine2: text("address_line2"),

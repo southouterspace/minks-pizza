@@ -294,15 +294,8 @@ Orders placed before the migration have `discount_cents = 0` and no
 discount lines.
 
 `orders.customer_key` (the phone's last ten digits, which promotion limits
-count against) is `NOT NULL`, so existing orders need a backfill between two
-pushes. Run `db:push` with the column declared without `.notNull()` in
-`src/db/schema.ts`, backfill, then push again with the schema as committed:
-
-```sql
-UPDATE orders
-SET customer_key = right(regexp_replace(customer_phone, '\D', '', 'g'), 10)
-WHERE customer_key IS NULL;
-```
+count against) is a generated column, so Postgres fills it for existing
+orders during the same push. No backfill step.
 
 ### Customer (`/`)
 

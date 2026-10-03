@@ -402,9 +402,13 @@ complaints are in `docs/promotions-research.md`.
   `promotion-engine.ts` (pure evaluator), `promotion-copy.ts` (words),
   `promotion-usage.ts` (what a use is), `checkout.ts` (quote, guard,
   refusal messages, `createOrder`), `orders.ts` (pricing and the insert).
-- **Customer key on orders.** `orders.customer_key` is written at insert,
-  so the new-customer check compares a column instead of a per-row regex
-  over the phone. Migration needs a backfill (README).
+- **Customer key on orders.** `orders.customer_key` is a stored generated
+  column over the phone, so the new-customer check compares an indexed
+  column instead of a per-row regex, and existing orders get their key in
+  the same push. The first cut wrote it at insert, which needed a nullable
+  push, a backfill and a second push, with old code failing inserts in
+  between. `customerKeyFromPhone` is the same rule for quotes made before
+  an order exists.
 - **One totals renderer.** `TotalsList` with `orderTotals`/`quoteTotals`
   serves checkout, cart, tracker, admin detail and the print ticket in one
   row order; a zero fee, tax or tip is hidden everywhere (the ticket used to
