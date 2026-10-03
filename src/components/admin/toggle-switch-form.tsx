@@ -1,15 +1,16 @@
 "use client";
 
-import { useRef } from "react";
+import { useTransition } from "react";
 import { Switch } from "@/components/ui/switch";
 
 /**
- * A storefront switch that submits a server action the moment it is toggled.
+ * A storefront switch that runs a server action the moment it is toggled.
  *
- * The Base UI `Switch` renders a `<span role="switch">` plus a visually hidden
- * checkbox and swallows the native click, so it can never submit a form by
- * itself — we submit the surrounding form from `onCheckedChange` instead.
- * `label` becomes the switch's accessible name and flips with the state.
+ * It calls the action directly rather than submitting a `<form>`: React resets
+ * a form after its action completes, which snaps the Base UI switch's hidden
+ * checkbox back to its first-render state, and the next click then toggles
+ * the DOM without React seeing a change. `label` becomes the switch's
+ * accessible name and flips with the state.
  */
 export function ToggleSwitchForm({
   action,
@@ -22,15 +23,16 @@ export function ToggleSwitchForm({
   label: string;
   className?: string;
 }) {
-  const formRef = useRef<HTMLFormElement>(null);
+  const [pending, startTransition] = useTransition();
 
   return (
-    <form action={action} ref={formRef} className={className}>
+    <div className={className}>
       <Switch
         checked={checked}
         aria-label={label}
-        onCheckedChange={() => formRef.current?.requestSubmit()}
+        disabled={pending}
+        onCheckedChange={() => startTransition(() => action())}
       />
-    </form>
+    </div>
   );
 }
