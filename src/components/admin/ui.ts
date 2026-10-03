@@ -15,14 +15,32 @@ export function ruleSummary(
   return `Optional, up to ${maxSelect}`;
 }
 
-/** "Aug 13, 2:45 PM" */
-export function formatDateTime(d: Date): string {
+/**
+ * "Aug 13, 2:45 PM". Pass the store's zone for order times: the server
+ * renders in UTC, which is nobody's wall clock.
+ */
+export function formatDateTime(d: Date, timeZone?: string): string {
   return d.toLocaleString("en-US", {
     month: "short",
     day: "numeric",
     hour: "numeric",
     minute: "2-digit",
+    timeZone,
   });
+}
+
+/** "6:45 PM" on the store's clock. */
+export function formatClock(d: Date, timeZone: string): string {
+  return d.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit", timeZone });
+}
+
+/** Compact elapsed time: "45s", "12m", "1h 05m". */
+export function formatAge(since: Date, now: Date): string {
+  const seconds = Math.max(0, Math.floor((now.getTime() - since.getTime()) / 1000));
+  if (seconds < 60) return `${seconds}s`;
+  const minutes = Math.floor(seconds / 60);
+  if (minutes < 60) return `${minutes}m`;
+  return `${Math.floor(minutes / 60)}h ${String(minutes % 60).padStart(2, "0")}m`;
 }
 
 /** Signed price delta: "+$1.50", "−$0.50", or "No charge". */

@@ -1,117 +1,128 @@
 import type { Metadata } from "next";
-import { desc, inArray } from "drizzle-orm";
-import { Inbox } from "lucide-react";
+import Link from "next/link";
+import { asc, inArray } from "drizzle-orm";
 import { db, orders } from "@/db";
 import { requireOperator } from "@/lib/auth";
 import { formatCents } from "@/lib/money";
+import { ACTIVE_STATUSES, type OrderStatus } from "@/lib/order-workflow";
+import { getDashboardStats, getStoreTimezone } from "@/lib/orders-admin";
+import { cn } from "@/lib/utils";
 import { AutoRefresh } from "@/components/admin/auto-refresh";
-import {
-  OrderCard,
-  StatusBadge,
-  type AdminOrder,
-} from "@/components/admin/order-card";
-import { formatDateTime } from "@/components/admin/ui";
-import { Card } from "@/components/ui/card";
-import {
-  Empty,
-  EmptyDescription,
-  EmptyHeader,
-  EmptyMedia,
-  EmptyTitle,
-} from "@/components/ui/empty";
+import { BoardCard } from "@/components/admin/board-card";
+import { NewOrderAlert } from "@/components/admin/new-order-alert";
 
 export const dynamic = "force-dynamic";
 
 export const metadata: Metadata = { title: "Orders" };
 
-export default async function OrdersPage() {
+const LANES: { title: string; statuses: readonly OrderStatus[]; empty: string }[] = [
+  { title: "New", statuses: ["new"], empty: "New orders land here." },
+  {
+    title: "In kitchen",
+    statuses: ["confirmed", "preparing"],
+    empty: "Confirmed orders move here.",
+  },
+  { title: "Ready", statuses: ["ready"], empty: "Nothing waiting for pickup." },
+];
+
+export default async function OrdersBoardPage() {
   await requireOperator();
+  const now = new Date();
 
-  const activeOrders: AdminOrder[] = await db.query.orders.findMany({
-    where: inArray(orders.status, ["new", "confirmed", "preparing", "ready"]),
-    with: { items: true },
-    orderBy: [desc(orders.placedAt)],
-  });
+  const [active, stats, timeZone] = await Promise.all([
+    db.query.orders.findMany({
+      where: inArray(orders.status, [...ACTIVE_STATUSES]),
+      with: { items: true },
+      orderBy: [asc(orders.placedAt)],
+    }),
+    getDashboardStats(now),
+    getStoreTimezone(),
+  ]);
 
-  const recentOrders = await db
-    .select()
-    .from(orders)
-    .where(inArray(orders.status, ["completed", "canceled"]))
-    .orderBy(desc(orders.placedAt))
-    .limit(20);
+  const kpis = [
+    {
+      label: "Orders today",
+      value: String(stats.orders),
+      hint: stats.canceled > 0 ? `${stats.canceled} canceled` : undefined,
+    },
+    { label: "Net sales", value: formatCents(stats.netSalesCents) },
+    {
+      label: "Avg ticket",
+      value: stats.avgTicketCents === null ? "—" : formatCents(stats.avgTicketCents),
+    },
+    {
+      label: "Avg ready time",
+      value: stats.avgReadyMinutes === null ? "—" : `${stats.avgReadyMinutes} min`,
+    },
+    {
+      label: "Late now",
+      value: String(stats.late),
+      tone: stats.late > 0 ? "text-destructive" : undefined,
+      hint: `${stats.active} active`,
+    },
+  ];
 
   return (
-    <div>
+    <div data-wide>
       <div className="flex flex-wrap items-center justify-between gap-3">
         <h1 className="text-xl font-semibold tracking-tight">Orders</h1>
-        <AutoRefresh />
+        <div className="flex items-center gap-2">
+          <NewOrderAlert
+            newOrderIds={active.filter((o) => o.status === "new").map((o) => o.id)}
+          />
+          <AutoRefresh />
+        </div>
       </div>
 
-      {/* Active */}
-      <section className="mt-6">
-        <h2 className="text-sm font-medium text-muted-foreground">
-          Active{activeOrders.length > 0 ? ` (${activeOrders.length})` : ""}
-        </h2>
-        {activeOrders.length === 0 ? (
-          <Empty className="mt-3 border">
-            <EmptyHeader>
-              <EmptyMedia variant="icon">
-                <Inbox />
-              </EmptyMedia>
-              <EmptyTitle>No orders yet</EmptyTitle>
-              <EmptyDescription>
-                They&apos;ll appear here the moment a customer checks out.
-              </EmptyDescription>
-            </EmptyHeader>
-          </Empty>
-        ) : (
-          <div className="mt-3 space-y-4">
-            {activeOrders.map((order) => (
-              <OrderCard key={order.id} order={order} />
-            ))}
+      <dl className="mt-4 grid grid-cols-2 gap-2 sm:grid-cols-5" data-testid="kpi-strip">
+        {kpis.map((k) => (
+          <div
+            key={k.label}
+            className="rounded-xl px-3 py-2.5 ring-1 ring-foreground/10 last:col-span-2 sm:last:col-span-1"
+          >
+            <dt className="text-xs text-muted-foreground">{k.label}</dt>
+            <dd className={cn("mt-0.5 text-lg font-semibold tabular-nums", k.tone)}>
+              {k.value}
+            </dd>
+            {k.hint ? <dd className="text-xs text-muted-foreground">{k.hint}</dd> : null}
           </div>
-        )}
-      </section>
+        ))}
+      </dl>
 
-      {/* Recent */}
-      <section className="mt-8">
-        <details>
-          <summary className="cursor-pointer text-sm font-medium text-muted-foreground transition-colors hover:text-foreground">
-            Recent ({recentOrders.length})
-          </summary>
-          {recentOrders.length === 0 ? (
-            <p className="mt-3 text-sm text-muted-foreground">
-              Completed and canceled orders will show up here.
-            </p>
-          ) : (
-            <Card className="mt-3 gap-0! py-0!">
-              <ul className="divide-y divide-border">
-                {recentOrders.map((order) => (
-                  <li
-                    key={order.id}
-                    className="flex flex-wrap items-center gap-x-3 gap-y-1 px-4 py-2.5 text-sm"
-                  >
-                    <span className="font-medium tabular-nums">
-                      #{order.orderNumber}
-                    </span>
-                    <StatusBadge status={order.status} />
-                    <span className="min-w-0 flex-1 truncate text-muted-foreground">
-                      {order.customerName} ·{" "}
-                      {order.orderType === "delivery" ? "Delivery" : "Pickup"}
-                    </span>
-                    <span className="tabular-nums">
-                      {formatCents(order.totalCents)}
-                    </span>
-                    <span className="text-xs text-muted-foreground">
-                      {formatDateTime(order.placedAt)}
-                    </span>
-                  </li>
-                ))}
-              </ul>
-            </Card>
-          )}
-        </details>
-      </section>
+      <div className="mt-6 grid gap-4 lg:grid-cols-3">
+        {LANES.map((lane) => {
+          const laneOrders = active.filter((o) => lane.statuses.includes(o.status));
+          return (
+            <section key={lane.title} aria-label={lane.title} data-testid={`lane-${lane.title}`}>
+              <h2 className="flex items-center gap-2 text-sm font-medium">
+                {lane.title}
+                <span className="rounded-full bg-muted px-1.5 text-xs tabular-nums text-muted-foreground">
+                  {laneOrders.length}
+                </span>
+              </h2>
+              <div className="mt-2 space-y-2">
+                {laneOrders.length === 0 ? (
+                  <p className="rounded-xl border border-dashed px-3 py-6 text-center text-xs text-muted-foreground">
+                    {lane.empty}
+                  </p>
+                ) : (
+                  laneOrders.map((order) => (
+                    <BoardCard key={order.id} order={order} now={now} timeZone={timeZone} />
+                  ))
+                )}
+              </div>
+            </section>
+          );
+        })}
+      </div>
+
+      <p className="mt-6 text-sm text-muted-foreground">
+        Completed and canceled orders are in{" "}
+        <Link href="/admin/orders" className="text-foreground underline underline-offset-4">
+          History
+        </Link>
+        .
+      </p>
     </div>
   );
 }
