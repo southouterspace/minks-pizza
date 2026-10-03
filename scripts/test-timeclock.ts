@@ -52,7 +52,6 @@ function test(name: string, fn: () => void) {
 const at = (iso: string) => new Date(iso);
 const iso = (d: Date) => d.toISOString();
 
-// --- zoned -------------------------------------------------------------------
 
 test("localDateOf uses the store zone, not UTC", () => {
   assert.equal(localDateOf(at("2026-10-06T03:30:00Z"), NY), "2026-10-05");
@@ -104,7 +103,6 @@ test("calendar helpers", () => {
   assert.equal(localDateSchema.safeParse("2026-02-28").success, true);
 });
 
-// --- payroll -----------------------------------------------------------------
 
 const FEDERAL = { otWeeklyMinutes: 2400, otDailyMinutes: null, dtDailyMinutes: null };
 const CALIFORNIA = { otWeeklyMinutes: 2400, otDailyMinutes: 480, dtDailyMinutes: 720 };
@@ -214,7 +212,6 @@ test("punchProblem rejects impossible hand-entered punches", () => {
   assert.equal(punchProblem(d("09:00"), null, [brk("12:00", null)], d("12:10")), null);
 });
 
-// --- clock state machine ------------------------------------------------------
 
 test("clock transitions: apply, replay or refuse for every state × action", () => {
   const states: ClockState[] = [
@@ -238,7 +235,6 @@ test("clock transitions: apply, replay or refuse for every state × action", () 
   assert.deepEqual(planClock(states[1], actions[0]), { kind: "replay", message: "You're already clocked in." });
 });
 
-// --- schedule conflicts -------------------------------------------------------
 
 const RULES = { otWeeklyMinutes: 2400, weekStartsOn: 1 };
 function shiftOn(date: string, from: string, to: string, id: number | null = null, unpaidBreakMinutes = 0): ShiftTimes {
@@ -300,7 +296,6 @@ test("remaining scheduled minutes count the rest of a shift under way", () => {
   assert.equal(remainingShiftMinutes([lunch, dinner], zonedInstant("2026-10-06", "23:00", NY)), 0);
 });
 
-// --- matching punches to shifts and early clock-in ----------------------------
 
 test("matchShift: [start − 2 h, end], nearest start first", () => {
   const lunch = shiftOn("2026-10-06", "10:00", "14:00", 1);
@@ -324,7 +319,6 @@ test("early clock-in refusal", () => {
   assert.equal(earlyClockInBlock(ny("15:30"), [tomorrow], { earlyClockInMinutes: 10 }, NY), null);
 });
 
-// --- timesheet flags ----------------------------------------------------------
 
 const FLAG_RULES = { breakRequiredAfterMinutes: 360, clockGraceMinutes: 7 };
 const SHIFT = { startsAt: at("2026-10-05T16:00:00Z"), endsAt: at("2026-10-05T22:00:00Z") };

@@ -108,7 +108,6 @@ async function main() {
   const shot = (p: Page, name: string) => p.screenshot({ path: `${SHOT_DIR}/${name}.png`, fullPage: true });
   await signIn(page);
 
-  // --- employees -------------------------------------------------------------
   await addEmployee(page, NAME, PIN);
   await page.getByTestId("employee-created").waitFor();
   const dana = await employeeByName(NAME);
@@ -133,7 +132,6 @@ async function main() {
   const weekStart = weekStartOf(today, 1);
   const tomorrow = addDays(today, 1);
 
-  // --- schedule: a shift for today, then publish -------------------------------
   // Start half an hour ago (never before midnight) so the punch matches it.
   const nowMinutes = Number(hhmmOf(new Date(), TZ).slice(0, 2)) * 60 + Number(hhmmOf(new Date(), TZ).slice(3));
   const startMinutes = Math.max(0, nowMinutes - 30);
@@ -167,7 +165,6 @@ async function main() {
   check("chip loses its draft styling", !(await cell.getByTestId("shift-chip").innerText()).includes("Draft"));
   await shot(page, "schedule-desktop");
 
-  // --- kiosk -------------------------------------------------------------------
   const kiosk = await context.newPage();
   await kiosk.goto(`${BASE}/timeclock`, { waitUntil: "networkidle" });
   const typePin = async (pin: string) => {
@@ -233,7 +230,6 @@ async function main() {
   await kiosk.waitForTimeout(4_500);
   check("confirmation returns to the PIN pad on its own", await kiosk.getByTestId("tc-enter").isVisible());
 
-  // --- timesheets: approve, edit with a reason, approve again, export ---------
   const danaRow = () => page.getByTestId("timesheet-row").filter({ hasText: NAME });
   const openRow = async () => {
     await page.goto(`${BASE}/admin/staff/timesheets?week=${weekStart}`, { waitUntil: "networkidle" });
@@ -304,7 +300,6 @@ async function main() {
   const grossExpected = ((Math.round((outMinutes - inMinutes) * 1600 / 60)) / 100).toFixed(2);
   check("CSV has the employee summary line", totalLine?.endsWith(`,${expectedHours},0.00,0.00,${grossExpected}`) === true, totalLine);
 
-  // --- time off: kiosk request → manager approval → schedule -----------------
   await typePin(PIN);
   await kiosk.getByTestId("tc-request-time-off").click();
   await kiosk.getByTestId("tc-off-start").fill(tomorrow);
@@ -341,7 +336,6 @@ async function main() {
   check("kiosk lists the approved time off", (await kiosk.getByTestId("tc-time-off-list").innerText()).toLowerCase().includes("approved"));
   await kiosk.getByTestId("tc-done").click();
 
-  // --- double clock-in: two requests at once leave one open punch ----------
   const clockIn = () =>
     page.request.post(`${BASE}/api/timeclock`, { data: { pin: PIN, action: { type: "clock_in", role: "driver" } } });
   const answers = await Promise.all([clockIn(), clockIn()]);
@@ -366,7 +360,6 @@ async function main() {
   const unknown = await page.request.post(`${BASE}/api/timeclock`, { data: { pin: "0000" } });
   check("API answers an unknown PIN with 401", unknown.status() === 401);
 
-  // --- overview: on the clock, manager clock-out --------------------------
   await page.goto(`${BASE}/admin/staff`, { waitUntil: "networkidle" });
   const onClock = page.getByTestId("on-clock-row").filter({ hasText: NAME });
   check("overview shows who is on the clock", (await onClock.innerText()).includes("Driver"));
@@ -384,7 +377,6 @@ async function main() {
     .where(and(eq(timeEntryAudit.timeEntryId, open[0].id), eq(timeEntryAudit.action, "clock_out")));
   check("manager clock-out closes the punch with an audited reason", managerClosed && closeAudit?.reason === "Left without clocking out");
 
-  // --- settings: staff rules round-trip, early clock-in refusal --------------
   await page.goto(`${BASE}/admin/settings`, { waitUntil: "networkidle" });
   await page.locator('select[name="timezone"]').selectOption(TZ);
   await page.fill('input[name="otWeeklyHours"]', "40");
@@ -421,7 +413,6 @@ async function main() {
   }
   await db.update(storeSettings).set({ otDailyMinutes: null, earlyClockInMinutes: null }).where(eq(storeSettings.id, 1));
 
-  // --- phone width -----------------------------------------------------------
   const phone = await browser.newContext({ viewport: { width: 375, height: 812 }, storageState: await context.storageState() });
   const phonePage = await phone.newPage();
   await phonePage.goto(`${BASE}/admin/staff/schedule`, { waitUntil: "networkidle" });

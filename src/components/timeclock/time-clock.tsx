@@ -171,7 +171,6 @@ export function TimeClock({ initial, storeName }: { initial: KioskBoard; storeNa
     setPin((p) => (p.length >= MAX_PIN ? p : p + d));
   }, []);
 
-  // Keyboard on the pad: digits, Backspace, Enter.
   useEffect(() => {
     if (screen.kind !== "pad") return;
     function onKey(e: KeyboardEvent) {
