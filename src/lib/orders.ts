@@ -1,242 +1,410 @@
-import { eq, inArray } from "drizzle-orm";
-import {
-  categories,
-  db,
-  itemModifierGroups,
-  menuItems,
-  modifierGroups,
-  modifiers,
-  orderItems,
-  orders,
-  storeSettings,
-  type OrderItemModifier,
-} from "@/db";
+/**
+ * Order domain: the types every screen renders and the pure rules over them
+ * (payment state, role policy, activity log, shift report). No I/O; the
+ * server seam that reads and writes these lives in orders-server.ts.
+ */
 import type { KitchenStation } from "@/lib/kds";
-import { taxFromBps } from "@/lib/money";
-import type { CheckoutInput } from "@/lib/validation";
+import type { LineModifier, Selection } from "@/lib/pricing";
 
-export type PricedLine = {
-  itemId: number;
-  itemName: string;
+export type KitchenStatus = "held" | "new" | "preparing" | "ready" | "completed" | "canceled";
+export type Channel = "online" | "walk_in" | "phone";
+export type EmployeeRole = "cashier" | "manager" | "owner";
+export type TenderMethod = "cash" | "card_external";
+export type DrawerEventKind = "no_sale" | "paid_in" | "paid_out";
+
+export type Address = {
+  line1: string;
+  line2: string | null;
+  city: string | null;
+  zip: string;
+};
+
+/** An address cannot exist on a pickup; a table cannot exist on a delivery. */
+export type Fulfillment =
+  | { kind: "pickup" }
+  | { kind: "delivery"; address: Address }
+  | { kind: "dine_in"; table: string };
+
+export type Actor = { employeeId: number; name: string; role: EmployeeRole };
+
+export type LineView = {
+  /** The line_uid: what the POS addresses a line by. */
+  lineId: string;
+  itemId: number | null;
+  name: string;
   quantity: number;
   unitPriceCents: number;
   lineTotalCents: number;
-  modifiers: OrderItemModifier[];
-  notes?: string;
+  modifiers: LineModifier[];
+  notes: string | null;
   station: KitchenStation;
+  firedAt: string | null;
+  ovenAt: string | null;
+  doneAt: string | null;
+  voided: null | { at: string; by: number | null; reason: string; approvedBy: number | null };
 };
 
-export type PricedCart = {
-  lines: PricedLine[];
+export type Tender = {
+  id: string;
+  direction: "payment" | "refund";
+  method: TenderMethod;
+  amountCents: number;
+  tenderedCents: number | null;
+  tipCents: number;
+  last4: string | null;
+  employeeId: number | null;
+  approvedBy: number | null;
+  reason: string | null;
+  at: string;
+};
+
+export type Adjustment = {
+  id: string;
+  /** Null = the whole check. */
+  lineId: string | null;
+  kind: "discount" | "comp";
+  cents: number;
+  reason: string;
+  employeeId: number;
+  approvedBy: number | null;
+  at: string;
+};
+
+export type Totals = {
   subtotalCents: number;
+  discountCents: number;
   taxCents: number;
   deliveryFeeCents: number;
-  totalCents: number; // before tip
+  tipCents: number;
+  totalCents: number;
+  paidCents: number;
+  refundedCents: number;
 };
 
-export class OrderError extends Error {}
+export type OrderView = {
+  id: string;
+  number: number;
+  /** The KDS ticket this order rides on: its own id unless split off another. */
+  ticketOrderId: string;
+  status: KitchenStatus;
+  channel: Channel;
+  fulfillment: Fulfillment;
+  customer: { id: string | null; name: string; phone: string; email: string | null };
+  notes: string | null;
+  placedAt: string;
+  fireAt: string | null;
+  promisedAt: string | null;
+  readyAt: string | null;
+  createdBy: number | null;
+  lines: LineView[];
+  tenders: Tender[];
+  adjustments: Adjustment[];
+  totals: Totals;
+  /** Names for every employee id above, for the activity log. */
+  staff: Record<number, string>;
+};
 
-export async function getSettings() {
-  const [settings] = await db
-    .select()
-    .from(storeSettings)
-    .where(eq(storeSettings.id, 1));
-  if (!settings) throw new OrderError("Store is not configured yet.");
-  return settings;
+// ---------------------------------------------------------------------------
+// Payment state: derived from the ledger folds, never stored
+// ---------------------------------------------------------------------------
+
+export type PaymentState = "unpaid" | "partial" | "paid" | "refunded";
+type Money = Pick<Totals, "totalCents" | "paidCents" | "refundedCents">;
+
+export function paymentState(t: Money): PaymentState {
+  const net = t.paidCents - t.refundedCents;
+  if (t.refundedCents > 0 && net < t.totalCents) return "refunded";
+  if (net >= t.totalCents && t.paidCents > 0) return "paid";
+  if (net > 0) return "partial";
+  return t.totalCents === 0 ? "paid" : "unpaid";
 }
 
+export function dueCents(t: Money): number {
+  return Math.max(0, t.totalCents - (t.paidCents - t.refundedCents));
+}
+
+export const PAYMENT_LABEL: Record<PaymentState, string> = {
+  unpaid: "Unpaid",
+  partial: "Part paid",
+  paid: "Paid",
+  refunded: "Refunded",
+};
+
+export const CHANNEL_LABEL: Record<Channel, string> = {
+  online: "Online",
+  walk_in: "Walk-in",
+  phone: "Phone",
+};
+
+/** Badge text: a dine-in check reads as dine-in whatever rang it in. */
+export function channelLabel(channel: Channel, orderType: Fulfillment["kind"]): string {
+  return orderType === "dine_in" ? "Dine-in" : CHANNEL_LABEL[channel];
+}
+
+// ---------------------------------------------------------------------------
+// Mutations and the role policy
+// ---------------------------------------------------------------------------
+
+export type SubmitLine = {
+  lineId: string;
+  itemId: number;
+  quantity: number;
+  selections: Selection[];
+  notes: string | null;
+};
+
+export type TenderInput = {
+  id: string;
+  method: TenderMethod;
+  amountCents: number;
+  /** Cash only: what the customer handed over. */
+  tenderedCents: number | null;
+  tipCents: number;
+  last4: string | null;
+};
+
+export type CustomerInput = {
+  phone: string;
+  name: string;
+  email: string | null;
+  saveAddress: boolean;
+};
+
+export type FirePlan = { kind: "now" } | { kind: "hold" } | { kind: "at"; at: string };
+
+/** Every POS verb against an existing order. One union, one handler. */
+export type OrderMutation =
+  | { kind: "add_lines"; lines: SubmitLine[]; fire: boolean }
+  | { kind: "fire"; lineIds: string[] | "all" }
+  | { kind: "void_line"; lineId: string; reason: string }
+  | { kind: "discount"; id: string; lineId: string | null; cents: number; reason: string }
+  | { kind: "comp"; id: string; lineId: string; reason: string }
+  | { kind: "tender"; tender: TenderInput }
+  | { kind: "refund"; id: string; method: TenderMethod; amountCents: number; reason: string }
+  | { kind: "set_customer"; customer: CustomerInput }
+  | { kind: "set_fulfillment"; fulfillment: Fulfillment }
+  | { kind: "set_schedule"; fire: FirePlan; promisedAt: string | null }
+  | { kind: "cancel"; reason: string }
+  | { kind: "split_by_item"; lineIds: string[]; newOrderId: string }
+  | { kind: "handoff" };
+
+export type Approval = { managerPin: string };
+
+export type RequiredRole = "cashier" | "manager";
+
+export type PolicyContext = {
+  order: { lines: Pick<LineView, "lineId" | "firedAt" | "voided">[] };
+  discountApprovalCents: number;
+};
+
 /**
- * Server-side pricing: the client's cart carries only ids + quantities; every
- * price comes from the database here. Also enforces availability and modifier
- * group min/max rules.
+ * Who may perform a mutation, decided on the server at the moment of the
+ * action. A sent (fired) line costs food, so voiding it needs a manager.
  */
-export async function priceCart(
-  lines: CheckoutInput["lines"],
-  orderType: "pickup" | "delivery",
-): Promise<PricedCart> {
-  const settings = await getSettings();
-
-  const itemIds = [...new Set(lines.map((l) => l.itemId))];
-  const items = await db
-    .select({ item: menuItems, station: categories.station })
-    .from(menuItems)
-    .innerJoin(categories, eq(categories.id, menuItems.categoryId))
-    .where(inArray(menuItems.id, itemIds));
-  const itemById = new Map(
-    items.map(({ item, station }) => [item.id, { ...item, station }]),
-  );
-
-  const links = itemIds.length
-    ? await db
-        .select()
-        .from(itemModifierGroups)
-        .where(inArray(itemModifierGroups.itemId, itemIds))
-    : [];
-  const groupIds = [...new Set(links.map((l) => l.groupId))];
-  const groups = groupIds.length
-    ? await db
-        .select()
-        .from(modifierGroups)
-        .where(inArray(modifierGroups.id, groupIds))
-    : [];
-  const mods = groupIds.length
-    ? await db
-        .select()
-        .from(modifiers)
-        .where(inArray(modifiers.groupId, groupIds))
-    : [];
-  const groupById = new Map(groups.map((g) => [g.id, g]));
-  const modById = new Map(mods.map((m) => [m.id, m]));
-
-  const priced: PricedLine[] = lines.map((line) => {
-    const item = itemById.get(line.itemId);
-    if (!item || !item.isAvailable) {
-      throw new OrderError(
-        `"${item?.name ?? "An item"}" is no longer available. Please remove it from your cart.`,
-      );
+export function requiredRole(m: OrderMutation, ctx: PolicyContext): RequiredRole {
+  switch (m.kind) {
+    case "void_line": {
+      const line = ctx.order.lines.find((l) => l.lineId === m.lineId);
+      return line?.firedAt ? "manager" : "cashier";
     }
+    case "cancel":
+      return ctx.order.lines.some((l) => l.firedAt && !l.voided) ? "manager" : "cashier";
+    case "discount":
+      return m.cents > ctx.discountApprovalCents ? "manager" : "cashier";
+    case "comp":
+    case "refund":
+      return "manager";
+    case "add_lines":
+    case "fire":
+    case "tender":
+    case "set_customer":
+    case "set_fulfillment":
+    case "set_schedule":
+    case "split_by_item":
+    case "handoff":
+      return "cashier";
+  }
+}
 
-    const allowedGroupIds = new Set(
-      links.filter((l) => l.itemId === item.id).map((l) => l.groupId),
-    );
+export const DRAWER_ROLE: Record<DrawerEventKind, RequiredRole> = {
+  no_sale: "manager",
+  paid_in: "cashier",
+  paid_out: "manager",
+};
 
-    const chosen: OrderItemModifier[] = [];
-    const countByGroup = new Map<number, number>();
-    let unitPrice = item.basePriceCents;
+export function roleSatisfies(role: EmployeeRole, required: RequiredRole): boolean {
+  return required === "cashier" || role === "manager" || role === "owner";
+}
 
-    for (const modId of line.modifierIds) {
-      const mod = modById.get(modId);
-      const group = mod ? groupById.get(mod.groupId) : undefined;
-      if (!mod || !group || !allowedGroupIds.has(mod.groupId) || !mod.isAvailable) {
-        throw new OrderError(
-          `An option on "${item.name}" is no longer available. Please re-add it to your cart.`,
-        );
-      }
-      chosen.push({
-        groupName: group.name,
-        modifierName: mod.name,
-        priceDeltaCents: mod.priceDeltaCents,
-      });
-      countByGroup.set(mod.groupId, (countByGroup.get(mod.groupId) ?? 0) + 1);
-      unitPrice += mod.priceDeltaCents;
-    }
+// ---------------------------------------------------------------------------
+// Activity log: a read-time union over the order's facts
+// ---------------------------------------------------------------------------
 
-    for (const groupId of allowedGroupIds) {
-      const group = groupById.get(groupId);
-      if (!group) continue;
-      const count = countByGroup.get(groupId) ?? 0;
-      if (count < group.minSelect) {
-        throw new OrderError(
-          `"${item.name}" requires a ${group.name} selection.`,
-        );
-      }
-      if (group.maxSelect !== null && count > group.maxSelect) {
-        throw new OrderError(
-          `Too many ${group.name} selections on "${item.name}".`,
-        );
-      }
-    }
+export type HistoryEntry = {
+  at: string;
+  who: string | null;
+  approvedBy: string | null;
+  text: string;
+};
 
-    return {
-      itemId: item.id,
-      itemName: item.name,
-      quantity: line.quantity,
-      unitPriceCents: unitPrice,
-      lineTotalCents: unitPrice * line.quantity,
-      modifiers: chosen,
-      notes: line.notes,
-      station: item.station,
-    };
-  });
-
-  const subtotalCents = priced.reduce((sum, l) => sum + l.lineTotalCents, 0);
-  const deliveryFeeCents =
-    orderType === "delivery" ? settings.deliveryFeeCents : 0;
-  const taxCents = taxFromBps(subtotalCents, settings.taxRateBps);
-
-  return {
-    lines: priced,
-    subtotalCents,
-    taxCents,
-    deliveryFeeCents,
-    totalCents: subtotalCents + taxCents + deliveryFeeCents,
+export function orderHistory(o: OrderView): HistoryEntry[] {
+  const name = (id: number | null) => (id === null ? null : (o.staff[id] ?? `#${id}`));
+  const lineName = (lineId: string | null) => {
+    const line = o.lines.find((l) => l.lineId === lineId);
+    return line ? `${line.quantity} × ${line.name}` : "the check";
   };
+  const entries: HistoryEntry[] = [
+    { at: o.placedAt, who: name(o.createdBy), approvedBy: null, text: `Placed (${CHANNEL_LABEL[o.channel]})` },
+  ];
+  const firedAt = [...new Set(o.lines.flatMap((l) => (l.firedAt ? [l.firedAt] : [])))];
+  for (const at of firedAt) {
+    const fired = o.lines.filter((l) => l.firedAt === at);
+    entries.push({ at, who: null, approvedBy: null, text: `Sent to kitchen: ${fired.map((l) => `${l.quantity} × ${l.name}`).join(", ")}` });
+  }
+  for (const l of o.lines) {
+    if (!l.voided) continue;
+    entries.push({
+      at: l.voided.at,
+      who: name(l.voided.by),
+      approvedBy: name(l.voided.approvedBy),
+      text: `Voided ${l.quantity} × ${l.name} (${l.voided.reason})`,
+    });
+  }
+  for (const a of o.adjustments) {
+    const verb = a.kind === "comp" ? "Comped" : "Discounted";
+    entries.push({
+      at: a.at,
+      who: name(a.employeeId),
+      approvedBy: name(a.approvedBy),
+      text: `${verb} ${lineName(a.lineId)} by ${(a.cents / 100).toFixed(2)} (${a.reason})`,
+    });
+  }
+  for (const t of o.tenders) {
+    const method = t.method === "cash" ? "cash" : "card";
+    const amount = (t.amountCents / 100).toFixed(2);
+    entries.push({
+      at: t.at,
+      who: name(t.employeeId),
+      approvedBy: name(t.approvedBy),
+      text:
+        t.direction === "payment"
+          ? `Paid ${amount} ${method}${t.tipCents > 0 ? ` + ${(t.tipCents / 100).toFixed(2)} tip` : ""}`
+          : `Refunded ${amount} ${method} (${t.reason ?? "no reason"})`,
+    });
+  }
+  return entries.sort((a, b) => a.at.localeCompare(b.at));
 }
 
+// ---------------------------------------------------------------------------
+// Shift report: the drawer reconciliation, as a pure fold
+// ---------------------------------------------------------------------------
+
+export type ShiftFacts = {
+  tenders: Pick<Tender, "direction" | "method" | "amountCents" | "tipCents">[];
+  adjustments: Pick<Adjustment, "kind" | "cents" | "employeeId" | "approvedBy">[];
+  voids: { employeeId: number | null; approvedBy: number | null; cents: number }[];
+  drawerEvents: { kind: DrawerEventKind; cents: number; employeeId: number }[];
+  orders: { id: string; number: number; status: KitchenStatus; customerName: string; totals: Money }[];
+};
+
+export type ShiftCount = {
+  startingBankCents: number;
+  countedCashCents: number | null;
+  cardBatchCents: number | null;
+  declaredCashTipsCents: number | null;
+};
+
+export type EmployeeTally = {
+  employeeId: number;
+  voids: number;
+  voidCents: number;
+  comps: number;
+  compCents: number;
+  discountCents: number;
+  noSales: number;
+};
+
+export type ShiftReport = {
+  expectedCashCents: number;
+  countedCashCents: number | null;
+  cashOverShortCents: number | null;
+  cardTotalCents: number;
+  cardTipsCents: number;
+  cardBatchCents: number | null;
+  cardOverShortCents: number | null;
+  declaredCashTipsCents: number | null;
+  byEmployee: EmployeeTally[];
+  unpaidOrders: { id: string; number: number; customerName: string; dueCents: number }[];
+  needsRefund: { id: string; number: number; netCents: number }[];
+};
+
 /**
- * Creates an order (payment_status = 'pending').
- *
- * STRIPE SEAM: when payments land, create a PaymentIntent for
- * `totalCents` here (or in a wrapping action), store its id on the order,
- * and flip payment_status to 'paid' from the Stripe webhook. Everything
- * upstream (validation, pricing) and downstream (confirmation page,
- * admin inbox) already works off the persisted order.
+ * expected cash = bank + cash payments − cash refunds + paid in − paid out.
+ * Card total includes card tips, because the terminal's batch does.
  */
-export async function createOrder(input: CheckoutInput) {
-  const settings = await getSettings();
-
-  if (!settings.isPublished) {
-    throw new OrderError("This store is not accepting online orders yet.");
+export function shiftReport(shift: ShiftCount, facts: ShiftFacts): ShiftReport {
+  let cash = shift.startingBankCents;
+  let card = 0;
+  let cardTips = 0;
+  for (const t of facts.tenders) {
+    const sign = t.direction === "payment" ? 1 : -1;
+    if (t.method === "cash") {
+      cash += sign * t.amountCents;
+    } else {
+      card += sign * (t.amountCents + t.tipCents);
+      cardTips += sign * t.tipCents;
+    }
   }
-  if (!settings.isAcceptingOrders) {
-    throw new OrderError(
-      "Online ordering is temporarily paused. Please call the store.",
-    );
-  }
-  if (input.orderType === "pickup" && !settings.pickupEnabled) {
-    throw new OrderError("Pickup is not available right now.");
-  }
-  if (input.orderType === "delivery" && !settings.deliveryEnabled) {
-    throw new OrderError("Delivery is not available right now.");
-  }
-
-  const cart = await priceCart(input.lines, input.orderType);
-
-  if (
-    input.orderType === "delivery" &&
-    cart.subtotalCents < settings.deliveryMinimumCents
-  ) {
-    throw new OrderError(
-      `Delivery orders have a minimum subtotal of $${(
-        settings.deliveryMinimumCents / 100
-      ).toFixed(2)}.`,
-    );
+  for (const e of facts.drawerEvents) {
+    if (e.kind === "paid_in") cash += e.cents;
+    if (e.kind === "paid_out") cash -= e.cents;
   }
 
-  const [order] = await db
-    .insert(orders)
-    .values({
-      orderType: input.orderType,
-      customerName: input.customerName,
-      customerPhone: input.customerPhone,
-      customerEmail: input.customerEmail || null,
-      addressLine1: input.addressLine1 || null,
-      addressLine2: input.addressLine2 || null,
-      city: input.city || null,
-      zip: input.zip || null,
-      orderNotes: input.orderNotes || null,
-      subtotalCents: cart.subtotalCents,
-      taxCents: cart.taxCents,
-      deliveryFeeCents: cart.deliveryFeeCents,
-      tipCents: input.tipCents,
-      totalCents: cart.totalCents + input.tipCents,
-      paymentStatus: "pending",
-    })
-    .returning();
+  const tallies = new Map<number, EmployeeTally>();
+  const tally = (id: number) => {
+    let t = tallies.get(id);
+    if (!t) {
+      t = { employeeId: id, voids: 0, voidCents: 0, comps: 0, compCents: 0, discountCents: 0, noSales: 0 };
+      tallies.set(id, t);
+    }
+    return t;
+  };
+  for (const v of facts.voids) {
+    if (v.employeeId === null) continue;
+    const t = tally(v.employeeId);
+    t.voids += 1;
+    t.voidCents += v.cents;
+  }
+  for (const a of facts.adjustments) {
+    const t = tally(a.employeeId);
+    if (a.kind === "comp") {
+      t.comps += 1;
+      t.compCents += a.cents;
+    } else {
+      t.discountCents += a.cents;
+    }
+  }
+  for (const e of facts.drawerEvents) {
+    if (e.kind === "no_sale") tally(e.employeeId).noSales += 1;
+  }
 
-  await db.insert(orderItems).values(
-    cart.lines.map((l) => ({
-      orderId: order.id,
-      menuItemId: l.itemId,
-      itemName: l.itemName,
-      quantity: l.quantity,
-      unitPriceCents: l.unitPriceCents,
-      lineTotalCents: l.lineTotalCents,
-      modifiers: l.modifiers,
-      notes: l.notes || null,
-      station: l.station,
-    })),
-  );
-
-  return order;
+  const overShort = (counted: number | null, expected: number) =>
+    counted === null ? null : counted - expected;
+  return {
+    expectedCashCents: cash,
+    countedCashCents: shift.countedCashCents,
+    cashOverShortCents: overShort(shift.countedCashCents, cash),
+    cardTotalCents: card,
+    cardTipsCents: cardTips,
+    cardBatchCents: shift.cardBatchCents,
+    cardOverShortCents: overShort(shift.cardBatchCents, card),
+    declaredCashTipsCents: shift.declaredCashTipsCents,
+    byEmployee: [...tallies.values()].sort((a, b) => a.employeeId - b.employeeId),
+    unpaidOrders: facts.orders
+      .filter((o) => o.status !== "canceled" && dueCents(o.totals) > 0)
+      .map((o) => ({ id: o.id, number: o.number, customerName: o.customerName, dueCents: dueCents(o.totals) })),
+    needsRefund: facts.orders
+      .filter((o) => o.status === "canceled" && o.totals.paidCents - o.totals.refundedCents > 0)
+      .map((o) => ({ id: o.id, number: o.number, netCents: o.totals.paidCents - o.totals.refundedCents })),
+  };
 }
