@@ -270,6 +270,14 @@ async function main() {
   await page.getByLabel("Ready at").fill("23:45");
   await shot("07-phone-later");
   await page.getByTestId("send").click();
+  const toast = page.locator("[data-sonner-toast]").filter({ hasText: "sent (held)" });
+  await toast.waitFor();
+  const boxes = await Promise.all([toast, page.locator("header"), page.getByTestId("send"), page.getByTestId("pay")].map((l) => l.boundingBox()));
+  const [toastBox, ...covered] = boxes;
+  const overlaps = (a: NonNullable<typeof toastBox>, b: NonNullable<typeof toastBox>) => a.x < b.x + b.width && b.x < a.x + a.width && a.y < b.y + b.height && b.y < a.y + a.height;
+  check("the sent toast covers neither the header nor Send and Pay", !!toastBox && covered.every((b) => !!b && !overlaps(toastBox, b)), JSON.stringify(boxes));
+  check("the toast sits above two wrapped rows of order-detail actions", !!toastBox && toastBox.y + toastBox.height <= 768 - 2 * 48 - 8 - 12, JSON.stringify(toastBox));
+  await shot("07b-sent-toast");
   const phoneOrder = await eventually(async () => (await newestOrder(eq(orders.customerName, CALLER.name)))?.channel === "phone");
   const delivery = await newestOrder(eq(orders.customerName, CALLER.name));
   check(

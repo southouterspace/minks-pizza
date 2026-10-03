@@ -1,7 +1,9 @@
 import { toast, type ExternalToast } from "sonner";
 
-/** Toasts at the top of the terminal, clear of the Send and Pay buttons. */
-const at = (o?: ExternalToast): ExternalToast => ({ position: "top-center", ...o });
+/** The terminal's own toaster (mounted by /pos), placed clear of the header, Send/Pay and the order actions. */
+export const POS_TOASTER = "pos";
+
+const at = (o?: ExternalToast): ExternalToast => ({ toasterId: POS_TOASTER, ...o });
 
 export const notify = {
   success: (msg: string, o?: ExternalToast) => toast.success(msg, at(o)),
