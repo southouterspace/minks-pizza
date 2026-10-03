@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 import { requireOperator } from "@/lib/auth";
+import { ANY_TIME } from "@/lib/timeclock";
 import { EmployeeForm } from "@/components/staff/employee-form";
 
 export const metadata: Metadata = { title: "Add employee" };
@@ -26,7 +27,7 @@ export default async function NewEmployeePage({ searchParams }: PageProps<"/admi
           notes: null,
           hasPin: false,
           roles: [],
-          availability: null,
+          availability: ANY_TIME,
         }}
       />
     </div>

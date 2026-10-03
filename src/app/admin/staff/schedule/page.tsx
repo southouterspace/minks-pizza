@@ -5,7 +5,6 @@ import { copyLastWeek, publishSchedule } from "@/app/admin/staff/actions";
 import { formatCents } from "@/lib/money";
 import {
   CONFLICT_LABEL,
-  dayAvailability,
   decimalHours,
   ROLE_LABEL,
   ROLE_TONE,
@@ -183,7 +182,7 @@ function Cell({
   const off = employeeId === null ? [] : week.timeOff.filter((t) => t.employeeId === employeeId && t.startDate <= date && t.endDate >= date);
   const approvedOff = off.find((t) => t.status === "approved");
   const person = week.employees.find((e) => e.id === employeeId);
-  const availability = person ? dayAvailability(person.availability, dayOfWeek(date)) : null;
+  const availability = person ? person.availability[dayOfWeek(date)] : null;
   const cellId = `${employeeId ?? "open"}-${date}`;
 
   return (

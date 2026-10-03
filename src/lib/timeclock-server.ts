@@ -14,6 +14,7 @@ import {
 } from "@/db";
 import {
   computeWeek,
+  availabilityFromStored,
   DEFAULT_STAFF_RULES,
   earlyClockInBlock,
   ENTRY_FLAGS,
@@ -51,6 +52,7 @@ import {
   localDateOf,
   localDateSchema,
   shiftInstants,
+  toWeekday,
   weekDates,
   weekStartOf,
   zonedInstant,
@@ -73,7 +75,7 @@ export async function getStaffConfig(): Promise<StaffConfig> {
     storeName: row.name,
     timezone: row.timezone,
     rules: {
-      weekStartsOn: row.weekStartsOn,
+      weekStartsOn: toWeekday(row.weekStartsOn, DEFAULT_STAFF_RULES.weekStartsOn),
       otWeeklyMinutes: row.otWeeklyMinutes,
       otDailyMinutes: row.otDailyMinutes,
       dtDailyMinutes: row.dtDailyMinutes,
@@ -175,7 +177,6 @@ function clockStateOf(open: EntryRow | undefined): ClockState {
       breakId: onBreak.id,
       paid: onBreak.paid,
       since: onBreak.startedAt.toISOString(),
-      shiftSince: open.clockInAt.toISOString(),
     };
   }
   return { kind: "working", entryId: open.id, role: open.role, since: open.clockInAt.toISOString() };
@@ -849,7 +850,7 @@ export type ScheduleEmployee = {
   id: number;
   name: string;
   roles: { role: JobRole; hourlyRateCents: number; isPrimary: boolean }[];
-  availability: WeeklyAvailability | null;
+  availability: WeeklyAvailability;
   weekMinutes: number;
 };
 
@@ -931,7 +932,7 @@ export async function getScheduleWeek(weekStart: LocalDate, cfg: StaffConfig): P
             s,
             scheduled.filter((o) => o.employeeId === person.id),
             timeOff.filter((t) => t.employeeId === person.id),
-            person.availability,
+            availabilityFromStored(person.availability),
             cfg.rules,
             tz,
           )
@@ -944,6 +945,7 @@ export async function getScheduleWeek(weekStart: LocalDate, cfg: StaffConfig): P
     dates,
     employees: people.map((p) => ({
       ...p,
+      availability: availabilityFromStored(p.availability),
       weekMinutes: list.filter((s) => s.employeeId === p.id).reduce((n, s) => n + s.paidMinutes, 0),
     })),
     shifts: list,

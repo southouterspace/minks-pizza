@@ -5,7 +5,7 @@ import { db, employees } from "@/db";
 import { requireOperator } from "@/lib/auth";
 import { approveTimesheet, deletePunch } from "@/app/admin/staff/actions";
 import { formatCents } from "@/lib/money";
-import { decimalHours, FLAG_LABEL, formatDuration, ROLE_LABEL, type Severity } from "@/lib/timeclock";
+import { decimalHours, FLAG_META, formatDuration, ROLE_LABEL, type Severity } from "@/lib/timeclock";
 import {
   getStaffConfig,
   getTimesheetWeek,
@@ -227,8 +227,8 @@ function EntryCard({
         {e.declaredTipsCents > 0 ? <span className="text-muted-foreground">{formatCents(e.declaredTipsCents)} tips</span> : null}
         {e.approvedAt ? <Badge variant="secondary">Approved</Badge> : null}
         {e.flags.map((f) => (
-          <span key={f} className={cn("rounded border px-1.5 py-0.5 text-xs font-medium", SEVERITY_TONE[FLAG_LABEL[f].severity])}>
-            {FLAG_LABEL[f].label}
+          <span key={f} className={cn("rounded border px-1.5 py-0.5 text-xs font-medium", SEVERITY_TONE[FLAG_META[f].severity])}>
+            {FLAG_META[f].label}
           </span>
         ))}
       </div>

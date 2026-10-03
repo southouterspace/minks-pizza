@@ -15,7 +15,7 @@ import {
 } from "drizzle-orm/pg-core";
 import { relations, sql } from "drizzle-orm";
 import { KITCHEN_STATIONS } from "../lib/kds";
-import { JOB_ROLES, type AuditSnapshot, type WeeklyAvailability } from "../lib/timeclock";
+import { JOB_ROLES, type AuditSnapshot, type StoredAvailability } from "../lib/timeclock";
 
 // ---------------------------------------------------------------------------
 // Enums
@@ -316,7 +316,7 @@ export const employees = pgTable("employees", {
   /** Archived employees leave the schedule and the clock; payroll history keeps them. */
   isActive: boolean("is_active").notNull().default(true),
   /** Null = available any time. */
-  availability: jsonb("availability").$type<WeeklyAvailability>(),
+  availability: jsonb("availability").$type<StoredAvailability>(),
   notes: text("notes"),
   hiredOn: date("hired_on"),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),

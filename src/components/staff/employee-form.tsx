@@ -4,6 +4,7 @@ import { useActionState, useState } from "react";
 import Link from "next/link";
 import { saveEmployee, type StaffFormState } from "@/app/admin/staff/actions";
 import { JOB_ROLES, ROLE_LABEL, type JobRole, type WeeklyAvailability } from "@/lib/timeclock";
+import { DAY_NAMES, WEEKDAYS, type Weekday } from "@/lib/zoned";
 import { Button, buttonVariants } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import {
@@ -19,8 +20,6 @@ import { Input } from "@/components/ui/input";
 import { NativeSelect, NativeSelectOption } from "@/components/ui/native-select";
 import { Textarea } from "@/components/ui/textarea";
 
-const DAYS = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
-
 export type EmployeeFormValues = {
   id: number | null;
   name: string;
@@ -30,7 +29,7 @@ export type EmployeeFormValues = {
   notes: string | null;
   hasPin: boolean;
   roles: { role: JobRole; hourlyRateCents: number; isPrimary: boolean }[];
-  availability: WeeklyAvailability | null;
+  availability: WeeklyAvailability;
 };
 
 const INITIAL: StaffFormState = {};
@@ -39,9 +38,7 @@ const legend = "w-full border-b border-border pb-2 text-sm!";
 export function EmployeeForm({ employee }: { employee: EmployeeFormValues }) {
   const [state, formAction, pending] = useActionState(saveEmployee, INITIAL);
   const [roles, setRoles] = useState<Set<JobRole>>(() => new Set(employee.roles.map((r) => r.role)));
-  const [kinds, setKinds] = useState<string[]>(() =>
-    DAYS.map((_, d) => employee.availability?.find((a) => a.day === d)?.kind ?? "any"),
-  );
+  const [kinds, setKinds] = useState<string[]>(() => WEEKDAYS.map((d) => employee.availability[d].kind));
   const isNew = employee.id === null;
 
   if (isNew && state.savedId) {
@@ -149,7 +146,10 @@ export function EmployeeForm({ employee }: { employee: EmployeeFormValues }) {
         <FieldLegend className={legend}>Weekly availability</FieldLegend>
         <FieldDescription>The schedule warns when a shift falls outside these times.</FieldDescription>
         <div className="space-y-2">
-          {DAYS.map((day, d) => (
+          {WEEKDAYS.map((d) => {
+            const day = DAY_NAMES[d];
+            const window = windowOf(employee.availability, d);
+            return (
             <div key={day} className="flex flex-wrap items-center gap-3 rounded-lg border border-border px-3 py-2">
               <span className="w-24 text-sm font-medium">{day}</span>
               <NativeSelect
@@ -173,7 +173,7 @@ export function EmployeeForm({ employee }: { employee: EmployeeFormValues }) {
                     type="time"
                     aria-label={`${day} from`}
                     required
-                    defaultValue={windowOf(employee.availability, d)?.from ?? "10:00"}
+                    defaultValue={window?.from ?? "10:00"}
                     className="w-auto"
                   />
                   <span className="text-sm text-muted-foreground">to</span>
@@ -182,13 +182,14 @@ export function EmployeeForm({ employee }: { employee: EmployeeFormValues }) {
                     type="time"
                     aria-label={`${day} to`}
                     required
-                    defaultValue={windowOf(employee.availability, d)?.to ?? "22:00"}
+                    defaultValue={window?.to ?? "22:00"}
                     className="w-auto"
                   />
                 </span>
               ) : null}
             </div>
-          ))}
+            );
+          })}
         </div>
       </FieldSet>
 
@@ -234,9 +235,9 @@ export function EmployeeForm({ employee }: { employee: EmployeeFormValues }) {
   );
 }
 
-function windowOf(availability: WeeklyAvailability | null, day: number) {
-  const a = availability?.find((x) => x.day === day);
-  return a?.kind === "window" ? a : null;
+function windowOf(availability: WeeklyAvailability, day: Weekday) {
+  const a = availability[day];
+  return a.kind === "window" ? a : null;
 }
 
 function PinNotice({ pin }: { pin: string }) {

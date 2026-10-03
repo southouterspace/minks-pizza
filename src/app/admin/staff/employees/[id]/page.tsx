@@ -6,6 +6,7 @@ import { db, employees } from "@/db";
 import { requireOperator } from "@/lib/auth";
 import { removeEmployeePin, setEmployeeActive } from "@/app/admin/staff/actions";
 import { ConfirmButton } from "@/components/admin/confirm-button";
+import { availabilityFromStored } from "@/lib/timeclock";
 import { EmployeeForm } from "@/components/staff/employee-form";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -57,7 +58,7 @@ export default async function EmployeePage({ params, searchParams }: PageProps<"
           notes: employee.notes,
           hasPin: employee.pinDigest !== null,
           roles: employee.roles,
-          availability: employee.availability,
+          availability: availabilityFromStored(employee.availability),
         }}
       />
 

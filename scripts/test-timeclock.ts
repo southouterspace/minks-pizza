@@ -10,29 +10,60 @@ import {
   dayOfWeek,
   formatClock,
   formatDay,
+  formatDayRange,
+  formatHhmm,
+  fromLocalInput,
+  hhmmMinutes,
   localDateOf,
   localDateSchema,
   minutesOfDay,
   shiftInstants,
+  toLocalInput,
+  weekBounds,
   weekDates,
   weekStartOf,
   zonedInstant,
 } from "../src/lib/zoned";
 import {
+  ALLOWED,
+  ANY_TIME,
+  atOvertimeRisk,
+  availabilityFromStored,
+  availabilityToStored,
+  checkClockIn,
   computeWeek,
+  decimalHours,
+  defaultRoleOf,
   earlyClockInBlock,
   entryFlags,
+  formatDuration,
+  formatHours,
+  formatPercent,
+  isLate,
+  isOvertime,
+  kioskRequestSchema,
+  kioskShiftDays,
+  laborCents,
+  laborPercent,
+  lateShifts,
   matchShift,
+  parseStaffRules,
   planClock,
   punchProblem,
   remainingShiftMinutes,
+  ruleInputValue,
   shiftConflicts,
   shiftCostCents,
   shiftPaidMinutes,
+  shiftProblem,
+  shiftTouchesTimeOff,
+  STAFF_RULE_FIELDS,
+  timeOffProblem,
   type ClockAction,
   type ClockState,
   type PayEntry,
   type ShiftTimes,
+  type WeeklyAvailability,
 } from "../src/lib/timeclock";
 
 const NY = "America/New_York";
@@ -191,7 +222,10 @@ test("an open punch counts up to now and stops while on an unpaid break", () => 
     breaks: [{ startedAt: at("2026-10-05T10:30:00Z"), endedAt: null, paid: false }],
   });
   const week = computeWeek([entry], FEDERAL, "UTC", at("2026-10-05T11:00:30Z"));
-  assert.deepEqual(week.entries, [{ id: entry.id, date: "2026-10-05", paidMinutes: 90, breakMinutes: 30, open: true }]);
+  assert.deepEqual(
+    week.entries.map(({ id, date, paidMinutes, breakMinutes }) => ({ id, date, paidMinutes, breakMinutes })),
+    [{ id: entry.id, date: "2026-10-05", paidMinutes: 90, breakMinutes: 30 }],
+  );
 });
 
 test("a punch belongs to the store-local day it started on", () => {
@@ -217,7 +251,7 @@ test("clock transitions: apply, replay or refuse for every state × action", () 
   const states: ClockState[] = [
     { kind: "off" },
     { kind: "working", entryId: 1, role: "cook", since: "2026-10-05T16:00:00Z" },
-    { kind: "on_break", entryId: 1, breakId: 2, paid: false, since: "2026-10-05T18:00:00Z", shiftSince: "2026-10-05T16:00:00Z" },
+    { kind: "on_break", entryId: 1, breakId: 2, paid: false, since: "2026-10-05T18:00:00Z" },
   ];
   const actions: ClockAction[] = [
     { type: "clock_in", role: "cook" },
@@ -233,52 +267,138 @@ test("clock transitions: apply, replay or refuse for every state × action", () 
   ]);
   assert.deepEqual(planClock(states[2], actions[3]), { kind: "refuse", message: "End your break before clocking out." });
   assert.deepEqual(planClock(states[1], actions[0]), { kind: "replay", message: "You're already clocked in." });
+  assert.deepEqual(planClock(states[0], actions[1]), { kind: "refuse", message: "Clock in before starting a break." });
+  assert.deepEqual(planClock(states[2], actions[1]), { kind: "replay", message: "You're already on a break." });
+  assert.deepEqual(planClock(states[1], actions[2]), { kind: "replay", message: "Your break already ended." });
+  assert.deepEqual(planClock(states[0], actions[3]), { kind: "replay", message: "You're already clocked out." });
+});
+
+test("an applied plan carries the step narrowed to the state's rows", () => {
+  const working: ClockState = { kind: "working", entryId: 7, role: "driver", since: "2026-10-05T16:00:00Z" };
+  const onBreak: ClockState = { kind: "on_break", entryId: 7, breakId: 9, paid: true, since: "2026-10-05T18:00:00Z" };
+  assert.deepEqual(planClock({ kind: "off" }, { type: "clock_in", role: "driver" }), {
+    kind: "apply",
+    step: { type: "clock_in", role: "driver" },
+  });
+  assert.deepEqual(planClock(working, { type: "start_break", paid: true }), {
+    kind: "apply",
+    step: { type: "start_break", entryId: 7, paid: true },
+  });
+  assert.deepEqual(planClock(onBreak, { type: "end_break" }), { kind: "apply", step: { type: "end_break", breakId: 9 } });
+  assert.deepEqual(planClock(working, { type: "clock_out", declaredTipsCents: 1250 }), {
+    kind: "apply",
+    step: { type: "clock_out", entryId: 7, declaredTipsCents: 1250 },
+  });
+});
+
+test("the kiosk's buttons (ALLOWED) are exactly the actions that apply", () => {
+  const states: ClockState[] = [
+    { kind: "off" },
+    { kind: "working", entryId: 1, role: "cook", since: "2026-10-05T16:00:00Z" },
+    { kind: "on_break", entryId: 1, breakId: 2, paid: false, since: "2026-10-05T18:00:00Z" },
+  ];
+  const actions: ClockAction[] = [
+    { type: "clock_in", role: "cook" },
+    { type: "start_break", paid: false },
+    { type: "end_break" },
+    { type: "clock_out", declaredTipsCents: 0 },
+  ];
+  const offered = states.map((s) => actions.filter((a) => ALLOWED[s.kind].includes(a.type)).map((a) => a.type));
+  const applying = states.map((s) => actions.filter((a) => planClock(s, a).kind === "apply").map((a) => a.type));
+  assert.deepEqual(offered, [["clock_in"], ["start_break", "clock_out"], ["end_break"]]);
+  assert.deepEqual(applying, offered);
+});
+
+test("clock-in check: the role must be theirs, and early clock-in is refused", () => {
+  const roles = [{ role: "cook" as const, hourlyRateCents: 1500 }, { role: "driver" as const, hourlyRateCents: 1250 }];
+  const dinner = shiftOn("2026-10-06", "16:00", "22:00", 2);
+  const ny = (hhmm: string) => zonedInstant("2026-10-06", hhmm, NY);
+  assert.deepEqual(checkClockIn(roles, "driver", [], { earlyClockInMinutes: null }, ny("15:00"), NY), { ok: true, rateCents: 1250 });
+  assert.deepEqual(checkClockIn(roles, "cashier", [], { earlyClockInMinutes: null }, ny("15:00"), NY), {
+    ok: false,
+    message: "Pick one of your roles. A manager can add roles for you.",
+  });
+  assert.deepEqual(checkClockIn(roles, "cook", [dinner], { earlyClockInMinutes: 10 }, ny("15:30"), NY), {
+    ok: false,
+    message: "Your shift starts at 4:00 PM. You can clock in from 3:50 PM.",
+  });
+});
+
+test("default role: the matched shift's, then the primary, then the first", () => {
+  const roles: Parameters<typeof defaultRoleOf>[0] = [
+    { role: "cook", hourlyRateCents: 1500, isPrimary: false },
+    { role: "driver", hourlyRateCents: 1250, isPrimary: true },
+  ];
+  assert.equal(defaultRoleOf(roles, { role: "cook" }), "cook");
+  assert.equal(defaultRoleOf(roles, { role: "cashier" }), "driver");
+  assert.equal(defaultRoleOf(roles, null), "driver");
+  assert.equal(defaultRoleOf([{ role: "cook", hourlyRateCents: 1500, isPrimary: false }], null), "cook");
+});
+
+test("kiosk request schema: PIN 4 to 6 digits, typed actions, trimmed reason", () => {
+  assert.equal(kioskRequestSchema.safeParse({ pin: "123" }).success, false);
+  assert.equal(kioskRequestSchema.safeParse({ pin: "1234567" }).success, false);
+  assert.deepEqual(kioskRequestSchema.parse({ pin: "123456" }), { pin: "123456" });
+  assert.equal(kioskRequestSchema.safeParse({ pin: "1234", action: { type: "clock_in", role: "chef" } }).success, false);
+  assert.equal(kioskRequestSchema.safeParse({ pin: "1234", action: { type: "clock_out", declaredTipsCents: -1 } }).success, false);
+  assert.deepEqual(
+    kioskRequestSchema.parse({ pin: "1234", action: { type: "request_time_off", startDate: "2026-10-06", endDate: "2026-10-07", reason: " trip " } }),
+    { pin: "1234", action: { type: "request_time_off", startDate: "2026-10-06", endDate: "2026-10-07", reason: "trip" } },
+  );
+});
+
+test("time off and shift validation", () => {
+  assert.equal(timeOffProblem("2026-10-05", "2026-10-06", "2026-10-06"), "Time off has to start today or later.");
+  assert.equal(timeOffProblem("2026-10-06", "2026-10-05", null), "The last day can't be before the first.");
+  assert.equal(timeOffProblem("2026-10-01", "2026-10-01", null), null);
+  assert.equal(shiftProblem({ ...shiftInstants("2026-10-06", "06:00", "23:00", NY), unpaidBreakMinutes: 0 }), "A shift can be at most 16 hours.");
+  assert.equal(shiftProblem({ ...shiftInstants("2026-10-06", "16:00", "17:00", NY), unpaidBreakMinutes: 60 }), "The break is longer than the shift.");
+  assert.equal(shiftProblem({ ...shiftInstants("2026-10-06", "16:00", "02:00", NY), unpaidBreakMinutes: 30 }), null);
 });
 
 
-const RULES = { otWeeklyMinutes: 2400, weekStartsOn: 1 };
+const RULES = { otWeeklyMinutes: 2400, weekStartsOn: 1 as const };
 function shiftOn(date: string, from: string, to: string, id: number | null = null, unpaidBreakMinutes = 0): ShiftTimes {
   return { id, ...shiftInstants(date, from, to, NY), unpaidBreakMinutes };
 }
 const TUESDAY = shiftOn("2026-10-06", "16:00", "22:00", 100);
 
 test("shift conflicts: none for a clean shift", () => {
-  assert.deepEqual(shiftConflicts(TUESDAY, [TUESDAY], [], null, RULES, NY), []);
+  assert.deepEqual(shiftConflicts(TUESDAY, [TUESDAY], [], ANY_TIME, RULES, NY), []);
 });
 
 test("shift conflicts: overlap", () => {
-  assert.deepEqual(shiftConflicts(TUESDAY, [shiftOn("2026-10-06", "21:00", "23:00", 101)], [], null, RULES, NY), ["overlap"]);
-  assert.deepEqual(shiftConflicts(TUESDAY, [shiftOn("2026-10-06", "22:00", "23:00", 101)], [], null, RULES, NY), []);
+  assert.deepEqual(shiftConflicts(TUESDAY, [shiftOn("2026-10-06", "21:00", "23:00", 101)], [], ANY_TIME, RULES, NY), ["overlap"]);
+  assert.deepEqual(shiftConflicts(TUESDAY, [shiftOn("2026-10-06", "22:00", "23:00", 101)], [], ANY_TIME, RULES, NY), []);
 });
 
-test("shift conflicts: approved and pending time off; denied is ignored", () => {
-  const off = (status: "approved" | "pending" | "denied") => [{ startDate: "2026-10-05", endDate: "2026-10-06", status }];
-  assert.deepEqual(shiftConflicts(TUESDAY, [], off("approved"), null, RULES, NY), ["time_off"]);
-  assert.deepEqual(shiftConflicts(TUESDAY, [], off("pending"), null, RULES, NY), ["time_off_pending"]);
-  assert.deepEqual(shiftConflicts(TUESDAY, [], off("denied"), null, RULES, NY), []);
+test("shift conflicts: approved and pending time off", () => {
+  const off = (status: "approved" | "pending") => [{ startDate: "2026-10-05", endDate: "2026-10-06", status }];
+  assert.deepEqual(shiftConflicts(TUESDAY, [], off("approved"), ANY_TIME, RULES, NY), ["time_off"]);
+  assert.deepEqual(shiftConflicts(TUESDAY, [], off("pending"), ANY_TIME, RULES, NY), ["time_off_pending"]);
   // An overnight close reaches into the next day's time off.
   const close = shiftOn("2026-10-06", "18:00", "01:00", 102);
   assert.deepEqual(
-    shiftConflicts(close, [], [{ startDate: "2026-10-07", endDate: "2026-10-07", status: "approved" }], null, RULES, NY),
+    shiftConflicts(close, [], [{ startDate: "2026-10-07", endDate: "2026-10-07", status: "approved" }], ANY_TIME, RULES, NY),
     ["time_off"],
   );
 });
 
 test("shift conflicts: outside weekly availability", () => {
-  const window = (from: string, to: string) => [{ day: 2 as const, kind: "window" as const, from, to }];
+  const window = (from: string, to: string): WeeklyAvailability => ({ ...ANY_TIME, 2: { kind: "window", from, to } });
   assert.deepEqual(shiftConflicts(TUESDAY, [], [], window("10:00", "18:00"), RULES, NY), ["unavailable"]);
   assert.deepEqual(shiftConflicts(TUESDAY, [], [], window("15:00", "23:00"), RULES, NY), []);
-  assert.deepEqual(shiftConflicts(TUESDAY, [], [], [{ day: 2, kind: "none" }], RULES, NY), ["unavailable"]);
-  assert.deepEqual(shiftConflicts(TUESDAY, [], [], [{ day: 3, kind: "none" }], RULES, NY), []);
+  assert.deepEqual(shiftConflicts(TUESDAY, [], [], { ...ANY_TIME, 2: { kind: "none" } }, RULES, NY), ["unavailable"]);
+  assert.deepEqual(shiftConflicts(TUESDAY, [], [], { ...ANY_TIME, 3: { kind: "none" } }, RULES, NY), []);
   const close = shiftOn("2026-10-06", "17:00", "01:00", 103);
   assert.deepEqual(shiftConflicts(close, [], [], window("16:00", "02:00"), RULES, NY), []);
 });
 
 test("shift conflicts: overtime counts only the shift's payroll week", () => {
   const sameWeek = ["05", "07", "08", "09"].map((d, i) => shiftOn(`2026-10-${d}`, "09:00", "18:00", 200 + i));
-  assert.deepEqual(shiftConflicts(TUESDAY, sameWeek, [], null, RULES, NY), ["overtime"]);
+  assert.deepEqual(shiftConflicts(TUESDAY, sameWeek, [], ANY_TIME, RULES, NY), ["overtime"]);
   const lastWeek = ["28", "29", "30"].map((d, i) => shiftOn(`2026-09-${d}`, "09:00", "18:00", 300 + i));
-  assert.deepEqual(shiftConflicts(TUESDAY, [...lastWeek, sameWeek[0]], [], null, RULES, NY), []);
+  assert.deepEqual(shiftConflicts(TUESDAY, [...lastWeek, sameWeek[0]], [], ANY_TIME, RULES, NY), []);
 });
 
 test("shift paid minutes and labor cost", () => {
@@ -371,6 +491,146 @@ test("entry flags: break open over an hour", () => {
   });
   assert.deepEqual(entryFlags(onBreak, SHIFT, FLAG_RULES, at("2026-10-05T17:59:00Z")), []);
   assert.deepEqual(entryFlags(onBreak, SHIFT, FLAG_RULES, at("2026-10-05T18:05:00Z")), ["on_break_long"]);
+});
+test("a shift ending at midnight doesn't touch the next day's time off", () => {
+  const sundayClose = shiftOn("2026-10-04", "16:00", "00:00", 400);
+  const monday = { startDate: "2026-10-05", endDate: "2026-10-05", status: "approved" as const };
+  assert.equal(shiftTouchesTimeOff(sundayClose, monday, NY), false);
+  assert.deepEqual(shiftConflicts(sundayClose, [], [monday], ANY_TIME, RULES, NY), []);
+  const pastMidnight = shiftOn("2026-10-04", "16:00", "00:01", 401);
+  assert.equal(shiftTouchesTimeOff(pastMidnight, monday, NY), true);
+  const sunday = { startDate: "2026-10-04", endDate: "2026-10-04", status: "approved" as const };
+  assert.equal(shiftTouchesTimeOff(sundayClose, sunday, NY), true);
+});
+
+test("late: past the grace period after the start", () => {
+  const start = at("2026-10-05T16:00:00Z");
+  assert.equal(isLate(start, at("2026-10-05T16:07:00Z"), { clockGraceMinutes: 7 }), false);
+  assert.equal(isLate(start, at("2026-10-05T16:07:01Z"), { clockGraceMinutes: 7 }), true);
+});
+
+test("late shifts: today's, past grace, with no punch linked or in the window", () => {
+  const ny = (hhmm: string) => zonedInstant("2026-10-06", hhmm, NY);
+  const shift = (id: number, employeeId: number, from: string, to: string) => ({ ...shiftOn("2026-10-06", from, to, id), id, employeeId });
+  const shifts = [
+    shift(1, 10, "10:00", "14:00"),
+    shift(2, 11, "10:00", "14:00"),
+    shift(3, 12, "10:00", "14:00"),
+    shift(4, 13, "16:00", "22:00"),
+    { ...shiftOn("2026-10-05", "10:00", "14:00", 5), id: 5, employeeId: 14 },
+  ];
+  const punches = [
+    { employeeId: 11, shiftId: 2, clockInAt: ny("10:30") },
+    { employeeId: 12, shiftId: null, clockInAt: ny("08:30") },
+    { employeeId: 10, shiftId: null, clockInAt: ny("07:30") },
+  ];
+  assert.deepEqual(lateShifts(shifts, punches, { clockGraceMinutes: 7 }, ny("10:30"), NY).map((s) => s.id), [1]);
+  assert.deepEqual(lateShifts(shifts, punches, { clockGraceMinutes: 7 }, ny("10:05"), NY).map((s) => s.id), []);
+});
+
+test("labor cost is straight time, rounded once", () => {
+  const entries = [
+    punch("2026-10-05", "09:00:00", "09:10:00", 1501),
+    punch("2026-10-05", "09:00:00", "09:10:00", 1501),
+    punch("2026-10-05", "09:00:00", null as unknown as string, 1200, { clockOutAt: null }),
+  ];
+  // 2 × 10 min × 15.01 = 500.33¢, plus 60 min × 12 = 1200¢.
+  assert.equal(laborCents(entries, at("2026-10-05T10:00:00Z")), 1700);
+  const week = computeWeek(entries.slice(0, 2), FEDERAL, "UTC", NOW);
+  assert.equal(laborCents(entries.slice(0, 2), NOW), week.straightCents);
+});
+
+test("overtime and overtime risk share the weekly threshold", () => {
+  assert.equal(isOvertime(2400, RULES), false);
+  assert.equal(isOvertime(2401, RULES), true);
+  assert.equal(atOvertimeRisk(2280, RULES), false);
+  assert.equal(atOvertimeRisk(2281, RULES), true);
+});
+
+test("labor percent", () => {
+  assert.equal(laborPercent(2500, 10_000), 25);
+  assert.equal(laborPercent(2500, 0), null);
+  assert.equal(laborPercent(2500, null), null);
+  assert.equal(formatPercent(23.456), "23.5%");
+  assert.equal(formatPercent(null), "–");
+});
+
+test("daily double time without daily overtime", () => {
+  const week = computeWeek([punch("2026-10-05", "08:00:00", "21:00:00", 2000)], { ...FEDERAL, dtDailyMinutes: 720 }, "UTC", NOW);
+  assert.deepEqual(week.days[0], { date: "2026-10-05", paidMinutes: 780, regularMinutes: 720, otMinutes: 0, dtMinutes: 60, breakMinutes: 0 });
+  assert.equal(week.grossCents, 28000);
+});
+
+test("formatting: durations, hours, wall clock and dates", () => {
+  assert.equal(formatDuration(0), "0m");
+  assert.equal(formatDuration(45), "45m");
+  assert.equal(formatDuration(420), "7h");
+  assert.equal(formatDuration(450), "7h 30m");
+  assert.equal(decimalHours(450), "7.50");
+  assert.equal(formatHours(450), "7.50 h");
+  assert.equal(formatHours(0), "0.00 h");
+  assert.equal(hhmmMinutes("16:30"), 990);
+  assert.equal(formatHhmm("16:30"), "4:30 PM");
+  assert.equal(formatHhmm("00:00"), "12 AM");
+  assert.equal(formatHhmm("12:05"), "12:05 PM");
+  assert.equal(formatHhmm("16:00", { compact: true }), "4p");
+  assert.equal(formatHhmm("09:15", { compact: true }), "9:15a");
+  assert.equal(formatDayRange("2026-10-05", "2026-10-05"), "Mon, Oct 5");
+  assert.equal(formatDayRange("2026-10-05", "2026-10-07"), "Mon, Oct 5 to Wed, Oct 7");
+  const t = zonedInstant("2026-10-05", "16:05", NY);
+  assert.equal(toLocalInput(t, NY), "2026-10-05T16:05");
+  assert.equal(iso(fromLocalInput("2026-10-05T16:05", NY) as Date), iso(t));
+  assert.equal(fromLocalInput("", NY), null);
+  assert.equal(fromLocalInput("2026-02-30T10:00", NY), "invalid");
+  const week = weekBounds("2026-10-05", NY);
+  assert.equal(iso(week.from), "2026-10-05T04:00:00.000Z");
+  assert.equal(iso(week.to), "2026-10-12T04:00:00.000Z");
+  assert.equal(week.dates.length, 7);
+});
+
+test("kiosk shift days: today, then the next seven days", () => {
+  const shifts = ["2026-10-05", "2026-10-06", "2026-10-12", "2026-10-13"].map((d, i) => shiftOn(d, "16:00", "22:00", i));
+  const { today, upcoming } = kioskShiftDays(shifts, "2026-10-05", NY);
+  assert.deepEqual(today.map((s) => s.id), [0]);
+  assert.deepEqual(upcoming.map((s) => s.id), [1, 2]);
+});
+
+test("availability: stored rows parse to every weekday, and round-trip", () => {
+  assert.deepEqual(availabilityFromStored(null), ANY_TIME);
+  assert.deepEqual(availabilityFromStored("garbage"), ANY_TIME);
+  const week = availabilityFromStored([{ day: 2, kind: "window", from: "10:00", to: "18:00" }, { day: 0, kind: "none" }]);
+  assert.deepEqual(week[2], { kind: "window", from: "10:00", to: "18:00" });
+  assert.deepEqual(week[0], { kind: "none" });
+  assert.deepEqual(week[3], { kind: "any" });
+  assert.equal(availabilityToStored(ANY_TIME), null);
+  assert.deepEqual(availabilityFromStored(availabilityToStored(week)), week);
+});
+
+test("staff rule fields: hours become minutes, blank or zero turns a rule off", () => {
+  const form = (values: Record<string, string>) => parseStaffRules((name) => values[name] ?? "");
+  assert.deepEqual(form({ otWeeklyHours: "40", otDailyHours: "8", clockGraceMinutes: "5", earlyClockInMinutes: "10" }), {
+    otWeeklyMinutes: 2400,
+    otDailyMinutes: 480,
+    dtDailyMinutes: null,
+    breakRequiredAfterMinutes: null,
+    clockGraceMinutes: 5,
+    earlyClockInMinutes: 10,
+  });
+  assert.deepEqual(form({ otWeeklyHours: "0", clockGraceMinutes: "0", earlyClockInMinutes: "0", breakRequiredAfterHours: "5.5" }), {
+    otWeeklyMinutes: 2400,
+    otDailyMinutes: null,
+    dtDailyMinutes: null,
+    breakRequiredAfterMinutes: 330,
+    clockGraceMinutes: 0,
+    earlyClockInMinutes: null,
+  });
+  assert.equal(form({}).clockGraceMinutes, 7);
+  assert.equal(form({ clockGraceMinutes: "-3" }).clockGraceMinutes, 0);
+  const weekly = STAFF_RULE_FIELDS.find((f) => f.key === "otWeeklyMinutes")!;
+  const grace = STAFF_RULE_FIELDS.find((f) => f.key === "clockGraceMinutes")!;
+  assert.equal(ruleInputValue(weekly, 2400), "40");
+  assert.equal(ruleInputValue(weekly, null), "");
+  assert.equal(ruleInputValue(grace, 7), "7");
 });
 
 console.log(`\n${passed} passed`);

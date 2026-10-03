@@ -7,7 +7,7 @@ import { z } from "zod";
 import { db, employeeRoles, employees, shifts, timeEntries } from "@/db";
 import { requireOperator } from "@/lib/auth";
 import { checkbox, dollarsToCents, idField, textField, textOrNull } from "@/lib/form-data";
-import { JOB_ROLES, ROLE_LABEL, type JobRole, type WeeklyAvailability, type Weekday } from "@/lib/timeclock";
+import { ANY_TIME, availabilityToStored, JOB_ROLES, ROLE_LABEL, type JobRole, type StoredAvailability, type WeeklyAvailability } from "@/lib/timeclock";
 import {
   approveWeek,
   copyPreviousWeek,
@@ -23,7 +23,7 @@ import {
   resolveWeek,
   saveManagerPunch,
 } from "@/lib/timeclock-server";
-import { hhmmSchema, localDateSchema, shiftInstants, zonedInstant } from "@/lib/zoned";
+import { DAY_NAMES, hhmmSchema, localDateSchema, shiftInstants, WEEKDAYS, zonedInstant } from "@/lib/zoned";
 
 export type StaffFormState = { error?: string; savedId?: number; pin?: string; notice?: string };
 
@@ -38,8 +38,6 @@ function firstIssue(error: z.ZodError): string {
 // ---------------------------------------------------------------------------
 // Employees
 // ---------------------------------------------------------------------------
-
-const DAY_NAMES = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
 
 const employeeSchema = z.object({
   name: z.string().trim().min(1, "Name is required").max(120),
@@ -63,20 +61,19 @@ function rolesFrom(fd: FormData): RoleInput[] | string {
   }
 }
 
-function availabilityFrom(fd: FormData): WeeklyAvailability | null | string {
-  const days: WeeklyAvailability = [];
-  for (let d = 0; d < 7; d++) {
-    const day = d as Weekday;
+function availabilityFrom(fd: FormData): StoredAvailability | null | string {
+  const week: WeeklyAvailability = { ...ANY_TIME };
+  for (const d of WEEKDAYS) {
     const kind = textField(fd, `avail-${d}`);
-    if (kind === "none") days.push({ day, kind: "none" });
+    if (kind === "none") week[d] = { kind: "none" };
     else if (kind === "window") {
       const from = hhmmSchema.safeParse(textField(fd, `from-${d}`));
       const to = hhmmSchema.safeParse(textField(fd, `to-${d}`));
       if (!from.success || !to.success) return `Set both times for ${DAY_NAMES[d]}.`;
-      days.push({ day, kind: "window", from: from.data, to: to.data });
-    } else days.push({ day, kind: "any" });
+      week[d] = { kind: "window", from: from.data, to: to.data };
+    }
   }
-  return days.every((d) => d.kind === "any") ? null : days;
+  return availabilityToStored(week);
 }
 
 /** undefined = leave the PIN alone. */

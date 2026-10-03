@@ -3,12 +3,20 @@
  * overtime-correct payroll math, timesheet exceptions and schedule conflicts.
  * Shared by server and client — no I/O. Calendar math is in `zoned.ts`.
  */
+import { z } from "zod";
 import {
+  addDays,
   dayOfWeek,
+  formatClock,
+  hhmmMinutes,
+  hhmmSchema,
   localDateOf,
+  localDateSchema,
   minutesOfDay,
   weekStartOf,
+  WEEKDAYS,
   type LocalDate,
+  type Weekday,
 } from "@/lib/zoned";
 
 // ---------------------------------------------------------------------------
@@ -46,12 +54,20 @@ export const ROLE_TONE: Record<JobRole, string> = {
   dishwasher: "bg-zinc-100 text-zinc-900 border-zinc-300 dark:bg-zinc-800 dark:text-zinc-100 dark:border-zinc-600",
 };
 
+export type EmployeeRole = { role: JobRole; hourlyRateCents: number; isPrimary: boolean };
+
+/** The role the clock offers first: the matched shift's, else the primary, else the first. */
+export function defaultRoleOf(roles: [EmployeeRole, ...EmployeeRole[]], matched: { role: JobRole } | null): JobRole {
+  if (matched && roles.some((r) => r.role === matched.role)) return matched.role;
+  return (roles.find((r) => r.isPrimary) ?? roles[0]).role;
+}
+
 // ---------------------------------------------------------------------------
 // Store rules
 // ---------------------------------------------------------------------------
 
 export type StaffRules = {
-  weekStartsOn: number;
+  weekStartsOn: Weekday;
   otWeeklyMinutes: number;
   otDailyMinutes: number | null;
   dtDailyMinutes: number | null;
@@ -60,8 +76,11 @@ export type StaffRules = {
   earlyClockInMinutes: number | null;
 };
 
-export const DEFAULT_STAFF_RULES: StaffRules = {
-  weekStartsOn: 1,
+export const DEFAULT_TIMEZONE = "America/New_York";
+
+type NumericRules = Omit<StaffRules, "weekStartsOn">;
+
+const DEFAULT_NUMERIC_RULES: NumericRules = {
   otWeeklyMinutes: 2400,
   otDailyMinutes: null,
   dtDailyMinutes: null,
@@ -70,6 +89,103 @@ export const DEFAULT_STAFF_RULES: StaffRules = {
   earlyClockInMinutes: null,
 };
 
+export const DEFAULT_STAFF_RULES: StaffRules = { weekStartsOn: 1, ...DEFAULT_NUMERIC_RULES };
+
+type NullableRuleKey = "otDailyMinutes" | "dtDailyMinutes" | "breakRequiredAfterMinutes" | "earlyClockInMinutes";
+type RequiredRuleKey = "otWeeklyMinutes" | "clockGraceMinutes";
+
+/** One numeric rule as a settings input. Hour fields are stored as minutes. */
+export type StaffRuleField = (
+  | { key: NullableRuleKey; nullable: true }
+  /** Blank falls back to the default instead of turning the rule off. */
+  | { key: RequiredRuleKey; nullable: false }
+) & {
+  name: string;
+  id: string;
+  label: string;
+  unit: "h" | "min";
+  /** Whether 0 turns the rule off rather than being a real value. */
+  zeroIsOff: boolean;
+  required: boolean;
+  min: number;
+  step: number;
+  hint: string | null;
+};
+
+export const STAFF_RULE_FIELDS: readonly StaffRuleField[] = [
+  { key: "otWeeklyMinutes", nullable: false, name: "otWeeklyHours", id: "s-ot-weekly", label: "Weekly overtime after (h)", unit: "h", zeroIsOff: true, required: true, min: 1, step: 0.5, hint: "40 under federal law." },
+  { key: "breakRequiredAfterMinutes", nullable: true, name: "breakRequiredAfterHours", id: "s-break", label: "Flag no meal break after (h)", unit: "h", zeroIsOff: true, required: false, min: 0, step: 0.5, hint: "Flags the timesheet only; nothing is deducted." },
+  { key: "otDailyMinutes", nullable: true, name: "otDailyHours", id: "s-ot-daily", label: "Daily overtime after (h)", unit: "h", zeroIsOff: true, required: false, min: 0, step: 0.5, hint: "California: 8. Blank for none." },
+  { key: "dtDailyMinutes", nullable: true, name: "dtDailyHours", id: "s-dt-daily", label: "Daily double time after (h)", unit: "h", zeroIsOff: true, required: false, min: 0, step: 0.5, hint: "California: 12. Blank for none." },
+  { key: "clockGraceMinutes", nullable: false, name: "clockGraceMinutes", id: "s-grace", label: "Late / early-out grace (min)", unit: "min", zeroIsOff: false, required: false, min: 0, step: 1, hint: null },
+  { key: "earlyClockInMinutes", nullable: true, name: "earlyClockInMinutes", id: "s-early", label: "Block clock-in earlier than (min before shift)", unit: "min", zeroIsOff: true, required: false, min: 0, step: 1, hint: "Blank lets staff clock in any time. Managers can always add the time." },
+];
+
+/** The rule as its input shows it: hours for hour fields, blank when off. */
+export function ruleInputValue(field: StaffRuleField, minutes: number | null): string {
+  if (minutes === null) return "";
+  return String(field.unit === "h" ? minutes / 60 : minutes);
+}
+
+/** Minutes typed into one rule input, or null when the input turns the rule off. */
+function parseRule(field: StaffRuleField, raw: string): number | null {
+  const value = field.unit === "h" ? Number.parseFloat(raw) : Number.parseInt(raw, 10);
+  if (!Number.isFinite(value) || (field.zeroIsOff && value <= 0)) return null;
+  return field.unit === "h" ? Math.round(value * 60) : Math.max(0, value);
+}
+
+/** Reads every numeric rule from a settings form; `read` returns a field's raw text. */
+export function parseStaffRules(read: (name: string) => string): NumericRules {
+  const rules = { ...DEFAULT_NUMERIC_RULES };
+  for (const field of STAFF_RULE_FIELDS) {
+    const value = parseRule(field, read(field.name));
+    if (field.nullable) rules[field.key] = value;
+    else rules[field.key] = value ?? DEFAULT_NUMERIC_RULES[field.key];
+  }
+  return rules;
+}
+
+// ---------------------------------------------------------------------------
+// Kiosk requests
+// ---------------------------------------------------------------------------
+
+export const PIN_LENGTH = { min: 4, max: 6 } as const;
+/** For `<input pattern>`. */
+export const PIN_PATTERN = `\\d{${PIN_LENGTH.min},${PIN_LENGTH.max}}`;
+export const pinSchema = z.string().regex(new RegExp(`^${PIN_PATTERN}$`), "A PIN is 4 to 6 digits.");
+
+/** Longest reason, note or time-off reason a person can type. */
+export const REASON_MAX = 500;
+
+const clockInSchema = z.object({ type: z.literal("clock_in"), role: z.enum(JOB_ROLES) });
+const startBreakSchema = z.object({ type: z.literal("start_break"), paid: z.boolean() });
+const endBreakSchema = z.object({ type: z.literal("end_break") });
+const clockOutSchema = z.object({ type: z.literal("clock_out"), declaredTipsCents: z.number().int().min(0).max(1_000_000) });
+const timeOffActionSchema = z.object({
+  type: z.literal("request_time_off"),
+  startDate: localDateSchema,
+  endDate: localDateSchema,
+  reason: z.string().trim().max(REASON_MAX),
+});
+
+export const kioskRequestSchema = z.object({
+  pin: pinSchema,
+  action: z
+    .discriminatedUnion("type", [clockInSchema, startBreakSchema, endBreakSchema, clockOutSchema, timeOffActionSchema])
+    .optional(),
+});
+
+export type KioskRequest = z.infer<typeof kioskRequestSchema>;
+export type KioskAction = NonNullable<KioskRequest["action"]>;
+export type ClockAction = Exclude<KioskAction, { type: "request_time_off" }>;
+
+/** Why time off can't be filed, or null. The kiosk passes today as `earliest`; a manager can backdate. */
+export function timeOffProblem(start: LocalDate, end: LocalDate, earliest: LocalDate | null): string | null {
+  if (earliest !== null && start < earliest) return "Time off has to start today or later.";
+  if (end < start) return "The last day can't be before the first.";
+  return null;
+}
+
 // ---------------------------------------------------------------------------
 // Clock state machine
 // ---------------------------------------------------------------------------
@@ -77,13 +193,16 @@ export const DEFAULT_STAFF_RULES: StaffRules = {
 export type ClockState =
   | { kind: "off" }
   | { kind: "working"; entryId: number; role: JobRole; since: string }
-  | { kind: "on_break"; entryId: number; breakId: number; paid: boolean; since: string; shiftSince: string };
+  | { kind: "on_break"; entryId: number; breakId: number; paid: boolean; since: string };
 
-export type ClockAction =
-  | { type: "clock_in"; role: JobRole }
-  | { type: "start_break"; paid: boolean }
-  | { type: "end_break" }
-  | { type: "clock_out"; declaredTipsCents: number };
+/** An action narrowed to the state it applies to, carrying the rows it writes. */
+export type ClockStep =
+  | Extract<ClockAction, { type: "clock_in" }>
+  | { type: "start_break"; entryId: number; paid: boolean }
+  | { type: "end_break"; breakId: number }
+  | { type: "clock_out"; entryId: number; declaredTipsCents: number };
+
+export type ClockPlan = { kind: "apply"; step: ClockStep } | { kind: "replay" | "refuse"; message: string };
 
 // Clock-out from a break is not offered: ending the break first keeps every
 // break record closed.
@@ -93,32 +212,42 @@ export const ALLOWED: Record<ClockState["kind"], ClockAction["type"][]> = {
   on_break: ["end_break"],
 };
 
-/** The state each action leads to: finding the clock already there means a retry. */
-const LEADS_TO: Record<ClockAction["type"], ClockState["kind"][]> = {
-  clock_in: ["working", "on_break"],
+/**
+ * The state each action leads to: finding the clock already there means a
+ * retry. Clock-in applies from off and leads to both other states, so it is
+ * always applied or replayed, never refused.
+ */
+const LEADS_TO: Record<Exclude<ClockAction["type"], "clock_in">, ClockState["kind"][]> = {
   start_break: ["on_break"],
   end_break: ["working"],
   clock_out: ["off"],
 };
 
-const ALREADY: Record<ClockAction["type"], string> = {
+export const REPLAY_MESSAGE: Record<ClockAction["type"], string> = {
   clock_in: "You're already clocked in.",
   start_break: "You're already on a break.",
   end_break: "Your break already ended.",
   clock_out: "You're already clocked out.",
 };
 
-const REFUSED: Record<ClockAction["type"], string> = {
-  clock_in: "You're already clocked in.",
+export const REFUSAL_MESSAGE: Record<Exclude<ClockAction["type"], "clock_in">, string> = {
   start_break: "Clock in before starting a break.",
   end_break: "You're not on a break.",
   clock_out: "End your break before clocking out.",
 };
 
-export type ClockPlan =
-  | { kind: "apply" }
-  | { kind: "replay"; message: string }
-  | { kind: "refuse"; message: string };
+function stepFor(state: ClockState, action: ClockAction): ClockStep | null {
+  switch (state.kind) {
+    case "off":
+      return action.type === "clock_in" ? action : null;
+    case "working":
+      if (action.type === "start_break") return { type: "start_break", entryId: state.entryId, paid: action.paid };
+      if (action.type === "clock_out") return { ...action, entryId: state.entryId };
+      return null;
+    case "on_break":
+      return action.type === "end_break" ? { type: "end_break", breakId: state.breakId } : null;
+  }
+}
 
 /**
  * Whether an action applies to the current state. A double tap or a retried
@@ -126,9 +255,12 @@ export type ClockPlan =
  * answered with the current view rather than an error or a second row.
  */
 export function planClock(state: ClockState, action: ClockAction): ClockPlan {
-  if (ALLOWED[state.kind].includes(action.type)) return { kind: "apply" };
-  if (LEADS_TO[action.type].includes(state.kind)) return { kind: "replay", message: ALREADY[action.type] };
-  return { kind: "refuse", message: REFUSED[action.type] };
+  const step = stepFor(state, action);
+  if (step) return { kind: "apply", step };
+  if (action.type === "clock_in" || LEADS_TO[action.type].includes(state.kind)) {
+    return { kind: "replay", message: REPLAY_MESSAGE[action.type] };
+  }
+  return { kind: "refuse", message: REFUSAL_MESSAGE[action.type] };
 }
 
 // ---------------------------------------------------------------------------
@@ -149,6 +281,11 @@ export type PayEntry = {
 };
 
 const MINUTE = 60_000;
+
+/** Whole minutes from one instant to a later one. */
+export function elapsedMinutes(from: Date, to: Date): number {
+  return Math.max(0, Math.floor((to.getTime() - from.getTime()) / MINUTE));
+}
 
 /** Paid and unpaid-break minutes for one punch, whole minutes (seconds floored). */
 export function entryMinutes(
@@ -180,19 +317,34 @@ export type DayPay = {
   breakMinutes: number;
 };
 
-export type WeekPay = {
+/** A punch with its store-local date and minutes. */
+export type PunchPay<E extends PayEntry = PayEntry> = E & { date: LocalDate; paidMinutes: number; breakMinutes: number };
+
+export type WeekPay<E extends PayEntry = PayEntry> = {
   days: DayPay[];
   totals: Omit<DayPay, "date">;
-  entries: { id: number; date: LocalDate; paidMinutes: number; breakMinutes: number; open: boolean }[];
+  /** Sorted by clock-in. */
+  entries: PunchPay<E>[];
   straightCents: number;
   premiumCents: number;
   grossCents: number;
   tipsCents: number;
 };
 
+const sum = <T>(xs: readonly T[], f: (x: T) => number) => xs.reduce((n, x) => n + f(x), 0);
+
 /** a / b rounded half up, for non-negative integers. */
 function roundDiv(a: number, b: number): number {
   return Math.floor((2 * a + b) / (2 * b));
+}
+
+/** Straight pay in cent-minutes per hour: Σ minutes × hourly cents, unrounded. */
+const centMinutes = (punches: { paidMinutes: number; rateCents: number }[]) =>
+  sum(punches, (p) => p.paidMinutes * p.rateCents);
+
+/** Straight-time labor cost of these punches, counted up to now, rounded once. */
+export function laborCents(entries: PayEntry[], now: Date): number {
+  return roundDiv(centMinutes(entries.map((e) => ({ rateCents: e.rateCents, ...entryMinutes(e, now) }))), 60);
 }
 
 /**
@@ -207,79 +359,51 @@ function roundDiv(a: number, b: number): number {
  * minutes; overtime minutes add half the regular rate and double-time
  * minutes a full regular rate. Cents are rounded once, at the end.
  */
-export function computeWeek(
-  entries: PayEntry[],
+export function computeWeek<E extends PayEntry>(
+  entries: E[],
   rules: Pick<StaffRules, "otWeeklyMinutes" | "otDailyMinutes" | "dtDailyMinutes">,
   tz: string,
   now: Date,
-): WeekPay {
-  const sorted = entries.toSorted((a, b) => a.clockInAt.getTime() - b.clockInAt.getTime());
-  const perEntry = sorted.map((e) => ({
-    id: e.id,
-    date: localDateOf(e.clockInAt, tz),
-    open: e.clockOutAt === null,
-    ...entryMinutes(e, now),
-  }));
+): WeekPay<E> {
+  const punches: PunchPay<E>[] = entries
+    .toSorted((a, b) => a.clockInAt.getTime() - b.clockInAt.getTime())
+    .map((e) => ({ ...e, date: localDateOf(e.clockInAt, tz), ...entryMinutes(e, now) }));
+  const otCap = rules.otDailyMinutes ?? Infinity;
+  const dtCap = rules.dtDailyMinutes ?? Infinity;
 
-  const byDate = new Map<LocalDate, { paid: number; breaks: number }>();
-  for (const e of perEntry) {
-    const d = byDate.get(e.date) ?? { paid: 0, breaks: 0 };
-    d.paid += e.paidMinutes;
-    d.breaks += e.breakMinutes;
-    byDate.set(e.date, d);
-  }
-
+  // Punches are sorted by clock-in, so groups come out in date order.
   let weekRegular = 0;
-  const days: DayPay[] = [...byDate.entries()]
-    .sort(([a], [b]) => a.localeCompare(b))
-    .map(([date, { paid, breaks }]) => {
-      const dt = rules.dtDailyMinutes === null ? 0 : Math.max(0, paid - rules.dtDailyMinutes);
-      const ot =
-        rules.otDailyMinutes === null
-          ? 0
-          : Math.max(0, Math.min(paid, rules.dtDailyMinutes ?? Infinity) - rules.otDailyMinutes);
-      let regular = paid - ot - dt;
-      const overWeekly = Math.max(0, regular - Math.max(0, rules.otWeeklyMinutes - weekRegular));
-      regular -= overWeekly;
-      weekRegular += regular;
-      return { date, paidMinutes: paid, regularMinutes: regular, otMinutes: ot + overWeekly, dtMinutes: dt, breakMinutes: breaks };
-    });
+  const days: DayPay[] = [...Map.groupBy(punches, (p) => p.date)].map(([date, ps]) => {
+    const paid = sum(ps, (p) => p.paidMinutes);
+    const dt = Math.max(0, paid - dtCap);
+    const dailyOt = Math.max(0, Math.min(paid, dtCap) - otCap);
+    const weeklyOt = Math.max(0, paid - dt - dailyOt - (rules.otWeeklyMinutes - weekRegular));
+    const regular = paid - dt - dailyOt - weeklyOt;
+    weekRegular += regular;
+    return { date, paidMinutes: paid, regularMinutes: regular, otMinutes: dailyOt + weeklyOt, dtMinutes: dt, breakMinutes: sum(ps, (p) => p.breakMinutes) };
+  });
+  const totals = {
+    paidMinutes: sum(days, (d) => d.paidMinutes),
+    regularMinutes: sum(days, (d) => d.regularMinutes),
+    otMinutes: sum(days, (d) => d.otMinutes),
+    dtMinutes: sum(days, (d) => d.dtMinutes),
+    breakMinutes: sum(days, (d) => d.breakMinutes),
+  };
 
-  const totals = days.reduce(
-    (t, d) => ({
-      paidMinutes: t.paidMinutes + d.paidMinutes,
-      regularMinutes: t.regularMinutes + d.regularMinutes,
-      otMinutes: t.otMinutes + d.otMinutes,
-      dtMinutes: t.dtMinutes + d.dtMinutes,
-      breakMinutes: t.breakMinutes + d.breakMinutes,
-    }),
-    { paidMinutes: 0, regularMinutes: 0, otMinutes: 0, dtMinutes: 0, breakMinutes: 0 },
-  );
-
-  // Straight pay in cent-minutes per hour: Σ minutes × hourly cents.
-  const straight = sorted.reduce((s, e, i) => s + perEntry[i].paidMinutes * e.rateCents, 0);
-  const total = totals.paidMinutes;
+  const straight = centMinutes(punches);
   const straightCents = roundDiv(straight, 60);
+  const t = totals.paidMinutes;
   // straight/60 + (OT × ½ + DT × 1) × straight / (60 × total), over one denominator.
-  const grossCents =
-    total === 0
-      ? 0
-      : roundDiv(straight * (2 * total + totals.otMinutes + 2 * totals.dtMinutes), 120 * total);
+  const grossCents = t === 0 ? 0 : roundDiv(straight * (2 * t + totals.otMinutes + 2 * totals.dtMinutes), 120 * t);
 
   return {
     days,
     totals,
-    entries: perEntry.map(({ id, date, paidMinutes, breakMinutes, open }) => ({
-      id,
-      date,
-      paidMinutes,
-      breakMinutes,
-      open,
-    })),
+    entries: punches,
     straightCents,
     premiumCents: grossCents - straightCents,
     grossCents,
-    tipsCents: sorted.reduce((s, e) => s + e.declaredTipsCents, 0),
+    tipsCents: sum(punches, (p) => p.declaredTipsCents),
   };
 }
 
@@ -322,18 +446,24 @@ export type EntryFlag = (typeof ENTRY_FLAGS)[number];
 
 export type Severity = "critical" | "warning" | "info";
 
-export const FLAG_LABEL: Record<EntryFlag, { label: string; severity: Severity }> = {
-  missed_clock_out: { label: "Missed clock-out", severity: "critical" },
-  on_break_long: { label: "Break over an hour", severity: "warning" },
-  no_break: { label: "No meal break", severity: "warning" },
-  late: { label: "Late", severity: "warning" },
-  early_out: { label: "Left early", severity: "info" },
-  unscheduled: { label: "Unscheduled", severity: "info" },
-  edited: { label: "Edited", severity: "info" },
+/** `attention`: whether the overview counts it as something to fix. */
+export const FLAG_META: Record<EntryFlag, { label: string; severity: Severity; attention: boolean }> = {
+  missed_clock_out: { label: "Missed clock-out", severity: "critical", attention: true },
+  on_break_long: { label: "Break over an hour", severity: "warning", attention: true },
+  no_break: { label: "No meal break", severity: "warning", attention: true },
+  late: { label: "Late", severity: "warning", attention: true },
+  early_out: { label: "Left early", severity: "info", attention: true },
+  unscheduled: { label: "Unscheduled", severity: "info", attention: true },
+  edited: { label: "Edited", severity: "info", attention: false },
 };
 
 const MISSED_CLOCK_OUT_MS = 14 * 60 * MINUTE;
 const LONG_BREAK_MS = 60 * MINUTE;
+
+/** Past the grace period after a shift's start. */
+export function isLate(shiftStart: Date, at: Date, rules: Pick<StaffRules, "clockGraceMinutes">): boolean {
+  return at.getTime() > shiftStart.getTime() + rules.clockGraceMinutes * MINUTE;
+}
 
 export function entryFlags(
   entry: PayEntry & { edited: boolean },
@@ -342,7 +472,6 @@ export function entryFlags(
   now: Date,
 ): EntryFlag[] {
   const flags: EntryFlag[] = [];
-  const grace = rules.clockGraceMinutes * MINUTE;
   if (entry.clockOutAt === null && now.getTime() - entry.clockInAt.getTime() > MISSED_CLOCK_OUT_MS) {
     flags.push("missed_clock_out");
   }
@@ -362,8 +491,11 @@ export function entryFlags(
   if (shift === null) {
     flags.push("unscheduled");
   } else {
-    if (entry.clockInAt.getTime() > shift.startsAt.getTime() + grace) flags.push("late");
-    if (entry.clockOutAt !== null && entry.clockOutAt.getTime() < shift.endsAt.getTime() - grace) {
+    if (isLate(shift.startsAt, entry.clockInAt, rules)) flags.push("late");
+    if (
+      entry.clockOutAt !== null &&
+      entry.clockOutAt.getTime() < shift.endsAt.getTime() - rules.clockGraceMinutes * MINUTE
+    ) {
       flags.push("early_out");
     }
   }
@@ -371,19 +503,51 @@ export function entryFlags(
   return flags;
 }
 
+export const TIME_AUDIT_ACTIONS = ["create", "edit", "delete", "approve", "unapprove", "clock_out"] as const;
+export type TimeAuditAction = (typeof TIME_AUDIT_ACTIONS)[number];
+
+/** Audit actions that changed the punch's time, as opposed to signing it off. */
+const EDIT_ACTIONS: readonly TimeAuditAction[] = ["create", "edit", "clock_out"];
+
+export const wasEdited = (audit: { action: TimeAuditAction }[]) => audit.some((a) => EDIT_ACTIONS.includes(a.action));
+
 // ---------------------------------------------------------------------------
 // Scheduling
 // ---------------------------------------------------------------------------
 
-export type Weekday = 0 | 1 | 2 | 3 | 4 | 5 | 6;
+export type DayRule = { kind: "any" } | { kind: "none" } | { kind: "window"; from: string; to: string };
 
-export type DayAvailability =
-  | { day: Weekday; kind: "any" }
-  | { day: Weekday; kind: "none" }
-  | { day: Weekday; kind: "window"; from: string; to: string };
+export type WeeklyAvailability = Record<Weekday, DayRule>;
 
-/** One entry per weekday; a missing day or a null availability means any time. */
-export type WeeklyAvailability = DayAvailability[];
+const ANY: DayRule = { kind: "any" };
+export const ANY_TIME: WeeklyAvailability = { 0: ANY, 1: ANY, 2: ANY, 3: ANY, 4: ANY, 5: ANY, 6: ANY };
+
+const storedAvailabilitySchema = z.array(
+  z.discriminatedUnion("kind", [
+    z.object({ day: z.number().int().min(0).max(6), kind: z.literal("any") }),
+    z.object({ day: z.number().int().min(0).max(6), kind: z.literal("none") }),
+    z.object({ day: z.number().int().min(0).max(6), kind: z.literal("window"), from: hhmmSchema, to: hhmmSchema }),
+  ]),
+);
+
+/** The `employees.availability` jsonb: one entry per restricted weekday, or null for any time. */
+export type StoredAvailability = z.infer<typeof storedAvailabilitySchema>;
+
+/** Parses the stored column. A missing day, a null column or an unreadable one is any time. */
+export function availabilityFromStored(stored: unknown): WeeklyAvailability {
+  const parsed = storedAvailabilitySchema.safeParse(stored);
+  if (!parsed.success) return ANY_TIME;
+  const week = { ...ANY_TIME };
+  for (const { day, ...rule } of parsed.data) {
+    week[WEEKDAYS[day]] = rule;
+  }
+  return week;
+}
+
+export function availabilityToStored(week: WeeklyAvailability): StoredAvailability | null {
+  if (WEEKDAYS.every((d) => week[d].kind === "any")) return null;
+  return WEEKDAYS.map((day) => ({ day, ...week[day] }));
+}
 
 export type ShiftTimes = {
   id: number | null;
@@ -392,11 +556,24 @@ export type ShiftTimes = {
   unpaidBreakMinutes: number;
 };
 
+export type LiveTimeOffStatus = "pending" | "approved";
+
+/** Time off that still counts: denied requests are dropped when the row is read. */
 export type TimeOffLike = {
   startDate: LocalDate;
   endDate: LocalDate;
-  status: "pending" | "approved" | "denied";
+  status: LiveTimeOffStatus;
 };
+
+export const MAX_SHIFT_MINUTES = 16 * 60;
+
+/** Why a shift can't be saved, or null. */
+export function shiftProblem(shift: Omit<ShiftTimes, "id">): string | null {
+  const minutes = (shift.endsAt.getTime() - shift.startsAt.getTime()) / MINUTE;
+  if (minutes > MAX_SHIFT_MINUTES) return "A shift can be at most 16 hours.";
+  if (shift.unpaidBreakMinutes >= minutes) return "The break is longer than the shift.";
+  return null;
+}
 
 export function shiftPaidMinutes(shift: Omit<ShiftTimes, "id">): number {
   const minutes = Math.round((shift.endsAt.getTime() - shift.startsAt.getTime()) / MINUTE);
@@ -409,13 +586,22 @@ export function shiftCostCents(shift: Omit<ShiftTimes, "id">, rateCents: number)
 
 /** Scheduled minutes still to come: whole shifts ahead, and the rest of any under way. */
 export function remainingShiftMinutes(shifts: Omit<ShiftTimes, "id">[], now: Date): number {
-  return shifts
-    .filter((s) => s.endsAt > now)
-    .reduce(
-      (sum, s) =>
-        sum + (s.startsAt > now ? shiftPaidMinutes(s) : Math.floor((s.endsAt.getTime() - now.getTime()) / MINUTE)),
-      0,
-    );
+  return sum(
+    shifts.filter((s) => s.endsAt > now),
+    (s) => (s.startsAt > now ? shiftPaidMinutes(s) : Math.floor((s.endsAt.getTime() - now.getTime()) / MINUTE)),
+  );
+}
+
+/** Scheduled or worked minutes past the weekly overtime threshold. */
+export function isOvertime(weekMinutes: number, rules: Pick<StaffRules, "otWeeklyMinutes">): boolean {
+  return weekMinutes > rules.otWeeklyMinutes;
+}
+
+/** How close to the weekly threshold counts as overtime risk. */
+export const OT_RISK_MARGIN_MINUTES = 120;
+
+export function atOvertimeRisk(projectedMinutes: number, rules: Pick<StaffRules, "otWeeklyMinutes">): boolean {
+  return isOvertime(projectedMinutes + OT_RISK_MARGIN_MINUTES, rules);
 }
 
 export const SHIFT_CONFLICTS = ["overlap", "time_off", "time_off_pending", "unavailable", "overtime"] as const;
@@ -429,23 +615,24 @@ export const CONFLICT_LABEL: Record<ShiftConflict, string> = {
   overtime: "Puts them into overtime",
 };
 
-/** The store-local dates a shift touches (an overnight close touches two). */
+/** The store-local dates a shift touches (an overnight close touches two; one ending at midnight, one). */
 export function shiftDates(shift: Pick<ShiftTimes, "startsAt" | "endsAt">, tz: string): [LocalDate, LocalDate] {
   return [localDateOf(shift.startsAt, tz), localDateOf(new Date(shift.endsAt.getTime() - 1), tz)];
 }
 
-export function dayAvailability(availability: WeeklyAvailability | null, day: number): DayAvailability {
-  return availability?.find((a) => a.day === day) ?? { day: day as Weekday, kind: "any" };
+/** Whether a shift lands on any day of a time-off request. */
+export function shiftTouchesTimeOff(
+  shift: Pick<ShiftTimes, "startsAt" | "endsAt">,
+  timeOff: Pick<TimeOffLike, "startDate" | "endDate">,
+  tz: string,
+): boolean {
+  const [first, last] = shiftDates(shift, tz);
+  return timeOff.startDate <= last && timeOff.endDate >= first;
 }
 
-function hhmmMinutes(hhmm: string): number {
-  const [h, m] = hhmm.split(":").map(Number);
-  return h * 60 + m;
-}
-
-function outsideAvailability(shift: ShiftTimes, availability: WeeklyAvailability | null, tz: string): boolean {
+function outsideAvailability(shift: ShiftTimes, availability: WeeklyAvailability, tz: string): boolean {
   const [date] = shiftDates(shift, tz);
-  const a = dayAvailability(availability, dayOfWeek(date));
+  const a = availability[dayOfWeek(date)];
   if (a.kind === "any") return false;
   if (a.kind === "none") return true;
   const start = minutesOfDay(shift.startsAt, tz);
@@ -465,7 +652,7 @@ export function shiftConflicts(
   shift: ShiftTimes,
   sameEmployeeShifts: ShiftTimes[],
   timeOff: TimeOffLike[],
-  availability: WeeklyAvailability | null,
+  availability: WeeklyAvailability,
   rules: Pick<StaffRules, "otWeeklyMinutes" | "weekStartsOn">,
   tz: string,
 ): ShiftConflict[] {
@@ -473,34 +660,69 @@ export function shiftConflicts(
   const conflicts: ShiftConflict[] = [];
   if (others.some((s) => s.startsAt < shift.endsAt && s.endsAt > shift.startsAt)) conflicts.push("overlap");
 
-  const [first, last] = shiftDates(shift, tz);
-  const touching = timeOff.filter((t) => t.startDate <= last && t.endDate >= first);
+  const touching = timeOff.filter((t) => shiftTouchesTimeOff(shift, t, tz));
   if (touching.some((t) => t.status === "approved")) conflicts.push("time_off");
   if (touching.some((t) => t.status === "pending")) conflicts.push("time_off_pending");
 
   if (outsideAvailability(shift, availability, tz)) conflicts.push("unavailable");
 
-  const week = weekStartOf(first, rules.weekStartsOn);
-  const weekMinutes = [shift, ...others]
-    .filter((s) => weekStartOf(localDateOf(s.startsAt, tz), rules.weekStartsOn) === week)
-    .reduce((sum, s) => sum + shiftPaidMinutes(s), 0);
-  if (weekMinutes > rules.otWeeklyMinutes) conflicts.push("overtime");
+  const week = weekStartOf(localDateOf(shift.startsAt, tz), rules.weekStartsOn);
+  const weekMinutes = sum(
+    [shift, ...others].filter((s) => weekStartOf(localDateOf(s.startsAt, tz), rules.weekStartsOn) === week),
+    shiftPaidMinutes,
+  );
+  if (isOvertime(weekMinutes, rules)) conflicts.push("overtime");
   return conflicts;
 }
 
-const MATCH_EARLY_MS = 2 * 60 * MINUTE;
+/** How long before a shift's start a punch still belongs to it. */
+export const MATCH_EARLY_MS = 2 * 60 * MINUTE;
 
-/** The published shift a punch belongs to: [start − 2 h, end] contains it, nearest start first. */
+/** Whether a punch belongs to a shift: [start − 2 h, end] contains its clock-in. */
+export function punchFitsShift(clockIn: Date, shift: Pick<ShiftTimes, "startsAt" | "endsAt">): boolean {
+  const t = clockIn.getTime();
+  return t >= shift.startsAt.getTime() - MATCH_EARLY_MS && t <= shift.endsAt.getTime();
+}
+
+/** The published shift a punch belongs to, nearest start first. */
 export function matchShift<S extends Pick<ShiftTimes, "startsAt" | "endsAt">>(
   clockIn: Date,
   shifts: S[],
 ): S | null {
   const t = clockIn.getTime();
-  const candidates = shifts.filter(
-    (s) => t >= s.startsAt.getTime() - MATCH_EARLY_MS && t <= s.endsAt.getTime(),
-  );
+  const candidates = shifts.filter((s) => punchFitsShift(clockIn, s));
   candidates.sort((a, b) => Math.abs(a.startsAt.getTime() - t) - Math.abs(b.startsAt.getTime() - t));
   return candidates[0] ?? null;
+}
+
+/**
+ * The published shifts that can matter to a punch at `at`: any it could
+ * belong to, and today's next one for the early clock-in rule.
+ */
+export function shiftLookupWindow(at: Date): { from: Date; to: Date } {
+  return { from: new Date(at.getTime() - 14 * 60 * MINUTE), to: new Date(at.getTime() + 24 * 60 * MINUTE) };
+}
+
+/**
+ * Today's shifts past their grace period with no punch: none linked to the
+ * shift, and none from the same person that fits its window.
+ */
+export function lateShifts<S extends { id: number; employeeId: number | null; startsAt: Date; endsAt: Date }>(
+  shifts: S[],
+  punches: { employeeId: number; shiftId: number | null; clockInAt: Date }[],
+  rules: Pick<StaffRules, "clockGraceMinutes">,
+  now: Date,
+  tz: string,
+): S[] {
+  const today = localDateOf(now, tz);
+  return shifts.filter(
+    (shift) =>
+      localDateOf(shift.startsAt, tz) === today &&
+      isLate(shift.startsAt, now, rules) &&
+      !punches.some(
+        (p) => p.employeeId === shift.employeeId && (p.shiftId === shift.id || punchFitsShift(p.clockInAt, shift)),
+      ),
+  );
 }
 
 /**
@@ -523,6 +745,41 @@ export function earlyClockInBlock<S extends Pick<ShiftTimes, "startsAt" | "endsA
   return now < opensAt ? { shift: next, opensAt } : null;
 }
 
+/** Whether this person may clock in as `role` now, and at which rate. */
+export function checkClockIn(
+  roles: Pick<EmployeeRole, "role" | "hourlyRateCents">[],
+  role: JobRole,
+  nearbyShifts: Pick<ShiftTimes, "startsAt" | "endsAt">[],
+  rules: Pick<StaffRules, "earlyClockInMinutes">,
+  now: Date,
+  tz: string,
+): { ok: true; rateCents: number } | { ok: false; message: string } {
+  const match = roles.find((r) => r.role === role);
+  if (!match) return { ok: false, message: "Pick one of your roles. A manager can add roles for you." };
+  const block = earlyClockInBlock(now, nearbyShifts, rules, tz);
+  if (block) {
+    return {
+      ok: false,
+      message: `Your shift starts at ${formatClock(block.shift.startsAt, tz)}. You can clock in from ${formatClock(block.opensAt, tz)}.`,
+    };
+  }
+  return { ok: true, rateCents: match.hourlyRateCents };
+}
+
+/** Splits published shifts into today's and the next seven days'. */
+export function kioskShiftDays<S extends { startsAt: Date }>(
+  shifts: S[],
+  today: LocalDate,
+  tz: string,
+): { today: S[]; upcoming: S[] } {
+  const dated = shifts.map((s) => ({ s, date: localDateOf(s.startsAt, tz) }));
+  const weekOut = addDays(today, 7);
+  return {
+    today: dated.filter((d) => d.date === today).map((d) => d.s),
+    upcoming: dated.filter((d) => d.date > today && d.date <= weekOut).map((d) => d.s),
+  };
+}
+
 // ---------------------------------------------------------------------------
 // Formatting
 // ---------------------------------------------------------------------------
@@ -540,6 +797,21 @@ export function decimalHours(minutes: number): string {
   return (minutes / 60).toFixed(2);
 }
 
+/** 450 → "7.50 h", for display. */
+export function formatHours(minutes: number): string {
+  return `${decimalHours(minutes)} h`;
+}
+
+/** Labor cost as a percent of sales; null without sales to compare. */
+export function laborPercent(laborCents: number, salesCents: number | null): number | null {
+  return salesCents === null || salesCents === 0 ? null : (laborCents / salesCents) * 100;
+}
+
+/** 23.456 → "23.5%", null → "–". */
+export function formatPercent(percent: number | null): string {
+  return percent === null ? "–" : `${percent.toFixed(1)}%`;
+}
+
 // ---------------------------------------------------------------------------
 // Audit and kiosk wire types
 // ---------------------------------------------------------------------------
@@ -554,6 +826,20 @@ export type AuditSnapshot = {
   note: string | null;
   breaks: { startedAt: string; endedAt: string | null; paid: boolean }[];
 };
+
+export function snapshotOf(e: Omit<PayEntry, "id"> & { note: string | null }): AuditSnapshot {
+  return {
+    role: e.role,
+    rateCents: e.rateCents,
+    clockInAt: e.clockInAt.toISOString(),
+    clockOutAt: e.clockOutAt?.toISOString() ?? null,
+    declaredTipsCents: e.declaredTipsCents,
+    note: e.note,
+    breaks: e.breaks
+      .toSorted((a, b) => a.startedAt.getTime() - b.startedAt.getTime())
+      .map((b) => ({ startedAt: b.startedAt.toISOString(), endedAt: b.endedAt?.toISOString() ?? null, paid: b.paid })),
+  };
+}
 
 export type KioskShift = {
   id: number;
@@ -573,14 +859,8 @@ export type KioskView = {
   week: { paidMinutes: number; projectedMinutes: number };
   /** The punch in progress, counted up to now. */
   current: { paidMinutes: number; breakMinutes: number } | null;
-  timeOff: { id: number; startDate: LocalDate; endDate: LocalDate; status: "pending" | "approved" }[];
+  timeOff: { id: number; startDate: LocalDate; endDate: LocalDate; status: LiveTimeOffStatus }[];
 };
-
-export type KioskAction =
-  | ClockAction
-  | { type: "request_time_off"; startDate: LocalDate; endDate: LocalDate; reason: string };
-
-export type KioskRequest = { pin: string; action?: KioskAction };
 
 export type ShiftSummary = {
   clockInAt: string;

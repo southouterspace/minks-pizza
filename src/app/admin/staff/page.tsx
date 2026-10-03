@@ -3,7 +3,7 @@ import Link from "next/link";
 import { requireOperator } from "@/lib/auth";
 import { clockOutForEmployee } from "@/app/admin/staff/actions";
 import { formatCents } from "@/lib/money";
-import { decimalHours, FLAG_LABEL, formatDuration, ROLE_LABEL } from "@/lib/timeclock";
+import { decimalHours, FLAG_META, formatDuration, ROLE_LABEL } from "@/lib/timeclock";
 import { getOverview, getStaffConfig } from "@/lib/timeclock-server";
 import { addDays, formatClock, localDateOf, weekStartOf } from "@/lib/zoned";
 import { AutoRefresh } from "@/components/admin/auto-refresh";
@@ -124,7 +124,7 @@ export default async function StaffOverviewPage() {
             <Link href="/admin/staff/timesheets" className="hover:underline">
               {flagTotal === 0
                 ? "No timesheet exceptions this week."
-                : data.attention.flags.map((f) => `${f.count} ${FLAG_LABEL[f.flag].label.toLowerCase()}`).join(" · ")}
+                : data.attention.flags.map((f) => `${f.count} ${FLAG_META[f.flag].label.toLowerCase()}`).join(" · ")}
             </Link>
           </li>
           <li>
