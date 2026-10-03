@@ -141,7 +141,7 @@ export function doordashDrive(
     id: "doordash_drive",
     label: LABEL,
 
-    async quote(req: DeliveryRequest) {
+    async quote(req) {
       const q = deliverySchema.parse(
         await call("POST", "/quotes", {
           external_delivery_id: req.externalId,

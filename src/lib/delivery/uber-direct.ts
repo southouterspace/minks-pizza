@@ -129,7 +129,7 @@ export function uberDirect(config: UberDirectConfig, fetchImpl: Fetch = globalTh
     id: "uber_direct",
     label: LABEL,
 
-    async quote(req: DeliveryRequest) {
+    async quote(req) {
       const q = quoteSchema.parse(
         await post("/delivery_quotes", {
           pickup_address: address(req.pickup.address),
