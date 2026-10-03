@@ -47,9 +47,16 @@ export type TimesheetRow = {
   /** Payroll pay: closed punches only. */
   closedPay: WeekPay;
   flagCount: number;
-  hasOpen: boolean;
-  approved: boolean;
+  status: TimesheetStatus;
 };
+
+export type TimesheetStatus = "empty" | "approved" | "open" | "needs_approval";
+
+function statusOf(entries: TimesheetEntry[]): TimesheetStatus {
+  if (entries.length === 0) return "empty";
+  if (entries.every((e) => e.approvedAt !== null)) return "approved";
+  return entries.some((e) => e.clockOutAt === null) ? "open" : "needs_approval";
+}
 
 export async function getTimesheetWeek(weekStart: LocalDate, cfg: StaffConfig, now = new Date()): Promise<TimesheetRow[]> {
   const tz = cfg.timezone;
@@ -104,8 +111,7 @@ export async function getTimesheetWeek(weekStart: LocalDate, cfg: StaffConfig, n
         pay,
         closedPay: computeWeek(mine.filter((r) => r.clockOutAt !== null).map(toPayEntry), cfg.rules, tz, now),
         flagCount: entries.reduce((n, e) => n + e.flags.length, 0),
-        hasOpen: entries.some((e) => e.clockOutAt === null),
-        approved: entries.length > 0 && entries.every((e) => e.approvedAt !== null),
+        status: statusOf(entries),
       };
     })
     .filter((row) => row.employee.isActive || row.entries.length > 0);

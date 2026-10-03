@@ -1,12 +1,11 @@
 import type { Metadata } from "next";
 import Link from "next/link";
-import { asc, desc } from "drizzle-orm";
 import { Plus } from "lucide-react";
-import { db, employees } from "@/db";
 import { requireOperator } from "@/lib/auth";
-import { decimalHours, ROLE_LABEL } from "@/lib/timeclock";
-import { getStaffConfig, resolveWeek } from "@/lib/staff/config";
-import { getTimesheetWeek } from "@/lib/staff/timesheets";
+import { formatHours, ROLE_LABEL } from "@/lib/timeclock";
+import { centsToDollars } from "@/lib/money";
+import { getStaffConfig } from "@/lib/staff/config";
+import { listEmployees } from "@/lib/staff/employees";
 import { Badge } from "@/components/ui/badge";
 import { buttonVariants } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
@@ -18,15 +17,7 @@ export const metadata: Metadata = { title: "Employees" };
 
 export default async function EmployeesPage() {
   await requireOperator();
-  const cfg = await getStaffConfig();
-  const [rows, sheet] = await Promise.all([
-    db.query.employees.findMany({
-      with: { roles: true },
-      orderBy: [desc(employees.isActive), asc(employees.name)],
-    }),
-    getTimesheetWeek(resolveWeek(undefined, cfg), cfg),
-  ]);
-  const weekMinutes = new Map(sheet.map((r) => [r.employee.id, r.pay.totals.paidMinutes]));
+  const rows = await listEmployees(await getStaffConfig());
 
   return (
     <div>
@@ -64,19 +55,17 @@ export default async function EmployeesPage() {
                   {row.isActive ? null : <Badge variant="secondary">Archived</Badge>}
                 </p>
                 <p className="mt-0.5 flex flex-wrap gap-1">
-                  {row.roles
-                    .toSorted((a, b) => Number(b.isPrimary) - Number(a.isPrimary))
-                    .map((r) => (
-                      <Badge key={r.role} variant="outline">
-                        {ROLE_LABEL[r.role]} · ${(r.hourlyRateCents / 100).toFixed(2)}
-                      </Badge>
-                    ))}
+                  {row.roles.map((r) => (
+                    <Badge key={r.role} variant="outline">
+                      {ROLE_LABEL[r.role]} · ${centsToDollars(r.hourlyRateCents)}
+                    </Badge>
+                  ))}
                 </p>
               </div>
-              <span className={`text-xs ${row.pinDigest ? "text-muted-foreground" : "font-medium text-warning"}`}>
-                {row.pinDigest ? "PIN set" : "No PIN"}
+              <span className={`text-xs ${row.hasPin ? "text-muted-foreground" : "font-medium text-warning"}`}>
+                {row.hasPin ? "PIN set" : "No PIN"}
               </span>
-              <span className="w-20 text-right text-sm tabular-nums">{decimalHours(weekMinutes.get(row.id) ?? 0)} h</span>
+              <span className="w-20 text-right text-sm tabular-nums">{formatHours(row.weekMinutes)}</span>
             </Link>
           ))}
         </Card>

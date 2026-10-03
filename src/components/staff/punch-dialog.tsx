@@ -3,7 +3,7 @@
 import { useActionState, useState } from "react";
 import { Plus, X } from "lucide-react";
 import { savePunch, type StaffFormState } from "@/app/admin/staff/actions";
-import { ROLE_LABEL, type JobRole } from "@/lib/timeclock";
+import { ROLE_LABEL, type JobRole, type StaffOption } from "@/lib/timeclock";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -18,7 +18,7 @@ import { Field, FieldError, FieldLabel } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import { NativeSelect, NativeSelectOption } from "@/components/ui/native-select";
 
-export type PunchEmployee = { id: number; name: string; roles: JobRole[] };
+export type PunchEmployee = StaffOption;
 
 /** Times are `datetime-local` strings on the store's wall clock. */
 export type PunchDraft = {

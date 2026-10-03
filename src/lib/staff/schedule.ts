@@ -4,19 +4,20 @@ import { db, employeeRoles, employees, shifts, timeOffRequests } from "@/db";
 import { salesByDate } from "@/lib/orders";
 import {
   availabilityFromStored,
+  isOvertime,
+  laborPercent,
   shiftConflicts,
   shiftCostCents,
   shiftPaidMinutes,
   shiftProblem,
   ROLE_LABEL,
-  type EmployeeRole,
+  type DayRule,
   type JobRole,
   type ShiftConflict,
-  type WeeklyAvailability,
 } from "@/lib/timeclock";
-import { addDays, hhmmOf, localDateOf, shiftInstants, weekBounds, zonedInstant, type LocalDate } from "@/lib/zoned";
+import { addDays, dayOfWeek, hhmmOf, localDateOf, shiftInstants, weekBounds, zonedInstant, type LocalDate } from "@/lib/zoned";
 import type { StaffConfig } from "@/lib/staff/config";
-import { ROLE_COLUMNS, toTimeOffView, type TimeOffView } from "@/lib/staff/queries";
+import { ROLE_COLUMNS, toTimeOffView } from "@/lib/staff/queries";
 
 export type ScheduleShift = {
   id: number;
@@ -35,22 +36,31 @@ export type ScheduleShift = {
   conflicts: ShiftConflict[];
 };
 
-export type ScheduleEmployee = {
-  id: number;
+export type ScheduleCell = {
+  date: LocalDate;
+  shifts: ScheduleShift[];
+  /** Approved wins over pending when both cover the day. */
+  timeOff: { status: "approved"; reason: string | null } | { status: "pending" } | null;
+  /** Null on the open-shifts row. */
+  availability: DayRule | null;
+};
+
+export type ScheduleRow = {
+  /** Null is the open-shifts row. */
+  employeeId: number | null;
   name: string;
-  roles: EmployeeRole[];
-  availability: WeeklyAvailability;
-  weekMinutes: number;
+  /** Scheduled hours this week; null on the open-shifts row. */
+  hours: { minutes: number; overtime: boolean } | null;
+  cells: ScheduleCell[];
 };
 
 export type ScheduleWeek = {
   weekStart: LocalDate;
   dates: LocalDate[];
-  employees: ScheduleEmployee[];
-  shifts: ScheduleShift[];
-  timeOff: TimeOffView[];
+  rows: ScheduleRow[];
   drafts: number;
-  days: { date: LocalDate; minutes: number; costCents: number; forecastCents: number | null }[];
+  days: { date: LocalDate; minutes: number; costCents: number; forecastCents: number | null; laborPercent: number | null }[];
+  totals: { minutes: number; costCents: number };
 };
 
 export async function getScheduleWeek(weekStart: LocalDate, cfg: StaffConfig): Promise<ScheduleWeek> {
@@ -109,27 +119,54 @@ export async function getScheduleWeek(weekStart: LocalDate, cfg: StaffConfig): P
   const listOf = Map.groupBy(list, (s) => s.employeeId);
   const onDate = Map.groupBy(list, (s) => s.date);
 
+  const cellsOf = (employeeId: number | null, availability: ((date: LocalDate) => DayRule) | null): ScheduleCell[] =>
+    dates.map((date) => {
+      const mine = (listOf.get(employeeId) ?? []).filter((s) => s.date === date);
+      const off = employeeId === null ? [] : (timeOffOf.get(employeeId) ?? []).filter((t) => t.startDate <= date && t.endDate >= date);
+      const approved = off.find((t) => t.status === "approved");
+      return {
+        date,
+        shifts: mine,
+        timeOff: approved ? { status: "approved", reason: approved.reason } : off.length > 0 ? { status: "pending" } : null,
+        availability: availability ? availability(date) : null,
+      };
+    });
+
+  const rows: ScheduleRow[] = [
+    ...staff.map((p) => {
+      const minutes = (listOf.get(p.id) ?? []).reduce((n, s) => n + s.paidMinutes, 0);
+      return {
+        employeeId: p.id,
+        name: p.name,
+        hours: { minutes, overtime: isOvertime(minutes, cfg.rules) },
+        cells: cellsOf(p.id, (date) => p.availability[dayOfWeek(date)]),
+      };
+    }),
+    { employeeId: null, name: "Open shifts", hours: null, cells: cellsOf(null, null) },
+  ];
+
+  const days = dates.map((date) => {
+    const today = onDate.get(date) ?? [];
+    const history = [7, 14, 21, 28].map((n) => sales.get(addDays(date, -n)) ?? 0);
+    const total = history.reduce((a, b) => a + b, 0);
+    const costCents = today.reduce((n, s) => n + s.costCents, 0);
+    const forecastCents = total === 0 ? null : Math.round(total / history.length);
+    return {
+      date,
+      minutes: today.reduce((n, s) => n + s.paidMinutes, 0),
+      costCents,
+      forecastCents,
+      laborPercent: laborPercent(costCents, forecastCents),
+    };
+  });
+
   return {
     weekStart,
     dates,
-    employees: staff.map((p) => ({
-      ...p,
-      weekMinutes: (listOf.get(p.id) ?? []).reduce((n, s) => n + s.paidMinutes, 0),
-    })),
-    shifts: list,
-    timeOff,
+    rows,
     drafts: list.filter((s) => !s.published).length,
-    days: dates.map((date) => {
-      const today = onDate.get(date) ?? [];
-      const history = [7, 14, 21, 28].map((n) => sales.get(addDays(date, -n)) ?? 0);
-      const total = history.reduce((a, b) => a + b, 0);
-      return {
-        date,
-        minutes: today.reduce((n, s) => n + s.paidMinutes, 0),
-        costCents: today.reduce((n, s) => n + s.costCents, 0),
-        forecastCents: total === 0 ? null : Math.round(total / history.length),
-      };
-    }),
+    days,
+    totals: { minutes: days.reduce((n, d) => n + d.minutes, 0), costCents: days.reduce((n, d) => n + d.costCents, 0) },
   };
 }
 

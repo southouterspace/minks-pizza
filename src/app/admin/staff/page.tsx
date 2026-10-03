@@ -3,16 +3,16 @@ import Link from "next/link";
 import { requireOperator } from "@/lib/auth";
 import { clockOutForEmployee } from "@/app/admin/staff/actions";
 import { formatCents } from "@/lib/money";
-import { decimalHours, FLAG_META, formatDuration, ROLE_LABEL } from "@/lib/timeclock";
+import { FLAG_META, formatDuration, formatHours, formatPercent, ROLE_LABEL } from "@/lib/timeclock";
 import { getStaffConfig } from "@/lib/staff/config";
 import { getOverview } from "@/lib/staff/overview";
-import { addDays, formatClock, localDateOf, weekStartOf } from "@/lib/zoned";
+import { formatClock } from "@/lib/zoned";
 import { AutoRefresh } from "@/components/admin/auto-refresh";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
-import { cn } from "@/lib/utils";
+import { cn, plural } from "@/lib/utils";
 
 export const dynamic = "force-dynamic";
 
@@ -23,7 +23,6 @@ export default async function StaffOverviewPage() {
   const cfg = await getStaffConfig();
   const tz = cfg.timezone;
   const data = await getOverview(cfg);
-  const lastWeek = addDays(weekStartOf(localDateOf(new Date(), tz), cfg.rules.weekStartsOn), -7);
   const flagTotal = data.attention.flags.reduce((n, f) => n + f.count, 0);
 
   return (
@@ -37,14 +36,14 @@ export default async function StaffOverviewPage() {
         <Stat label="On the clock" value={String(data.onClock.length)} />
         <Stat
           label="Labor today"
-          value={data.today.laborPercent === null ? "–" : `${data.today.laborPercent.toFixed(1)}%`}
+          value={formatPercent(data.today.laborPercent)}
           detail={`${formatCents(data.today.laborCents)} labor on ${formatCents(data.today.salesCents)} sales`}
           testId="labor-percent"
         />
         <Stat
           label="This week"
-          value={`${decimalHours(data.week.actualMinutes)} h`}
-          detail={`worked of ${decimalHours(data.week.scheduledMinutes)} h scheduled`}
+          value={formatHours(data.week.actualMinutes)}
+          detail={`worked of ${formatHours(data.week.scheduledMinutes)} scheduled`}
         />
       </div>
 
@@ -106,12 +105,12 @@ export default async function StaffOverviewPage() {
 
         <Section title="Overtime risk this week">
           {data.week.otRisk.length === 0 ? (
-            <Empty>Nobody is projected near {decimalHours(cfg.rules.otWeeklyMinutes)} h.</Empty>
+            <Empty>Nobody is projected near {formatHours(cfg.rules.otWeeklyMinutes)}.</Empty>
           ) : (
             <ul className="space-y-1 text-sm">
               {data.week.otRisk.map((r) => (
                 <li key={r.employeeId}>
-                  <span className="font-medium">{r.name}</span> · {decimalHours(r.projectedMinutes)} h projected
+                  <span className="font-medium">{r.name}</span> · {formatHours(r.projectedMinutes)} projected
                 </li>
               ))}
             </ul>
@@ -130,16 +129,15 @@ export default async function StaffOverviewPage() {
           </li>
           <li>
             <Link href="/admin/staff/time-off" className={cn("hover:underline", data.attention.pendingTimeOff > 0 && "font-medium text-warning")}>
-              {data.attention.pendingTimeOff} time-off {data.attention.pendingTimeOff === 1 ? "request" : "requests"} pending
+              {plural(data.attention.pendingTimeOff, "time-off request")} pending
             </Link>
           </li>
           <li>
             <Link
-              href={`/admin/staff/timesheets?week=${lastWeek}`}
+              href={`/admin/staff/timesheets?week=${data.attention.lastWeekStart}`}
               className={cn("hover:underline", data.attention.unapprovedLastWeek > 0 && "font-medium text-warning")}
             >
-              {data.attention.unapprovedLastWeek} unapproved {data.attention.unapprovedLastWeek === 1 ? "punch" : "punches"} from
-              last week
+              {plural(data.attention.unapprovedLastWeek, "unapproved punch", "unapproved punches")} from last week
             </Link>
           </li>
         </ul>

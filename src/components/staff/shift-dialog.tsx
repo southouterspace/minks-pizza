@@ -2,7 +2,7 @@
 
 import { useActionState, useState } from "react";
 import { deleteShift, saveShift, type StaffFormState } from "@/app/admin/staff/actions";
-import { JOB_ROLES, ROLE_LABEL, type JobRole } from "@/lib/timeclock";
+import { JOB_ROLES, ROLE_LABEL, type JobRole, type StaffOption } from "@/lib/timeclock";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -17,7 +17,7 @@ import { Field, FieldError, FieldLabel } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import { NativeSelect, NativeSelectOption } from "@/components/ui/native-select";
 
-export type ShiftDialogEmployee = { id: number; name: string; roles: JobRole[]; primary: JobRole | null };
+export type ShiftDialogEmployee = StaffOption;
 
 export type ShiftDraft = {
   id: number | null;

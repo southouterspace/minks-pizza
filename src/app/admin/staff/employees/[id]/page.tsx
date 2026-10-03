@@ -1,12 +1,10 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { eq } from "drizzle-orm";
-import { db, employees } from "@/db";
 import { requireOperator } from "@/lib/auth";
 import { removeEmployeePin, setEmployeeActive } from "@/app/admin/staff/actions";
 import { ConfirmButton } from "@/components/admin/confirm-button";
-import { availabilityFromStored } from "@/lib/timeclock";
+import { getEmployee } from "@/lib/staff/employees";
 import { EmployeeForm } from "@/components/staff/employee-form";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -27,7 +25,7 @@ export default async function EmployeePage({ params, searchParams }: PageProps<"
   const id = Number((await params).id);
   if (!Number.isInteger(id) || id <= 0) notFound();
   const notice = NOTICES[String((await searchParams).notice ?? "")];
-  const employee = await db.query.employees.findFirst({ where: eq(employees.id, id), with: { roles: true } });
+  const employee = await getEmployee(id);
   if (!employee) notFound();
 
   return (
@@ -48,22 +46,10 @@ export default async function EmployeePage({ params, searchParams }: PageProps<"
         </p>
       ) : null}
 
-      <EmployeeForm
-        employee={{
-          id: employee.id,
-          name: employee.name,
-          phone: employee.phone,
-          email: employee.email,
-          hiredOn: employee.hiredOn,
-          notes: employee.notes,
-          hasPin: employee.pinDigest !== null,
-          roles: employee.roles,
-          availability: availabilityFromStored(employee.availability),
-        }}
-      />
+      <EmployeeForm employee={employee} />
 
       <div className="mt-10 max-w-2xl space-y-4 border-t border-border pt-6">
-        {employee.pinDigest ? (
+        {employee.hasPin ? (
           <form action={removeEmployeePin} className="flex flex-wrap items-center justify-between gap-3">
             <input type="hidden" name="employeeId" value={employee.id} />
             <p className="text-sm text-muted-foreground">Remove their PIN to stop them using the clock.</p>

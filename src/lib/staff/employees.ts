@@ -1,10 +1,19 @@
 import "server-only";
 import { createHmac, randomInt } from "node:crypto";
-import { and, eq, gte, isNull, notExists, notInArray } from "drizzle-orm";
+import { and, asc, desc, eq, gte, isNull, lt, notExists, notInArray } from "drizzle-orm";
 import { db, employeeRoles, employees, shifts, timeEntries } from "@/db";
 import { isUniqueViolation } from "@/db/errors";
 import { nextId } from "@/db/ids";
-import type { EmployeeRole, StoredAvailability } from "@/lib/timeclock";
+import {
+  availabilityFromStored,
+  computeWeek,
+  type EmployeeRole,
+  type StoredAvailability,
+  type WeeklyAvailability,
+} from "@/lib/timeclock";
+import { weekBounds } from "@/lib/zoned";
+import { resolveWeek, type StaffConfig } from "@/lib/staff/config";
+import { ROLE_COLUMNS, toPayEntry } from "@/lib/staff/queries";
 
 export function pinDigest(pin: string): string {
   const secret = process.env.SESSION_SECRET;
@@ -105,4 +114,70 @@ export async function setEmployeeActive(id: number, active: boolean): Promise<"a
 
 export async function removeEmployeePin(id: number): Promise<void> {
   await db.update(employees).set({ pinDigest: null, updatedAt: new Date() }).where(eq(employees.id, id));
+}
+
+export type EmployeeListRow = {
+  id: number;
+  name: string;
+  isActive: boolean;
+  hasPin: boolean;
+  /** Primary role first. */
+  roles: EmployeeRole[];
+  /** Paid minutes this payroll week so far. */
+  weekMinutes: number;
+};
+
+/** Active employees first, then by name. */
+export async function listEmployees(cfg: StaffConfig, now = new Date()): Promise<EmployeeListRow[]> {
+  const { from, to } = weekBounds(resolveWeek(undefined, cfg, now), cfg.timezone);
+  const [rows, entries] = await Promise.all([
+    db.query.employees.findMany({
+      columns: { id: true, name: true, isActive: true, pinDigest: true },
+      with: { roles: { columns: ROLE_COLUMNS } },
+      orderBy: [desc(employees.isActive), asc(employees.name)],
+    }),
+    db.query.timeEntries.findMany({
+      where: and(gte(timeEntries.clockInAt, from), lt(timeEntries.clockInAt, to)),
+      with: { breaks: true },
+    }),
+  ]);
+  const entriesOf = Map.groupBy(entries, (e) => e.employeeId);
+  return rows.map((e) => ({
+    id: e.id,
+    name: e.name,
+    isActive: e.isActive,
+    hasPin: e.pinDigest !== null,
+    roles: e.roles.toSorted((a, b) => Number(b.isPrimary) - Number(a.isPrimary)),
+    weekMinutes: computeWeek((entriesOf.get(e.id) ?? []).map(toPayEntry), cfg.rules, cfg.timezone, now).totals.paidMinutes,
+  }));
+}
+
+export type EmployeeDetail = {
+  id: number;
+  name: string;
+  phone: string | null;
+  email: string | null;
+  hiredOn: string | null;
+  notes: string | null;
+  isActive: boolean;
+  hasPin: boolean;
+  roles: EmployeeRole[];
+  availability: WeeklyAvailability;
+};
+
+export async function getEmployee(id: number): Promise<EmployeeDetail | null> {
+  const e = await db.query.employees.findFirst({ where: eq(employees.id, id), with: { roles: { columns: ROLE_COLUMNS } } });
+  if (!e) return null;
+  return {
+    id: e.id,
+    name: e.name,
+    phone: e.phone,
+    email: e.email,
+    hiredOn: e.hiredOn,
+    notes: e.notes,
+    isActive: e.isActive,
+    hasPin: e.pinDigest !== null,
+    roles: e.roles,
+    availability: availabilityFromStored(e.availability),
+  };
 }

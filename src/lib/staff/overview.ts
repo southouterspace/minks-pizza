@@ -16,7 +16,7 @@ import {
   type EntryFlag,
   type JobRole,
 } from "@/lib/timeclock";
-import { addDays, dayBounds, localDateOf, weekBounds, weekStartOf } from "@/lib/zoned";
+import { addDays, dayBounds, localDateOf, weekBounds, weekStartOf, type LocalDate } from "@/lib/zoned";
 import type { StaffConfig } from "@/lib/staff/config";
 import { toPayEntry } from "@/lib/staff/queries";
 import { getTimesheetWeek } from "@/lib/staff/timesheets";
@@ -30,7 +30,12 @@ export type OverviewData = {
     actualMinutes: number;
     otRisk: { employeeId: number; name: string; projectedMinutes: number }[];
   };
-  attention: { flags: { flag: EntryFlag; count: number }[]; pendingTimeOff: number; unapprovedLastWeek: number };
+  attention: {
+    flags: { flag: EntryFlag; count: number }[];
+    pendingTimeOff: number;
+    unapprovedLastWeek: number;
+    lastWeekStart: LocalDate;
+  };
 };
 
 export async function getOverview(cfg: StaffConfig, now = new Date()): Promise<OverviewData> {
@@ -39,7 +44,8 @@ export async function getOverview(cfg: StaffConfig, now = new Date()): Promise<O
   const day = dayBounds(today, tz);
   const weekStart = weekStartOf(today, cfg.rules.weekStartsOn);
   const week = weekBounds(weekStart, tz);
-  const lastWeek = weekBounds(addDays(weekStart, -7), tz);
+  const lastWeekStart = addDays(weekStart, -7);
+  const lastWeek = weekBounds(lastWeekStart, tz);
 
   const [open, todayEntries, weekShifts, sales, sheet, [pending], [unapproved]] = await Promise.all([
     db.query.timeEntries.findMany({
@@ -133,6 +139,7 @@ export async function getOverview(cfg: StaffConfig, now = new Date()): Promise<O
       }),
       pendingTimeOff: pending?.n ?? 0,
       unapprovedLastWeek: unapproved?.n ?? 0,
+      lastWeekStart,
     },
   };
 }

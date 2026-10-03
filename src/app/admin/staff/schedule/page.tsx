@@ -3,33 +3,22 @@ import { Plus, TriangleAlert } from "lucide-react";
 import { requireOperator } from "@/lib/auth";
 import { copyLastWeek, publishSchedule } from "@/app/admin/staff/actions";
 import { formatCents } from "@/lib/money";
-import {
-  CONFLICT_LABEL,
-  decimalHours,
-  ROLE_LABEL,
-  ROLE_TONE,
-} from "@/lib/timeclock";
+import { CONFLICT_LABEL, formatHours, formatPercent, ROLE_LABEL, ROLE_TONE, type StaffOption } from "@/lib/timeclock";
 import { getStaffConfig, resolveWeek } from "@/lib/staff/config";
-import { getScheduleWeek, type ScheduleShift, type ScheduleWeek } from "@/lib/staff/schedule";
-import { dayOfWeek, formatDay, localDateOf, type LocalDate } from "@/lib/zoned";
-import { ShiftDialog, type ShiftDialogEmployee } from "@/components/staff/shift-dialog";
+import { getScheduleWeek, type ScheduleCell, type ScheduleShift } from "@/lib/staff/schedule";
+import { staffOptions } from "@/lib/staff/queries";
+import { formatDay, formatHhmm, localDateOf } from "@/lib/zoned";
+import { ShiftDialog } from "@/components/staff/shift-dialog";
 import { WeekNav } from "@/components/staff/week-nav";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
-import { cn } from "@/lib/utils";
+import { cn, plural } from "@/lib/utils";
 
 export const dynamic = "force-dynamic";
 
 export const metadata: Metadata = { title: "Schedule" };
 
-/** "16:30" → "4:30p" */
-function shortClock(hhmm: string): string {
-  const [h, m] = hhmm.split(":").map(Number);
-  const hour = h % 12 === 0 ? 12 : h % 12;
-  return `${hour}${m === 0 ? "" : `:${String(m).padStart(2, "0")}`}${h < 12 ? "a" : "p"}`;
-}
-
-const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? "" : "s"}`;
+const shortClock = (hhmm: string) => formatHhmm(hhmm, { compact: true });
 
 export default async function SchedulePage({ searchParams }: PageProps<"/admin/staff/schedule">) {
   await requireOperator();
@@ -37,18 +26,8 @@ export default async function SchedulePage({ searchParams }: PageProps<"/admin/s
   const cfg = await getStaffConfig();
   const thisWeek = resolveWeek(undefined, cfg);
   const weekStart = resolveWeek(params.week, cfg);
-  const week = await getScheduleWeek(weekStart, cfg);
+  const [week, dialogEmployees] = await Promise.all([getScheduleWeek(weekStart, cfg), staffOptions("active")]);
   const today = localDateOf(new Date(), cfg.timezone);
-
-  const dialogEmployees: ShiftDialogEmployee[] = week.employees.map((e) => ({
-    id: e.id,
-    name: e.name,
-    roles: e.roles.map((r) => r.role),
-    primary: e.roles.find((r) => r.isPrimary)?.role ?? null,
-  }));
-  const rows: { id: number | null; name: string }[] = [...week.employees, { id: null, name: "Open shifts" }];
-  const totalMinutes = week.days.reduce((n, d) => n + d.minutes, 0);
-  const totalCost = week.days.reduce((n, d) => n + d.costCents, 0);
   const notice =
     params.copied !== undefined
       ? `Copied ${plural(Number(params.copied), "shift")} from last week as drafts.`
@@ -100,40 +79,40 @@ export default async function SchedulePage({ searchParams }: PageProps<"/admin/s
             </tr>
           </thead>
           <tbody>
-            {rows.map((row) => {
-              const person = week.employees.find((e) => e.id === row.id);
-              const overtime = person !== undefined && person.weekMinutes > cfg.rules.otWeeklyMinutes;
-              return (
-                <tr key={row.id ?? "open"} className="border-b border-border align-top" data-testid="schedule-row">
-                  <th className="sticky left-0 z-10 bg-card px-3 py-2 text-left font-normal">
-                    <span className={cn("block font-medium", row.id === null && "text-muted-foreground")}>{row.name}</span>
-                    {person ? (
-                      <span className={cn("text-xs tabular-nums", overtime ? "font-medium text-destructive" : "text-muted-foreground")}>
-                        {decimalHours(person.weekMinutes)} h{overtime ? " · overtime" : ""}
-                      </span>
-                    ) : null}
-                  </th>
-                  {week.dates.map((date) => (
-                    <Cell key={date} week={week} date={date} employeeId={row.id} employees={dialogEmployees} />
-                  ))}
-                </tr>
-              );
-            })}
+            {week.rows.map((row) => (
+              <tr key={row.employeeId ?? "open"} className="border-b border-border align-top" data-testid="schedule-row">
+                <th className="sticky left-0 z-10 bg-card px-3 py-2 text-left font-normal">
+                  <span className={cn("block font-medium", row.employeeId === null && "text-muted-foreground")}>{row.name}</span>
+                  {row.hours ? (
+                    <span
+                      className={cn(
+                        "text-xs tabular-nums",
+                        row.hours.overtime ? "font-medium text-destructive" : "text-muted-foreground",
+                      )}
+                    >
+                      {formatHours(row.hours.minutes)}
+                      {row.hours.overtime ? " · overtime" : ""}
+                    </span>
+                  ) : null}
+                </th>
+                {row.cells.map((cell) => (
+                  <Cell key={cell.date} cell={cell} employeeId={row.employeeId} employees={dialogEmployees} />
+                ))}
+              </tr>
+            ))}
           </tbody>
           <tfoot className="text-xs">
-            <FooterRow label="Scheduled" total={`${decimalHours(totalMinutes)} h`}>
-              {week.days.map((d) => `${decimalHours(d.minutes)} h`)}
+            <FooterRow label="Scheduled" total={formatHours(week.totals.minutes)}>
+              {week.days.map((d) => formatHours(d.minutes))}
             </FooterRow>
-            <FooterRow label="Labor cost" total={formatCents(totalCost)}>
+            <FooterRow label="Labor cost" total={formatCents(week.totals.costCents)}>
               {week.days.map((d) => formatCents(d.costCents))}
             </FooterRow>
             <FooterRow label="Forecast sales">
               {week.days.map((d) => (d.forecastCents === null ? "No history" : formatCents(d.forecastCents)))}
             </FooterRow>
             <FooterRow label="Labor %">
-              {week.days.map((d) =>
-                d.forecastCents === null || d.forecastCents === 0 ? "–" : `${((d.costCents / d.forecastCents) * 100).toFixed(1)}%`,
-              )}
+              {week.days.map((d) => formatPercent(d.laborPercent))}
             </FooterRow>
           </tfoot>
         </table>
@@ -163,37 +142,30 @@ function FooterRow({ label, total, children }: { label: string; total?: string; 
 }
 
 function Cell({
-  week,
-  date,
+  cell: { date, shifts, timeOff, availability },
   employeeId,
   employees,
 }: {
-  week: ScheduleWeek;
-  date: LocalDate;
+  cell: ScheduleCell;
   employeeId: number | null;
-  employees: ShiftDialogEmployee[];
+  employees: StaffOption[];
 }) {
-  const shifts = week.shifts.filter((s) => s.employeeId === employeeId && s.date === date);
-  const off = employeeId === null ? [] : week.timeOff.filter((t) => t.employeeId === employeeId && t.startDate <= date && t.endDate >= date);
-  const approvedOff = off.find((t) => t.status === "approved");
-  const person = week.employees.find((e) => e.id === employeeId);
-  const availability = person ? person.availability[dayOfWeek(date)] : null;
   const cellId = `${employeeId ?? "open"}-${date}`;
 
   return (
     <td
       className={cn(
         "min-w-28 px-1.5 py-1.5",
-        approvedOff && "bg-[repeating-linear-gradient(135deg,var(--muted)_0_6px,transparent_6px_12px)]",
+        timeOff?.status === "approved" && "bg-[repeating-linear-gradient(135deg,var(--muted)_0_6px,transparent_6px_12px)]",
       )}
       data-testid={`schedule-cell-${cellId}`}
     >
       <div className="flex flex-col gap-1">
-        {approvedOff ? (
+        {timeOff?.status === "approved" ? (
           <span className="rounded bg-muted px-1.5 py-0.5 text-xs font-medium" data-testid="time-off-label">
-            Time off{approvedOff.reason ? `: ${approvedOff.reason}` : ""}
+            Time off{timeOff.reason ? `: ${timeOff.reason}` : ""}
           </span>
-        ) : off.length > 0 ? (
+        ) : timeOff?.status === "pending" ? (
           <span className="text-xs text-warning">Time off requested</span>
         ) : null}
         {availability?.kind === "none" ? <span className="text-xs text-muted-foreground">Unavailable</span> : null}
@@ -227,19 +199,10 @@ function Cell({
   );
 }
 
-function ShiftChip({ shift, employees }: { shift: ScheduleShift; employees: ShiftDialogEmployee[] }) {
+function ShiftChip({ shift, employees }: { shift: ScheduleShift; employees: StaffOption[] }) {
   return (
     <ShiftDialog
-      shift={{
-        id: shift.id,
-        employeeId: shift.employeeId,
-        role: shift.role,
-        date: shift.date,
-        start: shift.start,
-        end: shift.end,
-        unpaidBreakMinutes: shift.unpaidBreakMinutes,
-        notes: shift.notes,
-      }}
+      shift={shift}
       employees={employees}
       testId="shift-chip"
       triggerClassName={cn(

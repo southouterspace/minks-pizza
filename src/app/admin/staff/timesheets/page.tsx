@@ -1,22 +1,21 @@
 import type { Metadata } from "next";
 import { CheckCircle2, Download } from "lucide-react";
-import { asc } from "drizzle-orm";
-import { db, employees } from "@/db";
 import { requireOperator } from "@/lib/auth";
 import { approveTimesheet, deletePunch } from "@/app/admin/staff/actions";
-import { formatCents } from "@/lib/money";
-import { decimalHours, FLAG_META, formatDuration, ROLE_LABEL, type Severity } from "@/lib/timeclock";
+import { centsToDollars, formatCents } from "@/lib/money";
+import { decimalHours, FLAG_META, formatDuration, formatHours, ROLE_LABEL, type Severity, type StaffOption, type TimeAuditAction } from "@/lib/timeclock";
 import { getStaffConfig, resolveWeek } from "@/lib/staff/config";
-import { getTimesheetWeek, type TimesheetEntry } from "@/lib/staff/timesheets";
-import { formatClock, formatDay, hhmmOf, localDateOf, weekDates } from "@/lib/zoned";
+import { getTimesheetWeek, type TimesheetEntry, type TimesheetStatus } from "@/lib/staff/timesheets";
+import { staffOptions } from "@/lib/staff/queries";
+import { formatClock, formatDay, localDateOf, toLocalInput, weekDates } from "@/lib/zoned";
 import { ConfirmButton } from "@/components/admin/confirm-button";
-import { PunchDialog, type PunchEmployee } from "@/components/staff/punch-dialog";
+import { PunchDialog } from "@/components/staff/punch-dialog";
 import { WeekNav } from "@/components/staff/week-nav";
 import { Badge } from "@/components/ui/badge";
 import { Button, buttonVariants } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
-import { cn } from "@/lib/utils";
+import { cn, plural } from "@/lib/utils";
 
 export const dynamic = "force-dynamic";
 
@@ -28,13 +27,20 @@ const SEVERITY_TONE: Record<Severity, string> = {
   info: "border-border bg-muted text-muted-foreground",
 };
 
-const AUDIT_LABEL: Record<string, string> = {
+const AUDIT_LABEL: Record<TimeAuditAction, string> = {
   create: "Added",
   edit: "Edited",
   delete: "Deleted",
   approve: "Approved",
   unapprove: "Approval cleared",
   clock_out: "Clocked out by a manager",
+};
+
+const STATUS: Record<TimesheetStatus, { label: string; className: string }> = {
+  empty: { label: "No punches", className: "text-muted-foreground" },
+  approved: { label: "Approved", className: "font-medium text-success" },
+  open: { label: "On the clock", className: "text-muted-foreground" },
+  needs_approval: { label: "Needs approval", className: "text-warning" },
 };
 
 const GRID = "grid grid-cols-[minmax(9rem,1fr)_repeat(7,3.25rem)_repeat(3,3.25rem)_4.5rem_5.5rem_3rem_7.5rem] items-center gap-x-1";
@@ -46,18 +52,9 @@ export default async function TimesheetsPage({ searchParams }: PageProps<"/admin
   const tz = cfg.timezone;
   const thisWeek = resolveWeek(undefined, cfg);
   const weekStart = resolveWeek(params.week, cfg);
-  const [rows, people] = await Promise.all([
-    getTimesheetWeek(weekStart, cfg),
-    db.query.employees.findMany({
-      columns: { id: true, name: true },
-      with: { roles: { columns: { role: true } } },
-      orderBy: [asc(employees.name)],
-    }),
-  ]);
-  const punchEmployees: PunchEmployee[] = people.map((p) => ({ id: p.id, name: p.name, roles: p.roles.map((r) => r.role) }));
+  const [rows, punchEmployees] = await Promise.all([getTimesheetWeek(weekStart, cfg), staffOptions("all")]);
   const dates = weekDates(weekStart);
-  const local = (d: Date) => `${localDateOf(d, tz)}T${hhmmOf(d, tz)}`;
-  const approvable = rows.some((r) => !r.hasOpen && r.entries.some((e) => e.approvedAt === null));
+  const approvable = rows.some((r) => r.status === "needs_approval");
 
   return (
     <div data-wide>
@@ -95,7 +92,7 @@ export default async function TimesheetsPage({ searchParams }: PageProps<"/admin
       </div>
       {params.approved !== undefined ? (
         <p role="status" className="mt-3 text-sm font-medium text-success">
-          Approved {params.approved} {params.approved === "1" ? "punch" : "punches"}.
+          Approved {plural(Number(params.approved), "punch", "punches")}.
         </p>
       ) : null}
 
@@ -146,23 +143,16 @@ export default async function TimesheetsPage({ searchParams }: PageProps<"/admin
                     {row.flagCount}
                   </span>
                   <span className="flex justify-end" data-testid="timesheet-status">
-                    {row.entries.length === 0 ? (
-                      <span className="text-xs text-muted-foreground">No punches</span>
-                    ) : row.approved ? (
-                      <span className="flex items-center gap-1 text-xs font-medium text-success">
-                        <CheckCircle2 className="size-3.5" aria-hidden="true" /> Approved
-                      </span>
-                    ) : row.hasOpen ? (
-                      <span className="text-xs text-muted-foreground">On the clock</span>
-                    ) : (
-                      <span className="text-xs text-warning">Needs approval</span>
-                    )}
+                    <span className={cn("flex items-center gap-1 text-xs", STATUS[row.status].className)}>
+                      {row.status === "approved" ? <CheckCircle2 className="size-3.5" aria-hidden="true" /> : null}
+                      {STATUS[row.status].label}
+                    </span>
                   </span>
                 </summary>
 
                 <div className="space-y-3 bg-muted/30 px-3 py-3">
                   <div className="flex flex-wrap items-center gap-2">
-                    {!row.approved && !row.hasOpen && row.entries.length > 0 ? (
+                    {row.status === "needs_approval" ? (
                       <form action={approveTimesheet}>
                         <input type="hidden" name="week" value={weekStart} />
                         <input type="hidden" name="employeeId" value={row.employee.id} />
@@ -171,16 +161,16 @@ export default async function TimesheetsPage({ searchParams }: PageProps<"/admin
                         </Button>
                       </form>
                     ) : null}
-                    {row.hasOpen ? (
+                    {row.status === "open" ? (
                       <span className="text-xs text-muted-foreground">Open punches can&apos;t be approved until they close.</span>
                     ) : null}
                     <span className="ml-auto text-xs text-muted-foreground tabular-nums">
-                      {decimalHours(row.pay.totals.paidMinutes)} h paid · straight {formatCents(row.pay.straightCents)} + OT
+                      {formatHours(row.pay.totals.paidMinutes)} paid · straight {formatCents(row.pay.straightCents)} + OT
                       premium {formatCents(row.pay.premiumCents)}
                     </span>
                   </div>
                   {row.entries.map((e) => (
-                    <EntryCard key={e.id} entry={e} tz={tz} employees={punchEmployees} employeeId={row.employee.id} local={local} />
+                    <EntryCard key={e.id} entry={e} tz={tz} employees={punchEmployees} employeeId={row.employee.id} />
                   ))}
                 </div>
               </details>
@@ -201,14 +191,13 @@ function EntryCard({
   tz,
   employees,
   employeeId,
-  local,
 }: {
   entry: TimesheetEntry;
   tz: string;
-  employees: PunchEmployee[];
+  employees: StaffOption[];
   employeeId: number;
-  local: (d: Date) => string;
 }) {
+  const local = (d: Date) => toLocalInput(d, tz);
   return (
     <div className="rounded-lg border border-border bg-card p-3" data-testid="timesheet-entry">
       <div className="flex flex-wrap items-center gap-x-4 gap-y-1">
@@ -217,7 +206,7 @@ function EntryCard({
           {formatClock(e.clockInAt, tz)} to {e.clockOutAt ? formatClock(e.clockOutAt, tz) : "now"}
         </span>
         <span className="text-muted-foreground">
-          {ROLE_LABEL[e.role]} · ${(e.rateCents / 100).toFixed(2)}/h
+          {ROLE_LABEL[e.role]} · ${centsToDollars(e.rateCents)}/h
         </span>
         <span className="font-medium tabular-nums">{formatDuration(e.paidMinutes)} paid</span>
         {e.declaredTipsCents > 0 ? <span className="text-muted-foreground">{formatCents(e.declaredTipsCents)} tips</span> : null}
@@ -244,7 +233,7 @@ function EntryCard({
         <ul className="mt-2 space-y-0.5 border-l-2 border-border pl-2 text-xs text-muted-foreground" data-testid="audit-history">
           {e.audit.map((a) => (
             <li key={a.id}>
-              {formatDay(localDateOf(a.at, tz))} {formatClock(a.at, tz)} · {AUDIT_LABEL[a.action] ?? a.action}
+              {formatDay(localDateOf(a.at, tz))} {formatClock(a.at, tz)} · {AUDIT_LABEL[a.action]}
               {a.operatorName ? ` by ${a.operatorName}` : ""}
               {a.reason ? `: ${a.reason}` : ""}
             </li>
@@ -260,7 +249,7 @@ function EntryCard({
             clockIn: local(e.clockInAt),
             clockOut: e.clockOutAt ? local(e.clockOutAt) : "",
             breaks: e.breaks.map((b) => ({ start: local(b.startedAt), end: b.endedAt ? local(b.endedAt) : "", paid: b.paid })),
-            tipsDollars: (e.declaredTipsCents / 100).toFixed(2),
+            tipsDollars: centsToDollars(e.declaredTipsCents),
             note: e.note ?? "",
             approved: e.approvedAt !== null,
           }}

@@ -1,10 +1,11 @@
 import "server-only";
 import { and, asc, eq, gte, isNotNull, isNull, lt } from "drizzle-orm";
-import { db, shifts, timeBreaks, timeEntries, timeOffRequests } from "@/db";
+import { db, employees, shifts, timeBreaks, timeEntries, timeOffRequests } from "@/db";
 import {
   shiftLookupWindow,
   snapshotOf,
   type AuditSnapshot,
+  type StaffOption,
   type KioskShift,
   type LiveTimeOffStatus,
   type PayEntry,
@@ -93,4 +94,20 @@ export function publishedShiftsOf(employeeId: number, from: Date, to: Date) {
 export function publishedShiftsNear(employeeId: number, at: Date) {
   const { from, to } = shiftLookupWindow(at);
   return publishedShiftsOf(employeeId, from, to);
+}
+
+
+export async function staffOptions(which: "active" | "all"): Promise<StaffOption[]> {
+  const rows = await db.query.employees.findMany({
+    where: which === "active" ? eq(employees.isActive, true) : undefined,
+    columns: { id: true, name: true },
+    with: { roles: { columns: { role: true, isPrimary: true } } },
+    orderBy: [asc(employees.name)],
+  });
+  return rows.map((e) => ({
+    id: e.id,
+    name: e.name,
+    roles: e.roles.map((r) => r.role),
+    primary: e.roles.find((r) => r.isPrimary)?.role ?? null,
+  }));
 }

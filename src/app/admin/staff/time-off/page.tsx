@@ -1,11 +1,10 @@
 import type { Metadata } from "next";
-import { and, asc, desc, eq, gte, isNotNull, lt, ne } from "drizzle-orm";
-import { db, employees, shifts, timeOffRequests } from "@/db";
 import { requireOperator } from "@/lib/auth";
 import { decideTimeOffRequest } from "@/app/admin/staff/actions";
 import { ROLE_LABEL } from "@/lib/timeclock";
 import { getStaffConfig } from "@/lib/staff/config";
-import { addDays, formatClock, formatDay, localDateOf, zonedInstant, type LocalDate } from "@/lib/zoned";
+import { getTimeOffBoard } from "@/lib/staff/time-off";
+import { formatClock, formatDay, formatDayRange, localDateOf } from "@/lib/zoned";
 import { AddTimeOffForm } from "@/components/staff/add-time-off-form";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -16,64 +15,11 @@ export const dynamic = "force-dynamic";
 
 export const metadata: Metadata = { title: "Time off" };
 
-const range = (start: LocalDate, end: LocalDate) => (start === end ? formatDay(start) : `${formatDay(start)} to ${formatDay(end)}`);
-
 export default async function TimeOffPage() {
   await requireOperator();
-  const { timezone: tz } = await getStaffConfig();
-  const today = localDateOf(new Date(), tz);
-  const recentSince = zonedInstant(addDays(today, -30), "00:00", tz);
-
-  const request = {
-    id: timeOffRequests.id,
-    employeeId: timeOffRequests.employeeId,
-    name: employees.name,
-    startDate: timeOffRequests.startDate,
-    endDate: timeOffRequests.endDate,
-    reason: timeOffRequests.reason,
-    status: timeOffRequests.status,
-    source: timeOffRequests.source,
-    createdAt: timeOffRequests.createdAt,
-    decidedAt: timeOffRequests.decidedAt,
-  };
-  const [pending, upcoming, decided, people] = await Promise.all([
-    db
-      .select(request)
-      .from(timeOffRequests)
-      .innerJoin(employees, eq(employees.id, timeOffRequests.employeeId))
-      .where(eq(timeOffRequests.status, "pending"))
-      .orderBy(asc(timeOffRequests.startDate)),
-    db
-      .select(request)
-      .from(timeOffRequests)
-      .innerJoin(employees, eq(employees.id, timeOffRequests.employeeId))
-      .where(and(eq(timeOffRequests.status, "approved"), gte(timeOffRequests.endDate, today)))
-      .orderBy(asc(timeOffRequests.startDate)),
-    db
-      .select(request)
-      .from(timeOffRequests)
-      .innerJoin(employees, eq(employees.id, timeOffRequests.employeeId))
-      .where(and(ne(timeOffRequests.status, "pending"), isNotNull(timeOffRequests.decidedAt), gte(timeOffRequests.decidedAt, recentSince)))
-      .orderBy(desc(timeOffRequests.decidedAt))
-      .limit(20),
-    db.select({ id: employees.id, name: employees.name }).from(employees).where(eq(employees.isActive, true)).orderBy(asc(employees.name)),
-  ]);
-
-  const conflicts = await Promise.all(
-    pending.map((r) =>
-      db
-        .select({ id: shifts.id, role: shifts.role, startsAt: shifts.startsAt, endsAt: shifts.endsAt, publishedAt: shifts.publishedAt })
-        .from(shifts)
-        .where(
-          and(
-            eq(shifts.employeeId, r.employeeId),
-            lt(shifts.startsAt, zonedInstant(addDays(r.endDate, 1), "00:00", tz)),
-            gte(shifts.endsAt, zonedInstant(r.startDate, "00:00", tz)),
-          ),
-        )
-        .orderBy(asc(shifts.startsAt)),
-    ),
-  );
+  const cfg = await getStaffConfig();
+  const tz = cfg.timezone;
+  const { today, pending, upcoming, decided, employees: people } = await getTimeOffBoard(cfg);
 
   return (
     <div>
@@ -96,18 +42,18 @@ export default async function TimeOffPage() {
             >
               <div className="min-w-0 flex-1">
                 <p className="text-sm font-medium">
-                  {r.name} · {range(r.startDate, r.endDate)}
+                  {r.name} · {formatDayRange(r.startDate, r.endDate)}
                 </p>
                 <p className="text-sm text-muted-foreground">
                   {r.reason ?? "No reason given"} · requested {formatDay(localDateOf(r.createdAt, tz))}
                 </p>
-                {conflicts[i].length > 0 ? (
+                {r.conflicts.length > 0 ? (
                   <ul className="mt-1 text-sm text-warning">
-                    {conflicts[i].map((s) => (
+                    {r.conflicts.map((s) => (
                       <li key={s.id}>
                         Scheduled {formatDay(localDateOf(s.startsAt, tz))} {formatClock(s.startsAt, tz)} to{" "}
                         {formatClock(s.endsAt, tz)} as {ROLE_LABEL[s.role]}
-                        {s.publishedAt ? "" : " (draft)"}
+                        {s.published ? "" : " (draft)"}
                       </li>
                     ))}
                   </ul>
@@ -144,7 +90,7 @@ export default async function TimeOffPage() {
             <ul className="mt-2 space-y-1 text-sm" data-testid="time-off-upcoming">
               {upcoming.map((r) => (
                 <li key={r.id}>
-                  <span className="font-medium">{r.name}</span> · {range(r.startDate, r.endDate)}
+                  <span className="font-medium">{r.name}</span> · {formatDayRange(r.startDate, r.endDate)}
                   {r.reason ? <span className="text-muted-foreground"> · {r.reason}</span> : null}
                 </li>
               ))}
@@ -159,7 +105,7 @@ export default async function TimeOffPage() {
             <ul className="mt-2 space-y-1 text-sm">
               {decided.map((r) => (
                 <li key={r.id} className="flex flex-wrap items-center gap-2">
-                  <span className="font-medium">{r.name}</span> · {range(r.startDate, r.endDate)}
+                  <span className="font-medium">{r.name}</span> · {formatDayRange(r.startDate, r.endDate)}
                   <Badge variant={r.status === "approved" ? "secondary" : "outline"}>
                     {r.status === "approved" ? "Approved" : "Denied"}
                   </Badge>

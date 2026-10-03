@@ -841,6 +841,9 @@ export function snapshotOf(e: Omit<PayEntry, "id"> & { note: string | null }): A
   };
 }
 
+/** An employee as the shift and punch pickers list them. */
+export type StaffOption = { id: number; name: string; roles: JobRole[]; primary: JobRole | null };
+
 export type KioskShift = {
   id: number;
   role: JobRole;
