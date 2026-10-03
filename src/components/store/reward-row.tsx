@@ -25,7 +25,7 @@ export function ProgressBar({ fraction, label }: { fraction: number; label: stri
 export function RewardSummary({ reward, note }: { reward: PublicReward; note?: ReactNode }) {
   const detail = note ?? reward.description;
   return (
-    <div className="flex min-w-0 flex-1 items-center justify-between gap-4">
+    <div className="flex min-w-0 flex-1 items-center justify-between gap-4" data-testid={`reward-${reward.id}`}>
       <span className="min-w-0">
         <span className="block text-sm font-medium">{reward.name}</span>
         {detail ? <span className="block text-xs text-muted-foreground">{detail}</span> : null}

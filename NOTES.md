@@ -531,11 +531,23 @@ clock.
   `INSERT ... ON CONFLICT (idem_key) DO NOTHING` feeding an `UPDATE` of the
   cached balance. It rides inside `db.batch` with the order write that caused
   it, so the `points_balance >= 0` CHECK rejects an overspend atomically.
-- Program rules are pure in `src/lib/loyalty.ts` (`npm test`).
-- `scripts/loyalty-audit.ts` asserts balance = SUM(ledger) for every member.
-- `scripts/e2e-loyalty.ts` wipes loyalty data: run it only against a test
-  branch, with a dev server: `E2E_BASE_URL=http://localhost:3417 npx tsx
-  --env-file=.env.local scripts/e2e-loyalty.ts`.
+- Program rules are pure in `src/lib/loyalty.ts` (`npm test`), including
+  `applyReward()`, the checkout eligibility ladder.
+- Completion and cancel side effects hang off `ON_ENTER` in
+  `src/lib/order-writes.ts`: every status writer (admin board, KDS, e2e) uses
+  `transitionStatements`, so points post in the same batch as the logged move.
+  `refreshMember` only does what time alone makes due: expiry and birthday.
+- Idempotency keys only deduplicate. Ask the ledger by `kind` (restores,
+  referral sides) or `reverses_entry_id`, never by key prefix.
+- `npm run loyalty:audit` (`auditBalances()` in lib) checks balance =
+  SUM(ledger) and lifetime = SUM(positive lifetime-earning entries).
+- `npm run e2e:loyalty` runs independent `node:test` scenarios
+  (`scripts/e2e/loyalty.e2e.ts`) on the shared `scripts/e2e/harness.ts`
+  against a dev server (`E2E_BASE_URL=http://localhost:3417`). Each scenario
+  makes its own members on fresh phones; the suite owns the program settings
+  and rewards named "E2E …" and restores them, then runs the audit. It is
+  safe to re-run, but still writes orders: test branch only.
+  `E2E_SHOT_DIR=<dir>` adds desktop and 375px screenshots.
 - Sign-in codes go out by Twilio when `TWILIO_ACCOUNT_SID`,
   `TWILIO_AUTH_TOKEN` and `TWILIO_FROM_NUMBER` are set; in development the
   code shows on screen; in production without Twilio, sign-in is refused.

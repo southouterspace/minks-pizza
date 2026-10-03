@@ -9,7 +9,9 @@
     "lint": "eslint",
     "db:push": "drizzle-kit push",
     "db:seed": "tsx --env-file=.env.local src/db/seed.ts",
-    "test": "tsx --test \"src/**/*.test.ts\""
+    "test": "tsx --test \"src/**/*.test.ts\"",
+    "e2e:loyalty": "tsx --env-file=.env.local --test --test-concurrency=1 scripts/e2e/loyalty.e2e.ts",
+    "loyalty:audit": "tsx --env-file=.env.local scripts/loyalty-audit.ts"
   },
   "dependencies": {
     "@base-ui/react": "^1.7.0",

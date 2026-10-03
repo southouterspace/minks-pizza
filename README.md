@@ -250,8 +250,9 @@ Every balance change is one SQL statement that appends to `loyalty_ledger`
 and moves the cached balance together (`ledgerStatement` in
 `src/lib/loyalty-server.ts`). Each entry has a unique idempotency key, so
 replays do nothing, and a `CHECK (points_balance >= 0)` makes overspending
-fail the whole order transaction. `npx tsx --env-file=.env.local
-scripts/loyalty-audit.ts` confirms every balance equals its ledger sum.
+fail the whole order transaction. `npm run loyalty:audit` confirms every
+balance and lifetime total matches the ledger, and `npm run e2e:loyalty`
+runs the end-to-end scenarios against a dev server on a test database.
 
 #### Deploying the rewards schema
 
@@ -266,7 +267,7 @@ database that ran an earlier build of this branch has `referral` ledger rows
 and restores stored as `adjust`. Convert those by idempotency-key prefix
 (`referral:referrer:` to `referrer_bonus`, `referral:referee:` to
 `referee_bonus`, `restore:` to `restore`) before pushing, then recompute
-`lifetime_points` from the lifetime-earning kinds. `scripts/loyalty-audit.ts`
+`lifetime_points` from the lifetime-earning kinds. `npm run loyalty:audit`
 checks both the balance and the lifetime total afterwards.
 
 ### Staff: scheduling and time clock
