@@ -80,16 +80,16 @@ export const DEFAULT_TIMEZONE = "America/New_York";
 
 type NumericRules = Omit<StaffRules, "weekStartsOn">;
 
-const DEFAULT_NUMERIC_RULES: NumericRules = {
+const DEFAULT_NUMERIC_RULES = {
   otWeeklyMinutes: 2400,
   otDailyMinutes: null,
   dtDailyMinutes: null,
   breakRequiredAfterMinutes: 360,
   clockGraceMinutes: 7,
   earlyClockInMinutes: null,
-};
+} as const satisfies NumericRules;
 
-export const DEFAULT_STAFF_RULES: StaffRules = { weekStartsOn: 1, ...DEFAULT_NUMERIC_RULES };
+export const DEFAULT_STAFF_RULES = { weekStartsOn: 1, ...DEFAULT_NUMERIC_RULES } as const satisfies StaffRules;
 
 type NullableRuleKey = "otDailyMinutes" | "dtDailyMinutes" | "breakRequiredAfterMinutes" | "earlyClockInMinutes";
 type RequiredRuleKey = "otWeeklyMinutes" | "clockGraceMinutes";
@@ -136,7 +136,7 @@ function parseRule(field: StaffRuleField, raw: string): number | null {
 
 /** Reads every numeric rule from a settings form; `read` returns a field's raw text. */
 export function parseStaffRules(read: (name: string) => string): NumericRules {
-  const rules = { ...DEFAULT_NUMERIC_RULES };
+  const rules: NumericRules = { ...DEFAULT_NUMERIC_RULES };
   for (const field of STAFF_RULE_FIELDS) {
     const value = parseRule(field, read(field.name));
     if (field.nullable) rules[field.key] = value;

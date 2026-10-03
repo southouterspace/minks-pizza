@@ -15,7 +15,14 @@ import {
 } from "drizzle-orm/pg-core";
 import { relations, sql } from "drizzle-orm";
 import { KITCHEN_STATIONS } from "../lib/kds";
-import { JOB_ROLES, type AuditSnapshot, type StoredAvailability } from "../lib/timeclock";
+import {
+  DEFAULT_STAFF_RULES,
+  DEFAULT_TIMEZONE,
+  JOB_ROLES,
+  TIME_AUDIT_ACTIONS,
+  type AuditSnapshot,
+  type StoredAvailability,
+} from "../lib/timeclock";
 
 // ---------------------------------------------------------------------------
 // Enums
@@ -105,18 +112,18 @@ export const storeSettings = pgTable("store_settings", {
   /** Kitchen display: oven bake countdown for a pie (minutes). */
   kdsOvenMinutes: integer("kds_oven_minutes").notNull().default(7),
   /** IANA zone. Every staff day and payroll week is computed in it. */
-  timezone: text("timezone").notNull().default("America/New_York"),
+  timezone: text("timezone").notNull().default(DEFAULT_TIMEZONE),
   /** Payroll week start: 0 = Sunday … 6 = Saturday. */
-  weekStartsOn: integer("week_starts_on").notNull().default(1),
-  otWeeklyMinutes: integer("ot_weekly_minutes").notNull().default(2400),
+  weekStartsOn: integer("week_starts_on").notNull().default(DEFAULT_STAFF_RULES.weekStartsOn),
+  otWeeklyMinutes: integer("ot_weekly_minutes").notNull().default(DEFAULT_STAFF_RULES.otWeeklyMinutes),
   /** Daily overtime threshold (California: 480); null = off. */
   otDailyMinutes: integer("ot_daily_minutes"),
   /** Daily double-time threshold (California: 720); null = off. */
   dtDailyMinutes: integer("dt_daily_minutes"),
   /** Flags a punch with no unpaid break past this many paid minutes; never deducts. Null = off. */
-  breakRequiredAfterMinutes: integer("break_required_after_minutes").default(360),
+  breakRequiredAfterMinutes: integer("break_required_after_minutes").default(DEFAULT_STAFF_RULES.breakRequiredAfterMinutes),
   /** Late / early-out tolerance against the schedule. */
-  clockGraceMinutes: integer("clock_grace_minutes").notNull().default(7),
+  clockGraceMinutes: integer("clock_grace_minutes").notNull().default(DEFAULT_STAFF_RULES.clockGraceMinutes),
   /** The kiosk refuses a clock-in more than this many minutes before today's shift; null = off. */
   earlyClockInMinutes: integer("early_clock_in_minutes"),
   isPublished: boolean("is_published").notNull().default(false),
@@ -295,14 +302,7 @@ export const jobRoleEnum = pgEnum("job_role", JOB_ROLES);
 
 export const staffSourceEnum = pgEnum("staff_source", ["kiosk", "manager"]);
 
-export const timeAuditActionEnum = pgEnum("time_audit_action", [
-  "create",
-  "edit",
-  "delete",
-  "approve",
-  "unapprove",
-  "clock_out",
-]);
+export const timeAuditActionEnum = pgEnum("time_audit_action", TIME_AUDIT_ACTIONS);
 
 export const timeOffStatusEnum = pgEnum("time_off_status", ["pending", "approved", "denied"]);
 
@@ -439,7 +439,12 @@ export const timeOffRequests = pgTable(
     decidedAt: timestamp("decided_at", { withTimezone: true }),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   },
-  (t) => [check("time_off_end_after_start", sql`${t.endDate} >= ${t.startDate}`)],
+  (t) => [
+    check("time_off_end_after_start", sql`${t.endDate} >= ${t.startDate}`),
+    // One live request per person and date range: a retried kiosk request
+    // or a double tap lands on the existing row instead of a second one.
+    uniqueIndex("time_off_one_live").on(t.employeeId, t.startDate, t.endDate).where(sql`${t.status} <> 'denied'`),
+  ],
 );
 
 // ---------------------------------------------------------------------------
