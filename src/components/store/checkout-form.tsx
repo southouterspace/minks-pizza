@@ -134,7 +134,11 @@ export function CheckoutForm({ config }: { config: CheckoutConfig }) {
         lines: lines.map((l) => ({
           itemId: l.itemId,
           quantity: l.quantity,
-          modifierIds: l.modifiers.map((m) => m.id),
+          modifiers: l.modifiers.map((m) => ({
+            id: m.id,
+            placement: m.placement,
+            portion: m.portion,
+          })),
           notes: l.notes,
         })),
       });

@@ -8,12 +8,16 @@ import {
   useMemo,
   useState,
 } from "react";
+import type { Placement, Portion } from "@/lib/toppings";
 
 export type CartModifier = {
   id: number;
   groupName: string;
   modifierName: string;
   priceDeltaCents: number;
+  /** Toppings only; absent means whole and regular. */
+  placement?: Placement;
+  portion?: Portion;
 };
 
 export type CartLine = {

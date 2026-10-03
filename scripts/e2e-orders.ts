@@ -71,7 +71,7 @@ async function menu() {
   const pie = (quantity = 1) => ({
     itemId: item("Cheese Pizza"),
     quantity,
-    modifierIds: [pick("Size", 'Large 14"'), pick("Crust", "Thin Crust")],
+    modifiers: [pick("Size", 'Large 14"'), pick("Crust", "Thin Crust")].map((id) => ({ id })),
   });
   return { item, pie };
 }
@@ -108,7 +108,7 @@ async function main() {
     customerPhone: "(555) 246-8135",
     customerEmail: "ozzie@example.com",
     tipCents: 300,
-    lines: [pie(2), { itemId: item("Garlic Knots (6)"), quantity: 1, modifierIds: [], notes: "extra butter" }],
+    lines: [pie(2), { itemId: item("Garlic Knots (6)"), quantity: 1, modifiers: [], notes: "extra butter" }],
   });
   const b = await createOrder({
     orderType: "delivery",
