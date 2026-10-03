@@ -37,6 +37,7 @@ export function useServerSnapshot<T>(
   // if no write began or ended while it was on the wire.
   const version = useRef(0);
   const inFlight = useRef(0);
+  const queue = useRef<Promise<unknown>>(Promise.resolve());
   const onSnapshotRef = useRef(onSnapshot);
   useEffect(() => {
     onSnapshotRef.current = onSnapshot;
@@ -71,8 +72,12 @@ export function useServerSnapshot<T>(
       inFlight.current += 1;
       if (optimistic) setData(optimistic);
       let settled = false;
+      // Writes reach the server in order: a KDS handoff sent before its
+      // bump commits would be refused as stale.
+      const send = queue.current.then(write, write);
+      queue.current = send.catch(() => undefined);
       try {
-        const result = await write();
+        const result = await send;
         const next = snapshot?.(result) ?? null;
         if (next !== null && version.current === mine) {
           settled = true;
