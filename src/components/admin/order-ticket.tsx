@@ -1,4 +1,4 @@
-import { formatClock } from "@/lib/hours";
+import { formatClock } from "@/lib/zoned";
 import { formatCents } from "@/lib/money";
 import { PAYMENT_METHOD_LABEL } from "@/lib/order-workflow";
 import type { OrderDetail } from "@/lib/order-queries";

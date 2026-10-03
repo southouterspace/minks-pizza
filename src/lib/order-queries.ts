@@ -8,7 +8,9 @@ import {
   gte,
   ilike,
   inArray,
+  lt,
   lte,
+  ne,
   or,
   sql,
   type SQL,
@@ -16,6 +18,7 @@ import {
 import { z } from "zod";
 import { db, orderEvents, orderItems, orders, storeSettings } from "@/db";
 import { ACTIVE_STATUSES, isLate, ORDER_STATUSES } from "@/lib/order-workflow";
+import type { LocalDate } from "@/lib/zoned";
 
 export type OrderWithItems = typeof orders.$inferSelect & {
   items: (typeof orderItems.$inferSelect)[];
@@ -216,4 +219,15 @@ export async function getBoard(now: Date) {
     getDashboardStats(now, timezone),
   ]);
   return { active, stats, timezone };
+}
+
+/** Non-canceled order subtotals per store-local date, for [from, to). */
+export async function salesByDate(from: Date, to: Date, tz: string): Promise<Map<LocalDate, number>> {
+  const day = sql<string>`to_char(${orders.placedAt} at time zone ${tz}, 'YYYY-MM-DD')`;
+  const rows = await db
+    .select({ day, cents: sql<number>`sum(${orders.subtotalCents})::int` })
+    .from(orders)
+    .where(and(ne(orders.status, "canceled"), gte(orders.placedAt, from), lt(orders.placedAt, to)))
+    .groupBy(sql`1`);
+  return new Map(rows.map((r) => [r.day, r.cents]));
 }

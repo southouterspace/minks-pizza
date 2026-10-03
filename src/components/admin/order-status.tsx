@@ -1,5 +1,5 @@
 import type { orders } from "@/db";
-import { formatClock } from "@/lib/hours";
+import { formatClock } from "@/lib/zoned";
 import {
   minutesUntil,
   PAYMENT_METHOD_LABEL,

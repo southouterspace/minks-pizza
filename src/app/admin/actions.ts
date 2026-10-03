@@ -26,6 +26,15 @@ import {
 } from "@/lib/auth";
 import { STORE_TIMEZONES } from "@/lib/hours";
 import { KITCHEN_STATIONS, type KitchenStation } from "@/lib/kds";
+import { DEFAULT_STAFF_RULES, DEFAULT_TIMEZONE, parseStaffRules } from "@/lib/timeclock";
+import {
+  checkbox,
+  dollarsToCents,
+  idField,
+  intField,
+  textField,
+  textOrNull,
+} from "@/lib/form-data";
 import {
   CANCEL_REASONS,
   ORDER_STATUSES,
@@ -42,47 +51,6 @@ import {
 
 export type AuthFormState = { error?: string };
 
-// ---------------------------------------------------------------------------
-// FormData helpers
-// ---------------------------------------------------------------------------
-
-function textField(fd: FormData, name: string): string {
-  const v = fd.get(name);
-  return typeof v === "string" ? v.trim() : "";
-}
-
-function textOrNull(fd: FormData, name: string): string | null {
-  const v = textField(fd, name);
-  return v === "" ? null : v;
-}
-
-function checkbox(fd: FormData, name: string): boolean {
-  return fd.get(name) === "on";
-}
-
-/** Required positive integer id (from a hidden input). Throws when tampered. */
-function idField(fd: FormData, name: string): number {
-  const n = Number.parseInt(textField(fd, name), 10);
-  if (!Number.isInteger(n) || n <= 0) throw new Error(`Invalid ${name}`);
-  return n;
-}
-
-/** Non-negative integer with a fallback for blank/invalid input. */
-function intField(fd: FormData, name: string, fallback: number): number {
-  const n = Number.parseInt(textField(fd, name), 10);
-  if (Number.isNaN(n)) return fallback;
-  return Math.max(0, n);
-}
-
-/** Dollars string ("12.50") → integer cents. Blank = 0. */
-function dollarsToCents(fd: FormData, name: string): number {
-  const raw = textField(fd, name);
-  if (raw === "") return 0;
-  const n = Number.parseFloat(raw);
-  if (Number.isNaN(n) || n < 0) throw new Error(`Invalid ${name}`);
-  return Math.round(n * 100);
-}
-
 /** Kitchen-display routing for a category; blank or unknown → "kitchen". */
 function stationField(fd: FormData): KitchenStation {
   return z.enum(KITCHEN_STATIONS).catch("kitchen").parse(textField(fd, "station"));
@@ -90,7 +58,7 @@ function stationField(fd: FormData): KitchenStation {
 
 function timezoneField(fd: FormData): string {
   const zones = STORE_TIMEZONES.map((tz) => tz.value);
-  return z.enum(zones).catch("America/Chicago").parse(textField(fd, "timezone"));
+  return z.enum(zones).catch(DEFAULT_TIMEZONE).parse(textField(fd, "timezone"));
 }
 
 function directionField(fd: FormData): "up" | "down" {
@@ -830,6 +798,8 @@ export async function saveSettings(formData: FormData): Promise<void> {
     deliveryMinimumCents: dollarsToCents(formData, "deliveryMinimum"),
     taxRateBps: Math.round(taxPercent * 100),
     timezone: timezoneField(formData),
+    weekStartsOn: Math.min(6, intField(formData, "weekStartsOn", DEFAULT_STAFF_RULES.weekStartsOn)),
+    ...parseStaffRules((name) => textField(formData, name)),
     updatedAt: new Date(),
   };
 
@@ -840,6 +810,7 @@ export async function saveSettings(formData: FormData): Promise<void> {
 
   revalidatePath("/");
   revalidatePath("/admin/settings");
+  revalidatePath("/admin/staff", "layout");
   redirect("/admin/settings?saved=1");
 }
 
