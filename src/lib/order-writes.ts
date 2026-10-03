@@ -5,6 +5,7 @@ import { bpsOf, formatCents } from "@/lib/money";
 import { getSettings } from "@/lib/orders";
 import { discountedTotals } from "@/lib/promotion-engine";
 import {
+  canComp,
   canTransition,
   COOKING_STATUSES,
   PAYMENT_METHOD_LABEL,
@@ -212,9 +213,7 @@ async function changeDiscount(args: {
     getSettings(),
   ]);
   if (!order) return { ok: false, reason: "Order not found." };
-  if (order.paymentStatus !== "pending" || order.status === "canceled" || order.status === "completed") {
-    return { ok: false, reason: DISCOUNT_LOCKED };
-  }
+  if (!canComp(order)) return { ok: false, reason: DISCOUNT_LOCKED };
   const change = args.compute(order, order.discounts);
   if ("error" in change) return { ok: false, reason: change.error };
   const totals = discountedTotals({
@@ -226,6 +225,7 @@ async function changeDiscount(args: {
   });
   const { rows } = await loggedUpdate({
     orderId: args.orderId,
+    // canComp, in SQL, plus the discount total read above.
     where: sql`${orders.paymentStatus} = 'pending' and ${orders.status} not in ('canceled', 'completed') and ${orders.discountCents} = ${order.discountCents}`,
     ledger: change.ledger,
     set: sql`discount_cents = ${totals.discountCents}, tax_cents = ${totals.taxCents}, total_cents = ${totals.totalCents}`,

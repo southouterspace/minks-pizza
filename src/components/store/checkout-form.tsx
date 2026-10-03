@@ -40,19 +40,19 @@ export type CheckoutConfig = {
   deliveryPrepMinutes: number;
   deliveryFeeCents: number;
   deliveryMinimumCents: number;
-  taxRateBps: number;
 };
 
 const TIP_PRESETS = [0, 10, 15, 20];
 
 export function CheckoutForm({ config }: { config: CheckoutConfig }) {
   const router = useRouter();
-  const { lines, subtotalCents: cartSubtotalCents, promoCodes, clear, ready } = useCart();
+  const { lines, subtotalCents: cartSubtotalCents, promoCodes, removePromoCode, orderType: picked, setOrderType, clear, ready } =
+    useCart();
   const [pending, startTransition] = useTransition();
   const submittedRef = useRef(false);
 
-  const defaultType = config.pickupEnabled ? "pickup" : "delivery";
-  const [orderType, setOrderType] = useState<"pickup" | "delivery">(defaultType);
+  const enabled = { pickup: config.pickupEnabled, delivery: config.deliveryEnabled };
+  const orderType = enabled[picked] ? picked : config.pickupEnabled ? "pickup" : "delivery";
   const [tipPercent, setTipPercent] = useState<number | "custom">(15);
   const [customTip, setCustomTip] = useState("");
   const [error, setError] = useState<string | null>(null);
@@ -409,7 +409,7 @@ export function CheckoutForm({ config }: { config: CheckoutConfig }) {
 
             <div className="space-y-4">
               <PromoCodeField quote={quote} />
-              {quote ? <QuoteTotals quote={quote} tipCents={tipCents} /> : null}
+              {quote ? <QuoteTotals quote={quote} tipCents={tipCents} onRemoveCode={removePromoCode} /> : null}
             </div>
 
             {belowMinimum ? (

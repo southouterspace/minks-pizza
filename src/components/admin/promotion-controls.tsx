@@ -11,6 +11,7 @@ import {
   generateCodes,
   setPromotionActive,
 } from "@/app/admin/promotions/actions";
+import { displayCode } from "@/lib/promo-code";
 import { PROMOTION_STATUS_LABEL } from "@/lib/promotion-copy";
 import type { PromotionStatus } from "@/lib/promotion-engine";
 import { Badge } from "@/components/ui/badge";
@@ -126,7 +127,7 @@ export function CodesPanel({
             const r = await addSharedCode(promotionId, code);
             if (!r.error) setCode("");
             return r;
-          }, `Code ${code.trim().toUpperCase()} added`);
+          }, `Code ${displayCode(code)} added`);
         }}
       >
         <Field className="min-w-40 flex-1">

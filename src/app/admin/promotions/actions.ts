@@ -2,13 +2,12 @@
 
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
-import { and, eq, sql } from "drizzle-orm";
+import { and, eq, notExists, sql } from "drizzle-orm";
 import { z } from "zod";
-import { db, promotionCodes, promotions } from "@/db";
+import { db, orderDiscounts, promotionCodes, promotions } from "@/db";
 import { requireOperator } from "@/lib/auth";
 import { getSettings } from "@/lib/orders";
-import { everUsed } from "@/lib/promotion-admin";
-import { normalizeCode } from "@/lib/promo-code";
+import { displayCode, normalizeCode } from "@/lib/promo-code";
 import { promotionColumns, promotionInputSchema } from "@/lib/promotion-schema";
 
 export type PromotionFormState = { error?: string; field?: string };
@@ -44,7 +43,7 @@ export async function savePromotion(
 
   let savedId: number;
   if (id === null) {
-    const code = parsed.data.trigger === "code" ? (sharedCode?.trim().toUpperCase() ?? "") : "";
+    const code = parsed.data.trigger === "code" ? displayCode(sharedCode ?? "") : "";
     if (code) {
       const problem = codeProblem(code);
       if (problem) return { error: problem, field: "code" };
@@ -94,12 +93,19 @@ export async function archivePromotion(id: number, archived: boolean): Promise<v
   revalidatePromotions();
 }
 
-/** Only for a deal no order ever used; used ones are archived so reports keep them. */
+/**
+ * Only for a deal no order ever used, checked in the delete itself so an
+ * order placed meanwhile can't lose its link. Used ones are archived so
+ * reports keep them.
+ */
 export async function deletePromotion(id: number): Promise<PromotionFormState> {
   await requireOperator();
   const pid = promotionId.parse(id);
-  if (await everUsed(pid)) return { error: "Orders used this deal, so it can only be archived." };
-  await db.delete(promotions).where(eq(promotions.id, pid));
+  const deleted = await db
+    .delete(promotions)
+    .where(and(eq(promotions.id, pid), notExists(db.select().from(orderDiscounts).where(eq(orderDiscounts.promotionId, pid)))))
+    .returning({ id: promotions.id });
+  if (deleted.length === 0) return { error: "Orders used this deal, so it can only be archived." };
   revalidatePromotions();
   redirect("/admin/promotions");
 }
@@ -118,7 +124,7 @@ function codeProblem(code: string): string | null {
 
 export async function addSharedCode(id: number, code: string): Promise<PromotionFormState> {
   await requireOperator();
-  const display = code.trim().toUpperCase();
+  const display = displayCode(code);
   const problem = codeProblem(display);
   if (problem) return { error: problem };
   try {

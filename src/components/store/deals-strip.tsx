@@ -1,9 +1,8 @@
 "use client";
 
 import { Copy, Tag } from "lucide-react";
-import { toast } from "sonner";
 import type { AdvertisedDeal } from "@/lib/promotion-queries";
-import { useCart } from "@/components/cart-context";
+import { announceCodeAdded, useCart } from "@/components/cart-context";
 import { Button } from "@/components/ui/button";
 
 export function DealsStrip({ deals }: { deals: AdvertisedDeal[] }) {
@@ -33,7 +32,7 @@ export function DealsStrip({ deals }: { deals: AdvertisedDeal[] }) {
                   onClick={() => {
                     addPromoCode(d.code!);
                     navigator.clipboard?.writeText(d.code!).catch(() => {});
-                    toast.success(`Code ${d.code} added — applies at checkout`);
+                    announceCodeAdded(d.code!);
                   }}
                 >
                   {d.code}

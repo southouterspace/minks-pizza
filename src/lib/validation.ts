@@ -71,4 +71,29 @@ export const checkoutSchema = z
   });
 
 export type CheckoutInput = z.infer<typeof checkoutSchema>;
+
+const comp = {
+  reason: z
+    .string()
+    .trim()
+    .min(1, "Say why: the reason shows on the receipt.")
+    .transform((s) => s.slice(0, 120)),
+  value: z
+    .string()
+    .transform(Number)
+    .refine((n) => Number.isFinite(n) && n > 0, "Enter an amount above zero."),
+  promotionId: z.union([z.literal("").transform(() => null), z.string().transform(Number).pipe(z.number().int().positive())]),
+};
+
+/** An operator comp from the order page's form: dollars or a percent off the items. */
+export const compSchema = z
+  .discriminatedUnion("kind", [
+    z.object({ kind: z.literal("amount"), ...comp }),
+    z.object({ kind: z.literal("percent"), ...comp, value: comp.value.refine((n) => n <= 100, "Percent must be 1–100.") }),
+  ])
+  .transform((c) => ({
+    label: c.reason,
+    promotionId: c.promotionId,
+    amount: c.kind === "percent" ? { percentBps: Math.round(c.value * 100) } : { cents: Math.round(c.value * 100) },
+  }));
 export type CartLineInput = z.infer<typeof cartLineSchema>;

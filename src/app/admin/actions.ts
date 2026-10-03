@@ -41,6 +41,7 @@ import {
   type Actor,
   type OrderActionResult,
 } from "@/lib/order-writes";
+import { compSchema } from "@/lib/validation";
 
 export type AuthFormState = { error?: string };
 
@@ -350,22 +351,14 @@ export async function addOrderNoteAction(formData: FormData): Promise<OrderActio
 
 export async function applyDiscountAction(formData: FormData): Promise<OrderActionState> {
   const actor = await operatorActor();
-  const reason = textField(formData, "reason").slice(0, 120);
-  if (!reason) return { error: "Say why: the reason shows on the receipt." };
-  const value = Number.parseFloat(textField(formData, "value"));
-  const kind = textField(formData, "kind");
-  if (!Number.isFinite(value) || value <= 0) return { error: "Enter an amount above zero." };
-  if (kind === "percent" && value > 100) return { error: "Percent must be 1–100." };
-  const promotionId = z.coerce.number().int().positive().nullable().catch(null).parse(textOrNull(formData, "promotionId"));
-  return orderActionState(
-    await applyDiscount({
-      orderId: orderIdField(formData),
-      amount: kind === "percent" ? { percentBps: Math.round(value * 100) } : { cents: Math.round(value * 100) },
-      label: reason,
-      promotionId,
-      actor,
-    }),
-  );
+  const parsed = compSchema.safeParse({
+    kind: textField(formData, "kind"),
+    reason: textField(formData, "reason"),
+    value: textField(formData, "value"),
+    promotionId: textField(formData, "promotionId"),
+  });
+  if (!parsed.success) return { error: parsed.error.issues[0]?.message ?? "Check the discount." };
+  return orderActionState(await applyDiscount({ orderId: orderIdField(formData), ...parsed.data, actor }));
 }
 
 export async function removeDiscountAction(formData: FormData): Promise<OrderActionState> {

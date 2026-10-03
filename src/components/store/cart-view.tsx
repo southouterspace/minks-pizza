@@ -17,9 +17,8 @@ import { Separator } from "@/components/ui/separator";
 import { PromoCodeField, QuoteTotals, useCheckoutQuote } from "@/components/store/promo-summary";
 import { cn } from "@/lib/utils";
 
-/** `orderType` is the store's default; checkout re-quotes for the one the customer picks. */
-export function CartView({ orderType }: { orderType: "pickup" | "delivery" }) {
-  const { lines, subtotalCents, updateQuantity, removeLine, ready } = useCart();
+export function CartView() {
+  const { lines, subtotalCents, updateQuantity, removeLine, removePromoCode, orderType, ready } = useCart();
   const { quote, error } = useCheckoutQuote(orderType);
 
   if (!ready) {
@@ -124,7 +123,7 @@ export function CartView({ orderType }: { orderType: "pickup" | "delivery" }) {
       <div className="mt-6 space-y-4">
         <PromoCodeField quote={quote} />
         {quote ? (
-          <QuoteTotals quote={quote} totalLabel="Total before tip" />
+          <QuoteTotals quote={quote} totalLabel="Total before tip" onRemoveCode={removePromoCode} />
         ) : (
           <div className="flex items-center justify-between text-sm">
             <span className="text-muted-foreground">Subtotal</span>

@@ -6,6 +6,7 @@ import { addOrderNoteAction, recordPaymentAction } from "@/app/admin/actions";
 import { requireOperator } from "@/lib/auth";
 import { formatCents } from "@/lib/money";
 import {
+  canComp,
   canTransition,
   isCooking,
   isLate,
@@ -31,7 +32,8 @@ import {
   PromisedTime,
   StatusBadge,
 } from "@/components/admin/order-status";
-import { addressLine, PrintTicket, Totals } from "@/components/admin/order-ticket";
+import { addressLine, PrintTicket } from "@/components/admin/order-ticket";
+import { orderTotals, TotalsList } from "@/components/totals-list";
 import { OrderTimeline } from "@/components/admin/order-timeline";
 import { formatDateTime } from "@/components/admin/ui";
 import { Badge } from "@/components/ui/badge";
@@ -55,8 +57,7 @@ export default async function OrderDetailPage({ params }: PageProps<"/admin/orde
   const late = isLate(order.promisedAt, order.status, now);
   const address = addressLine(order);
   const open = NEXT_ACTION[order.status] || canTransition(order.status, "canceled");
-  const discountable =
-    order.paymentStatus === "pending" && order.status !== "canceled" && order.status !== "completed";
+  const discountable = canComp(order);
 
   return (
     <div className="print:m-0">
@@ -146,7 +147,7 @@ export default async function OrderDetailPage({ params }: PageProps<"/admin/orde
                   </p>
                 ) : null}
                 <Separator className="my-3" />
-                <Totals order={order} className="ml-auto max-w-56 space-y-1 text-sm" />
+                <TotalsList totals={orderTotals(order)} audience="staff" className="ml-auto max-w-56 space-y-1 text-sm" />
               </CardContent>
             </Card>
 

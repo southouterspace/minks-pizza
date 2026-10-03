@@ -228,7 +228,7 @@ async function main() {
   await shopper.waitForURL(/\/order\/[0-9a-f-]{36}$/);
   const firstId = shopper.url().split("/").pop()!;
   check("confirmation says what was saved", await shows(shopper, "you-saved", "You saved $7.19"));
-  check("confirmation lists the deal", await shows(shopper, "order-discount", "E2E 20% off $30+"));
+  check("confirmation lists the deal", await shows(shopper, "discount-line", "E2E 20% off $30+"));
   check("tracker: no sideways scroll at 375px", await noSideScroll(shopper));
   await shopper.screenshot({ path: `${SHOT_DIR}/confirmation-375.png`, fullPage: true });
 
@@ -341,7 +341,7 @@ async function main() {
   const compEvent = (await db.select().from(orderEvents).where(eq(orderEvents.orderId, secondId))).find((e) => e.type === "discount");
   check("comp logs a discount event by the operator", compEvent?.note === "−$3.00 · Late order" && compEvent.actor === NAME);
   check("timeline shows the comp", await shows(detail, "timeline", "Discount · −$3.00 · Late order"));
-  check("detail totals list both discounts", await shows(detail, "detail-discount", "Late order"));
+  check("detail totals list both discounts", await shows(detail, "discount-line", "Late order"));
   check("order detail: no sideways scroll at 375px", await noSideScroll(detail));
   await detail.screenshot({ path: `${SHOT_DIR}/admin-order-comp-375.png`, fullPage: true });
 

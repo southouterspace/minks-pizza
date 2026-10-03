@@ -108,6 +108,14 @@ export const ORDER_EVENT_TYPES = [
 ] as const;
 export type OrderEventType = (typeof ORDER_EVENT_TYPES)[number];
 
+/**
+ * Staff can add or remove a discount while payment is still pending and the
+ * order is open. order-writes.ts repeats this in SQL for its guard.
+ */
+export function canComp(order: { status: OrderStatus; paymentStatus: string }): boolean {
+  return order.paymentStatus === "pending" && order.status !== "canceled" && order.status !== "completed";
+}
+
 export function isLate(promisedAt: Date | null, status: OrderStatus, now: Date): boolean {
   return promisedAt !== null && isCooking(status) && now.getTime() > promisedAt.getTime();
 }

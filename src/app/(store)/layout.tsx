@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { CartProvider } from "@/components/cart-context";
+import { CartProvider, PromoLinkCapture } from "@/components/cart-context";
 import { StoreMark } from "@/components/store-mark";
 import { CartBadge } from "@/components/store/cart-badge";
 import { Separator } from "@/components/ui/separator";
@@ -10,6 +10,7 @@ export default async function StoreLayout({ children }: LayoutProps<"/">) {
 
   return (
     <CartProvider>
+      <PromoLinkCapture />
       <header className="sticky top-0 z-40 border-b border-border bg-background/80 backdrop-blur">
         <div className="mx-auto flex h-16 max-w-5xl items-center justify-between px-4 sm:px-6">
           <Link href="/" className="flex items-center gap-2.5">
