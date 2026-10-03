@@ -1,7 +1,8 @@
 import "server-only";
-import { and, asc, eq, gte, inArray, isNotNull, isNull, lt } from "drizzle-orm";
+import { and, asc, eq, gte, inArray, isNull, lt, sql } from "drizzle-orm";
 import { db, employees, timeBreaks, timeEntries, timeEntryAudit } from "@/db";
 import { isUniqueViolation } from "@/db/errors";
+import { nextId } from "@/db/ids";
 import {
   computeWeek,
   entryFlags,
@@ -121,21 +122,21 @@ export async function managerClockOut(entryId: number, operatorId: number, reaso
     clockOutAt: now,
     breaks: entry.breaks.map((b) => ({ startedAt: b.startedAt, endedAt: b.endedAt ?? now, paid: b.paid })),
   });
+  const at = now.toISOString();
+  // The audit row comes from the update's returning rows: if another tab
+  // closed the punch first, nothing changed and nothing is audited.
   await db.batch([
     db.update(timeBreaks).set({ endedAt: now }).where(and(eq(timeBreaks.timeEntryId, entryId), isNull(timeBreaks.endedAt))),
-    db
-      .update(timeEntries)
-      .set({ clockOutAt: now, updatedAt: now })
-      .where(and(eq(timeEntries.id, entryId), isNull(timeEntries.clockOutAt))),
-    db.insert(timeEntryAudit).values({
-      timeEntryId: entryId,
-      employeeId: entry.employeeId,
-      operatorId,
-      action: "clock_out",
-      reason,
-      before: snapshotOfRow(entry),
-      after,
-    }),
+    db.execute(sql`
+      with closed as (
+        update time_entries set clock_out_at = ${at}::timestamptz, updated_at = ${at}::timestamptz
+        where id = ${entryId} and clock_out_at is null
+        returning id, employee_id
+      )
+      insert into time_entry_audit (time_entry_id, employee_id, operator_id, action, reason, before, after)
+      select id, employee_id, ${operatorId}, 'clock_out', ${reason},
+        ${JSON.stringify(snapshotOfRow(entry))}::jsonb, ${JSON.stringify(after)}::jsonb
+      from closed`),
   ]);
 }
 
@@ -188,26 +189,31 @@ export async function saveManagerPunch(input: PunchInput, operatorId: number): P
 
   try {
     if (!before) {
-      const published = await publishedShiftsNear(input.employeeId, input.clockInAt);
-      const [created] = await db
-        .insert(timeEntries)
-        .values({
-          ...values,
+      const [published, id] = await Promise.all([
+        publishedShiftsNear(input.employeeId, input.clockInAt),
+        nextId("time_entries"),
+      ]);
+      await db.batch([
+        db
+          .insert(timeEntries)
+          .overridingSystemValue()
+          .values({
+            ...values,
+            id,
+            employeeId: input.employeeId,
+            shiftId: matchShift(input.clockInAt, published)?.id ?? null,
+            source: "manager",
+          }),
+        ...(input.breaks.length > 0 ? [db.insert(timeBreaks).values(breakRows(id))] : []),
+        db.insert(timeEntryAudit).values({
+          timeEntryId: id,
           employeeId: input.employeeId,
-          shiftId: matchShift(input.clockInAt, published)?.id ?? null,
-          source: "manager",
-        })
-        .returning({ id: timeEntries.id });
-      const audit = db.insert(timeEntryAudit).values({
-        timeEntryId: created.id,
-        employeeId: input.employeeId,
-        operatorId,
-        action: "create",
-        reason: input.reason,
-        after,
-      });
-      if (input.breaks.length > 0) await db.batch([db.insert(timeBreaks).values(breakRows(created.id)), audit]);
-      else await audit;
+          operatorId,
+          action: "create",
+          reason: input.reason,
+          after,
+        }),
+      ]);
       return {};
     }
 
@@ -277,15 +283,17 @@ export async function approveWeek(
   const blocked = new Set(rows.filter((r) => r.clockOutAt === null).map((r) => r.employeeId));
   const toApprove = rows.filter((r) => r.approvedAt === null && !blocked.has(r.employeeId));
   if (toApprove.length === 0) return 0;
-  const now = new Date();
-  await db.batch([
-    db
-      .update(timeEntries)
-      .set({ approvedAt: now, approvedBy: operatorId })
-      .where(and(inArray(timeEntries.id, toApprove.map((r) => r.id)), isNull(timeEntries.approvedAt), isNotNull(timeEntries.clockOutAt))),
-    db.insert(timeEntryAudit).values(
-      toApprove.map((r) => ({ timeEntryId: r.id, employeeId: r.employeeId, operatorId, action: "approve" as const })),
-    ),
-  ]);
-  return toApprove.length;
+  const at = new Date().toISOString();
+  // One audit row per punch the update actually approved, so a second tab
+  // approving at the same time can't log the same approval twice.
+  const { rows: approved } = await db.execute(sql`
+    with approved as (
+      update time_entries set approved_at = ${at}::timestamptz, approved_by = ${operatorId}
+      where ${inArray(timeEntries.id, toApprove.map((r) => r.id))} and approved_at is null and clock_out_at is not null
+      returning id, employee_id
+    )
+    insert into time_entry_audit (time_entry_id, employee_id, operator_id, action)
+    select id, employee_id, ${operatorId}, 'approve' from approved
+    returning id`);
+  return approved.length;
 }
