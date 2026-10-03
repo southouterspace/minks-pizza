@@ -5,7 +5,7 @@
  * that caused it. Not server-only: the order pipeline and scripts import it.
  */
 import { randomInt, randomUUID } from "node:crypto";
-import { and, asc, count, desc, eq, gte, inArray, isNull, sql, sum, type AnyColumn, type SQL } from "drizzle-orm";
+import { and, asc, count, desc, eq, gte, inArray, isNull, sql, type AnyColumn, type SQL } from "drizzle-orm";
 import {
   categories,
   db,
@@ -310,18 +310,13 @@ export function enrollStatements(orderId: string, phone: string, name: string) {
 }
 
 /** Points from `earn` entries in the trailing 365 days decide the tier. */
+export const qualifyingPointsOf = (memberId: AnyColumn | number) => sql<number>`(
+  select coalesce(sum(l.points), 0)::int from loyalty_ledger l
+  where l.member_id = ${memberId} and l.kind = 'earn' and l.created_at >= now() - interval '365 days')`;
+
 export async function qualifyingPoints(memberId: number): Promise<number> {
-  const [row] = await db
-    .select({ total: sum(loyaltyLedger.points) })
-    .from(loyaltyLedger)
-    .where(
-      and(
-        eq(loyaltyLedger.memberId, memberId),
-        eq(loyaltyLedger.kind, "earn"),
-        gte(loyaltyLedger.createdAt, sql`now() - interval '365 days'`),
-      ),
-    );
-  return Number(row?.total ?? 0);
+  const { rows } = await db.execute<{ points: number }>(sql`select ${qualifyingPointsOf(memberId)} as points`);
+  return rows[0].points;
 }
 
 export async function memberStatus(member: LoyaltyMember, settings: LoyaltySettings) {
@@ -619,78 +614,3 @@ export async function auditBalances(): Promise<{ members: number; mismatches: Ba
   return { members, mismatches };
 }
 
-// ---------------------------------------------------------------------------
-// Operator reporting
-// ---------------------------------------------------------------------------
-
-export async function programStats() {
-  const { rows } = await db.execute<{
-    members: string;
-    active_members: string;
-    outstanding: string | null;
-    redemptions: string;
-    discount_cents: string | null;
-    orders: string;
-    member_orders: string;
-  }>(sql`
-    select
-      (select count(*) from loyalty_members) as members,
-      (select count(distinct loyalty_member_id) from orders
-        where loyalty_member_id is not null and status <> 'canceled'
-          and placed_at > now() - interval '90 days') as active_members,
-      (select sum(points_balance) from loyalty_members) as outstanding,
-      count(*) filter (where loyalty_points_redeemed > 0) as redemptions,
-      sum(discount_cents) as discount_cents,
-      count(*) as orders,
-      count(*) filter (where loyalty_member_id is not null) as member_orders
-    from orders
-    where status <> 'canceled' and placed_at > now() - interval '30 days'
-  `);
-  const r = rows[0];
-  return {
-    members: Number(r.members),
-    activeMembers: Number(r.active_members),
-    pointsOutstanding: Number(r.outstanding ?? 0),
-    redemptions30d: Number(r.redemptions),
-    discountCents30d: Number(r.discount_cents ?? 0),
-    memberOrderShare30d: Number(r.orders) === 0 ? null : Number(r.member_orders) / Number(r.orders),
-  };
-}
-
-export async function searchMembers(query: string, limit = 50) {
-  const q = query.trim();
-  const digits = q.replace(/\D/g, "");
-  const filter =
-    q === ""
-      ? sql`true`
-      : digits.length >= 3 && digits.length === q.replace(/[\s()+.-]/g, "").length
-        ? sql`m.phone like ${`%${digits}%`}`
-        : sql`m.name ilike ${`%${q}%`}`;
-  const { rows } = await db.execute<{
-    id: number;
-    name: string | null;
-    phone: string;
-    points_balance: number;
-    lifetime_points: number;
-    last_activity_at: string;
-    qualifying: string;
-  }>(sql`
-    select m.id, m.name, m.phone, m.points_balance, m.lifetime_points, m.last_activity_at,
-      coalesce((select sum(l.points) from loyalty_ledger l
-                where l.member_id = m.id and l.kind = 'earn'
-                  and l.created_at > now() - interval '365 days'), 0) as qualifying
-    from loyalty_members m
-    where ${filter}
-    order by m.last_activity_at desc
-    limit ${limit}
-  `);
-  return rows.map((r) => ({
-    id: r.id,
-    name: r.name,
-    phone: r.phone,
-    pointsBalance: r.points_balance,
-    lifetimePoints: r.lifetime_points,
-    lastActivityAt: new Date(r.last_activity_at),
-    qualifyingPoints: Number(r.qualifying),
-  }));
-}

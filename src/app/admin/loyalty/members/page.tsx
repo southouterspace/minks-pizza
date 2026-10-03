@@ -1,7 +1,8 @@
 import Link from "next/link";
 import { requireOperator } from "@/lib/auth";
 import { formatPhone, tierFor } from "@/lib/loyalty";
-import { getLoyaltySettings, searchMembers } from "@/lib/loyalty-server";
+import { getLoyaltySettings } from "@/lib/loyalty-server";
+import { searchMembers } from "../queries";
 import { formatDateTime } from "@/components/admin/ui";
 import { getSettings } from "@/lib/orders";
 import { Button } from "@/components/ui/button";
