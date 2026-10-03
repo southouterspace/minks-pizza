@@ -1,9 +1,10 @@
 "use client";
 
-import { useActionState, useState } from "react";
+import { useState } from "react";
 import { Plus, X } from "lucide-react";
-import { savePunch, type StaffFormState } from "@/app/admin/staff/actions";
-import { ROLE_LABEL, type JobRole, type StaffOption } from "@/lib/timeclock";
+import { savePunch } from "@/app/admin/staff/actions";
+import type { JobRole, StaffOption } from "@/lib/timeclock";
+import { EmployeeRoleFields, useDialogAction } from "@/components/staff/dialog-parts";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -16,9 +17,6 @@ import {
 } from "@/components/ui/dialog";
 import { Field, FieldError, FieldLabel } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
-import { NativeSelect, NativeSelectOption } from "@/components/ui/native-select";
-
-export type PunchEmployee = StaffOption;
 
 /** Times are `datetime-local` strings on the store's wall clock. */
 export type PunchDraft = {
@@ -33,8 +31,6 @@ export type PunchDraft = {
   approved: boolean;
 };
 
-const INITIAL: StaffFormState = {};
-
 /** Edit a punch or add a missed one. Every save needs a reason; it lands in the audit log. */
 export function PunchDialog({
   punch,
@@ -43,19 +39,14 @@ export function PunchDialog({
   triggerVariant = "outline",
 }: {
   punch: PunchDraft;
-  employees: PunchEmployee[];
+  employees: StaffOption[];
   trigger: string;
   triggerVariant?: "outline" | "default";
 }) {
-  const [open, setOpen] = useState(false);
+  const { open, setOpen, state, formAction, pending } = useDialogAction(savePunch);
   const [employeeId, setEmployeeId] = useState(punch.employeeId === null ? String(employees[0]?.id ?? "") : String(punch.employeeId));
   // Stable keys so removing a middle break doesn't shift the inputs' defaults.
   const [breaks, setBreaks] = useState(() => punch.breaks.map((b, key) => ({ ...b, key })));
-  const [state, formAction, pending] = useActionState(async (prev: StaffFormState, fd: FormData) => {
-    const result = await savePunch(prev, fd);
-    if (!result.error) setOpen(false);
-    return result;
-  }, INITIAL);
   const roles = employees.find((e) => String(e.id) === employeeId)?.roles ?? [];
 
   return (
@@ -77,38 +68,15 @@ export function PunchDialog({
         <form action={formAction} className="grid gap-4" data-testid="punch-form">
           {punch.id !== null ? <input type="hidden" name="entryId" value={punch.id} /> : null}
           <input type="hidden" name="breakCount" value={breaks.length} />
-          <div className="grid grid-cols-2 gap-3">
-            {punch.id === null ? (
-              <Field>
-                <FieldLabel htmlFor="p-employee">Employee</FieldLabel>
-                <NativeSelect
-                  id="p-employee"
-                  name="employeeId"
-                  value={employeeId}
-                  onChange={(e) => setEmployeeId(e.target.value)}
-                  className="w-full"
-                >
-                  {employees.map((e) => (
-                    <NativeSelectOption key={e.id} value={e.id}>
-                      {e.name}
-                    </NativeSelectOption>
-                  ))}
-                </NativeSelect>
-              </Field>
-            ) : (
-              <input type="hidden" name="employeeId" value={employeeId} />
-            )}
-            <Field>
-              <FieldLabel htmlFor="p-role">Role</FieldLabel>
-              <NativeSelect id="p-role" name="role" key={employeeId} defaultValue={punch.role ?? roles[0]} className="w-full">
-                {roles.map((r) => (
-                  <NativeSelectOption key={r} value={r}>
-                    {ROLE_LABEL[r]}
-                  </NativeSelectOption>
-                ))}
-              </NativeSelect>
-            </Field>
-          </div>
+          <EmployeeRoleFields
+            idPrefix="p"
+            employees={employees}
+            employeeId={employeeId}
+            onEmployeeChange={setEmployeeId}
+            employeeLocked={punch.id !== null}
+            roles={roles}
+            defaultRole={punch.role ?? roles[0]}
+          />
           <div className="grid gap-3 sm:grid-cols-2">
             <Field>
               <FieldLabel htmlFor="p-in">Clock in</FieldLabel>

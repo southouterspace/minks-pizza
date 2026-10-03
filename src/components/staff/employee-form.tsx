@@ -3,7 +3,8 @@
 import { useActionState, useState } from "react";
 import Link from "next/link";
 import { saveEmployee, type StaffFormState } from "@/app/admin/staff/actions";
-import { JOB_ROLES, ROLE_LABEL, type JobRole, type WeeklyAvailability } from "@/lib/timeclock";
+import { JOB_ROLES, PIN_LENGTH, PIN_PATTERN, ROLE_LABEL, type JobRole, type WeeklyAvailability } from "@/lib/timeclock";
+import { centsToDollars } from "@/lib/money";
 import { DAY_NAMES, WEEKDAYS, type Weekday } from "@/lib/zoned";
 import { Button, buttonVariants } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -99,6 +100,7 @@ export function EmployeeForm({ employee }: { employee: EmployeeFormValues }) {
         <div className="divide-y divide-border rounded-lg border border-border">
           {JOB_ROLES.map((role) => {
             const on = roles.has(role);
+            const rate = rateOf(role);
             return (
               <div key={role} className="flex flex-wrap items-center gap-3 px-3 py-2" data-testid={`role-row-${role}`}>
                 <Field orientation="horizontal" className="w-36">
@@ -127,7 +129,7 @@ export function EmployeeForm({ employee }: { employee: EmployeeFormValues }) {
                     step="0.01"
                     disabled={!on}
                     required={on}
-                    defaultValue={rateOf(role) === undefined ? "" : (rateOf(role)! / 100).toFixed(2)}
+                    defaultValue={rate === undefined ? "" : centsToDollars(rate)}
                     className="w-24 tabular-nums"
                   />
                   <span className="text-sm text-muted-foreground">/ h</span>
@@ -202,8 +204,8 @@ export function EmployeeForm({ employee }: { employee: EmployeeFormValues }) {
               id="e-pin"
               name="pin"
               inputMode="numeric"
-              pattern="\d{4,6}"
-              maxLength={6}
+              pattern={PIN_PATTERN}
+              maxLength={PIN_LENGTH.max}
               autoComplete="off"
               placeholder={employee.hasPin ? "Leave blank to keep" : "4 to 6 digits"}
               className="tabular-nums"
