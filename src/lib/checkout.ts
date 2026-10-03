@@ -15,7 +15,7 @@ import {
   type Evaluation,
 } from "@/lib/promotion-engine";
 import { loadCandidates } from "@/lib/promotion-queries";
-import { redemptionGuard } from "@/lib/promotion-usage";
+import { redemptionCheck } from "@/lib/promotion-usage";
 import type { CheckoutInput, PreviewInput } from "@/lib/validation";
 
 export type CheckoutQuote = Evaluation & {
@@ -141,7 +141,7 @@ export async function createOrder(input: CheckoutInput) {
         totalCents,
         discounts: quote.applied,
       },
-      redemptionGuard(quote.applied, customerKey),
+      redemptionCheck(quote.applied, customerKey),
     );
     if (order) return order;
     // The guard failed: a deal's limit went to another order since the quote.

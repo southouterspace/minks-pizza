@@ -375,18 +375,27 @@ complaints are in `docs/promotions-research.md`.
   a deal paused mid-checkout), the order is refused with the new total
   rather than charged silently. Not in the spec; it is what makes "the
   preview can never disagree with what's charged" hold.
-- **Limits under races.** `insertOrder` batches `select … for update` on
-  the applied promotions in id order, then one data-modifying CTE that
+- **Limits under races.** `redemptionCheck` in `promotion-usage.ts` returns
+  `{ lock, guard }`: a `select … for update` on the applied promotions in id
+  order (an empty array when none apply), and the redemption guard.
+  `insertOrder` always batches the lock, then one data-modifying CTE that
   inserts the order, its lines, its placed event and its ledger rows only
-  `where` the redemption guard holds (the `order-writes.ts` pattern). The
-  guard has to run in a statement after the lock: under read committed each
-  statement takes a fresh snapshot, so it sees the order that won. No order
-  row back means the race was lost; `createOrder` re-quotes once and names
-  the deal that went ("PIZZA10 was just fully redeemed — your total is now
-  $12.97."). The race test fires two `placeOrder` calls at a limit-1 code:
-  one wins, one gets that message. (The first version aborted the batch by
-  casting a sentinel string to int and matched the error text; replaced in
-  review.)
+  `where` the guard holds. The guard has to run in a statement after the
+  lock: under read committed each statement takes a fresh snapshot, so it
+  sees the order that won. No order row back means the race was lost;
+  `createOrder` re-quotes once and names the deal that went ("PIZZA10 was
+  just fully redeemed — your total is now $12.97."). The race test fires two
+  `placeOrder` calls at a limit-1 code: one wins, one gets that message. A
+  round where the second quote lands after the first commit isn't a race
+  (that checkout places without the deal), so the test re-runs it. (The
+  first version aborted the batch by casting a sentinel string to int and
+  matched the error text; replaced in review.)
+- **Typed rows into the guarded insert.** Each table's rows are typed by
+  its `$inferInsert` and reach Postgres as JSON through
+  `jsonb_populate_recordset(null::<table>, …)`, so the table's own row type
+  does the casting. A second round of review replaced a hand-written column
+  list with a `::type` per value, which a new NOT NULL column would have
+  broken at runtime only.
 - **Refusals are data.** The evaluator returns a typed `Refusal`
   (`{ kind: "short", shortCents }`, `{ kind: "soldOut" }`, …);
   `promotion-copy.ts` owns every sentence, and the race message switches on

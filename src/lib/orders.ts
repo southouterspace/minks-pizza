@@ -1,4 +1,5 @@
-import { eq, inArray, sql, type SQL } from "drizzle-orm";
+import { eq, getTableColumns, inArray, sql, type Column, type SQL } from "drizzle-orm";
+import type { PgTable } from "drizzle-orm/pg-core";
 import {
   categories,
   db,
@@ -10,12 +11,12 @@ import {
   orderEvents,
   orderItems,
   orders,
-  promotions,
   storeSettings,
   type OrderItemModifier,
 } from "@/db";
 import type { KitchenStation } from "@/lib/kds";
 import type { AppliedDiscount } from "@/lib/promotion-engine";
+import type { RedemptionCheck } from "@/lib/promotion-usage";
 import type { CheckoutInput } from "@/lib/validation";
 
 export type PricedLine = {
@@ -179,81 +180,101 @@ export type NewOrder = {
 };
 
 /**
- * Inserts the order, its lines, its "placed" event and its redemptions as
- * one statement that writes nothing unless `guard` holds, after locking the
- * promotions it redeems. Returns null when the guard failed (a deal's limit
- * went to another order after the quote). Drizzle's builders can't express
- * a data-modifying CTE, hence the SQL template, as in order-writes.ts.
+ * `insert into t (cols) select cols from jsonb_populate_recordset(null::t, rows) where cond`.
+ * Postgres types each value by the table's own row type, so the rows need no
+ * casts and TypeScript checks them against the schema. Only the columns some
+ * row sets are written; the rest take their defaults or generated values.
  */
-export async function insertOrder(o: NewOrder, guard: SQL): Promise<typeof orders.$inferSelect | null> {
+function insertRowsWhere<T extends PgTable>(table: T, rows: T["$inferInsert"][], cond: SQL): SQL {
+  const columns: Record<string, Column> = getTableColumns(table);
+  const keys = Object.keys(columns).filter((k) => rows.some((r) => r[k as keyof typeof r] !== undefined));
+  const names = sql.join(keys.map((k) => sql.identifier(columns[k].name)), sql`, `);
+  const json = rows.map((r) => Object.fromEntries(keys.map((k) => [columns[k].name, r[k as keyof typeof r] ?? null])));
+  return sql`insert into ${table} (${names})
+    select ${names} from jsonb_populate_recordset(null::${table}, ${JSON.stringify(json)}::jsonb) where ${cond}`;
+}
+
+/**
+ * Inserts the order, its lines, its "placed" event and its redemptions as
+ * one statement that writes nothing unless the redemption guard holds, after
+ * the lock that lets the guard see any order that won a race.
+ * Returns null when the guard failed (a deal's limit went to another order
+ * after the quote). Drizzle's builders can't make an insert conditional on
+ * another table, hence the SQL template.
+ */
+export async function insertOrder(o: NewOrder, check: RedemptionCheck): Promise<typeof orders.$inferSelect | null> {
   const { input } = o;
-  const placedAt = new Date();
-  const at = placedAt.toISOString();
-  const promisedAt = new Date(placedAt.getTime() + o.prepMinutes * 60_000).toISOString();
-  const lines = o.lines.map((l) => ({
-    menu_item_id: l.itemId,
-    item_name: l.itemName,
-    quantity: l.quantity,
-    unit_price_cents: l.unitPriceCents,
-    line_total_cents: l.lineTotalCents,
-    modifiers: l.modifiers,
-    notes: l.notes || null,
-    station: l.station,
-  }));
-  const discounts = o.discounts.map((a) => ({
-    promotion_id: a.promotionId,
-    code_id: a.codeId,
-    label: a.label,
-    amount_cents: a.amountCents,
-    target: a.target,
-    customer_key: o.customerKey,
-  }));
-
   const orderId = crypto.randomUUID();
+  const placedAt = new Date();
+  const placed = sql`exists (select 1 from placed)`;
+  const children = [
+    insertRowsWhere(orderEvents, [{ orderId, type: "placed", toStatus: "new", actor: "Customer", createdAt: placedAt }], placed),
+    insertRowsWhere(
+      orderItems,
+      o.lines.map((l) => ({
+        orderId,
+        menuItemId: l.itemId,
+        itemName: l.itemName,
+        quantity: l.quantity,
+        unitPriceCents: l.unitPriceCents,
+        lineTotalCents: l.lineTotalCents,
+        modifiers: l.modifiers,
+        notes: l.notes || null,
+        station: l.station,
+      })),
+      placed,
+    ),
+    ...(o.discounts.length
+      ? [
+          insertRowsWhere(
+            orderDiscounts,
+            o.discounts.map((a) => ({
+              orderId,
+              promotionId: a.promotionId,
+              codeId: a.codeId,
+              label: a.label,
+              amountCents: a.amountCents,
+              target: a.target,
+              customerKey: o.customerKey,
+              source: "promotion" as const,
+            })),
+            placed,
+          ),
+        ]
+      : []),
+  ];
+  const order = insertRowsWhere(
+    orders,
+    [
+      {
+        id: orderId,
+        placedAt,
+        promisedAt: new Date(placedAt.getTime() + o.prepMinutes * 60_000),
+        orderType: input.orderType,
+        customerName: input.customerName,
+        customerPhone: input.customerPhone,
+        customerEmail: input.customerEmail || null,
+        addressLine1: input.addressLine1 || null,
+        addressLine2: input.addressLine2 || null,
+        city: input.city || null,
+        zip: input.zip || null,
+        orderNotes: input.orderNotes || null,
+        subtotalCents: o.subtotalCents,
+        discountCents: o.discountCents,
+        taxCents: o.taxCents,
+        deliveryFeeCents: o.deliveryFeeCents,
+        tipCents: input.tipCents,
+        totalCents: o.totalCents,
+      },
+    ],
+    check.guard,
+  );
   const place = db.execute(sql`
-    with placed as (
-      insert into ${orders} (id, placed_at, promised_at, order_type, customer_name, customer_phone, customer_email,
-        address_line1, address_line2, city, zip, order_notes, subtotal_cents, discount_cents, tax_cents,
-        delivery_fee_cents, tip_cents, total_cents, payment_status)
-      select ${orderId}::uuid, ${at}::timestamptz, ${promisedAt}::timestamptz, ${input.orderType}::order_type,
-        ${input.customerName}::text, ${input.customerPhone}::text, ${input.customerEmail || null}::text,
-        ${input.addressLine1 || null}::text, ${input.addressLine2 || null}::text, ${input.city || null}::text,
-        ${input.zip || null}::text, ${input.orderNotes || null}::text, ${o.subtotalCents}::integer,
-        ${o.discountCents}::integer, ${o.taxCents}::integer, ${o.deliveryFeeCents}::integer,
-        ${input.tipCents}::integer, ${o.totalCents}::integer, 'pending'
-      where ${guard}
-      returning id
-    ), placed_event as (
-      insert into ${orderEvents} (order_id, type, to_status, actor, created_at)
-      select id, 'placed', 'new', 'Customer', ${at}::timestamptz from placed
-    ), placed_lines as (
-      insert into ${orderItems} (order_id, menu_item_id, item_name, quantity, unit_price_cents, line_total_cents, modifiers, notes, station)
-      select placed.id, x.menu_item_id, x.item_name, x.quantity, x.unit_price_cents, x.line_total_cents, x.modifiers, x.notes, x.station
-      from placed, jsonb_to_recordset(${JSON.stringify(lines)}::jsonb) as x(menu_item_id integer, item_name text,
-        quantity integer, unit_price_cents integer, line_total_cents integer, modifiers jsonb, notes text, station kitchen_station)
-    ), placed_discounts as (
-      insert into ${orderDiscounts} (order_id, promotion_id, code_id, label, amount_cents, target, customer_key, source)
-      select placed.id, x.promotion_id, x.code_id, x.label, x.amount_cents, x.target, x.customer_key, 'promotion'
-      from placed, jsonb_to_recordset(${JSON.stringify(discounts)}::jsonb) as x(promotion_id integer, code_id integer,
-        label text, amount_cents integer, target discount_target, customer_key text)
-    )
+    with placed as (${order} returning id),
+    ${sql.join(children.map((c, i) => sql`${sql.identifier(`child${i}`)} as (${c})`), sql`, `)}
     select id from placed`);
-
   // Read back in the same transaction; no row means the guard failed.
   const read = db.select().from(orders).where(eq(orders.id, orderId));
-
-  const promotionIds = [...new Set(o.discounts.map((a) => a.promotionId))].sort((a, b) => a - b);
-  if (promotionIds.length === 0) {
-    const [, [order]] = await db.batch([place, read]);
-    return order ?? null;
-  }
-  // Locks in id order so two checkouts can't deadlock; one racing for the
-  // same promotion waits here until the first commits, then its guard
-  // (a later statement, so a fresh snapshot) counts the winner's order.
-  const [, , [order]] = await db.batch([
-    db.execute(sql`select id from ${promotions} where id in ${promotionIds} order by id for update`),
-    place,
-    read,
-  ]);
-  return order ?? null;
+  const [, , [row]] = await db.batch([db.execute(check.lock), place, read]);
+  return row ?? null;
 }

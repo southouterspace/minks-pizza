@@ -294,33 +294,44 @@ async function main() {
   const secondId = shopper.url().split("/").pop()!;
   check("the re-order carries the discount", (await ledger(secondId))[0]?.amountCents === 719);
 
-  // Two checkouts race for the last use.
-  const [race] = await db
-    .insert(promotions)
-    .values({ name: "E2E Race $2", trigger: "code", reward: { type: "order_amount", amountCents: 200 }, orderTypes: ["pickup", "delivery"], totalLimit: 1, advertised: false })
-    .returning();
-  await db.insert(promotionCodes).values({ promotionId: race.id, code: "E2ERACE", display: "E2E-RACE" });
-  const racer = (phone: string) =>
+  // Two checkouts race for the last use. When one quotes after the other has
+  // committed, it legitimately places without the deal and nothing raced;
+  // those rounds are checked for a single redemption and the race is re-run.
+  const racer = (code: string, phone: string) =>
     placeOrder({
       orderType: "pickup",
       customerName: "Racer",
       customerPhone: phone,
       tipCents: 0,
       lines: [{ itemId: knots.id, quantity: 1, modifierIds: [] }],
-      promoCodes: ["E2E-RACE"],
+      promoCodes: [code],
     });
-  const results = await Promise.all([racer("5550101001"), racer("5550101002")]);
+  const raceOrders: string[] = [];
+  let race: typeof promotions.$inferSelect | undefined;
+  let results: Awaited<ReturnType<typeof racer>>[] = [];
+  let round = 0;
+  while (round < 5) {
+    round++;
+    [race] = await db
+      .insert(promotions)
+      .values({ name: `E2E Race $2 #${round}`, trigger: "code", reward: { type: "order_amount", amountCents: 200 }, orderTypes: ["pickup", "delivery"], totalLimit: 1, advertised: false })
+      .returning();
+    await db.insert(promotionCodes).values({ promotionId: race.id, code: `E2ERACE${round}`, display: `E2E-RACE${round}` });
+    results = await Promise.all([racer(`E2E-RACE${round}`, "5550101001"), racer(`E2E-RACE${round}`, "5550101002")]);
+    raceOrders.push(...results.flatMap((r) => (r.ok ? [r.orderId] : [])));
+    check(
+      `race round ${round}: the ledger has one redemption`,
+      (await db.select().from(orderDiscounts).where(eq(orderDiscounts.promotionId, race.id))).length === 1,
+    );
+    if (!results.every((r) => r.ok)) break;
+  }
   const winners = results.filter((r) => r.ok);
   const loser = results.find((r) => !r.ok);
   check("exactly one racer gets the last use", winners.length === 1, JSON.stringify(results));
   check(
     "the other is told exactly what happened",
-    loser !== undefined && !loser.ok && loser.error === "E2E-RACE was just fully redeemed — your total is now $6.48.",
+    loser !== undefined && !loser.ok && loser.error === `E2E-RACE${round} was just fully redeemed — your total is now $6.48.`,
     loser && !loser.ok ? loser.error : "",
-  );
-  check(
-    "the ledger has one redemption",
-    (await db.select().from(orderDiscounts).where(eq(orderDiscounts.promotionId, race.id))).length === 1,
   );
 
   // Operator comp on the order detail page.
@@ -387,7 +398,7 @@ async function main() {
     await shows(detail, `promotion-${codeDeal.id}`, "Uses\n1"),
     await textOf(detail, `promotion-${codeDeal.id}`),
   );
-  check("race deal shows Used up", await shows(detail, `promotion-${race.id}`, "Used up"));
+  check("race deal shows Used up", await shows(detail, `promotion-${race!.id}`, "Used up"));
   check(
     "the comp deal counts one use and both discounts",
     (await shows(detail, `promotion-${compDeal.id}`, "Uses\n1 / 1")) && (await shows(detail, `promotion-${compDeal.id}`, "Discounted\n$2.00")),
@@ -442,7 +453,7 @@ async function main() {
   }
 
   await browser.close();
-  const raceOrders = [...winners, afterComp].flatMap((r) => (r.ok ? [r.orderId] : []));
+  if (afterComp.ok) raceOrders.push(afterComp.orderId);
   await db.delete(orders).where(inArray(orders.id, raceOrders));
   await db.delete(operators).where(eq(operators.email, EMAIL));
   console.log(`\n${passes} passed, ${failures} failed. Screenshots in ${SHOT_DIR}`);

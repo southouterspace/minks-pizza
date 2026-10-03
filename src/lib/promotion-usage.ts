@@ -37,14 +37,20 @@ export async function codeUsage(codeIds: number[]) {
   return new Map(rows.map((r) => [Number(r.code_id), Number(r.uses)]));
 }
 
+/** A redeeming insert runs `lock` as its own statement, then an insert conditional on `guard`. */
+export type RedemptionCheck = { lock: SQL; guard: SQL };
+
 /**
- * True while every applied deal is still live and under its total,
+ * `guard` holds while every applied deal is still live and under its total,
  * per-customer and per-code limits, and (for new-customer deals) the phone
- * has no kept order. The order insert is conditional on it; it must run in
- * a statement after the promotion rows are locked, so its snapshot includes
- * any order that just won the race.
+ * has no kept order. `lock` takes the applied promotion rows in id order (none
+ * when nothing applies), so two checkouts can't deadlock and one racing for
+ * the same promotion waits until the first commits. The guard must run in a later statement than the
+ * lock: under read committed that statement takes a fresh snapshot, which
+ * includes the winner's order.
  */
-export function redemptionGuard(applied: AppliedDiscount[], customerKey: string): SQL {
+export function redemptionCheck(applied: AppliedDiscount[], customerKey: string): RedemptionCheck {
+  const ids = [...new Set(applied.map((a) => a.promotionId))].sort((a, b) => a - b);
   const conditions = applied.flatMap(({ promotionId, codeId, limits }) => [
     sql`exists (select 1 from ${promotions} where id = ${promotionId} and is_active and archived_at is null)`,
     ...(limits.totalLimit !== null ? [sql`${usesOf(sql`d.promotion_id = ${promotionId}`)} < ${limits.totalLimit}`] : []),
@@ -54,5 +60,8 @@ export function redemptionGuard(applied: AppliedDiscount[], customerKey: string)
     ...(limits.codeMaxUses !== null ? [sql`${usesOf(sql`d.code_id = ${codeId}`)} < ${limits.codeMaxUses}`] : []),
     ...(limits.newCustomersOnly ? [sql`not exists (select 1 from ${orders} where status <> 'canceled' and customer_key = ${customerKey})`] : []),
   ]);
-  return conditions.length ? sql.join(conditions, sql` and `) : sql`true`;
+  return {
+    lock: sql`select id from ${promotions} where id = any(${sql.param(ids)}::int[]) order by id for update`,
+    guard: conditions.length ? sql.join(conditions, sql` and `) : sql`true`,
+  };
 }
