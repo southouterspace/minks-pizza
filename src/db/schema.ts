@@ -224,49 +224,55 @@ export type OrderItemModifier = {
   priceDeltaCents: number;
 };
 
-export const orders = pgTable("orders", {
-  id: uuid("id").primaryKey().defaultRandom(),
-  orderNumber: integer("order_number").notNull().generatedAlwaysAsIdentity({
-    startWith: 1001,
-  }),
-  status: orderStatusEnum("status").notNull().default("new"),
-  orderType: orderTypeEnum("order_type").notNull(),
-  customerName: text("customer_name").notNull(),
-  customerPhone: text("customer_phone").notNull(),
-  customerEmail: text("customer_email"),
-  addressLine1: text("address_line1"),
-  addressLine2: text("address_line2"),
-  city: text("city"),
-  zip: text("zip"),
-  orderNotes: text("order_notes"),
-  subtotalCents: integer("subtotal_cents").notNull(),
-  taxCents: integer("tax_cents").notNull(),
-  deliveryFeeCents: integer("delivery_fee_cents").notNull().default(0),
-  tipCents: integer("tip_cents").notNull().default(0),
-  /** Sum of this order's order_discounts rows; subtotalCents stays the gross item subtotal. */
-  discountCents: integer("discount_cents").notNull().default(0),
-  totalCents: integer("total_cents").notNull(),
-  paymentStatus: paymentStatusEnum("payment_status")
-    .notNull()
-    .default("pending"),
-  paymentMethod: paymentMethodEnum("payment_method"),
-  /**
-   * The ready time quoted to the customer: placedAt + prep minutes at
-   * checkout, pushed later by operators. Null on orders from before it existed.
-   */
-  promisedAt: timestamp("promised_at", { withTimezone: true }),
-  completedAt: timestamp("completed_at", { withTimezone: true }),
-  canceledAt: timestamp("canceled_at", { withTimezone: true }),
-  cancelReason: text("cancel_reason"),
-  placedAt: timestamp("placed_at", { withTimezone: true })
-    .notNull()
-    .defaultNow(),
-  /** Set when the kitchen bumps the order (status → ready); cleared on recall. */
-  readyAt: timestamp("ready_at", { withTimezone: true }),
-  updatedAt: timestamp("updated_at", { withTimezone: true })
-    .notNull()
-    .defaultNow(),
-});
+export const orders = pgTable(
+  "orders",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    orderNumber: integer("order_number").notNull().generatedAlwaysAsIdentity({
+      startWith: 1001,
+    }),
+    status: orderStatusEnum("status").notNull().default("new"),
+    orderType: orderTypeEnum("order_type").notNull(),
+    customerName: text("customer_name").notNull(),
+    customerPhone: text("customer_phone").notNull(),
+    /** The phone's last ten digits (customerKeyFromPhone): who promotion limits count against. */
+    customerKey: text("customer_key").notNull(),
+    customerEmail: text("customer_email"),
+    addressLine1: text("address_line1"),
+    addressLine2: text("address_line2"),
+    city: text("city"),
+    zip: text("zip"),
+    orderNotes: text("order_notes"),
+    subtotalCents: integer("subtotal_cents").notNull(),
+    taxCents: integer("tax_cents").notNull(),
+    deliveryFeeCents: integer("delivery_fee_cents").notNull().default(0),
+    tipCents: integer("tip_cents").notNull().default(0),
+    /** Sum of this order's order_discounts rows; subtotalCents stays the gross item subtotal. */
+    discountCents: integer("discount_cents").notNull().default(0),
+    totalCents: integer("total_cents").notNull(),
+    paymentStatus: paymentStatusEnum("payment_status")
+      .notNull()
+      .default("pending"),
+    paymentMethod: paymentMethodEnum("payment_method"),
+    /**
+     * The ready time quoted to the customer: placedAt + prep minutes at
+     * checkout, pushed later by operators. Null on orders from before it existed.
+     */
+    promisedAt: timestamp("promised_at", { withTimezone: true }),
+    completedAt: timestamp("completed_at", { withTimezone: true }),
+    canceledAt: timestamp("canceled_at", { withTimezone: true }),
+    cancelReason: text("cancel_reason"),
+    placedAt: timestamp("placed_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+    /** Set when the kitchen bumps the order (status → ready); cleared on recall. */
+    readyAt: timestamp("ready_at", { withTimezone: true }),
+    updatedAt: timestamp("updated_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (t) => [index("orders_customer_key_idx").on(t.customerKey)],
+);
 
 export const orderItems = pgTable("order_items", {
   id: integer("id").primaryKey().generatedAlwaysAsIdentity(),

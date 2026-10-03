@@ -1,7 +1,8 @@
 "use server";
 
 import { checkoutSchema, previewSchema } from "@/lib/validation";
-import { createOrder, OrderError, quoteCheckout } from "@/lib/orders";
+import { createOrder, quoteCheckout } from "@/lib/checkout";
+import { OrderError } from "@/lib/orders";
 import { formatLastDay, nudgeCopy, refusalCopy } from "@/lib/promotion-copy";
 import type { DiscountTarget } from "@/lib/promotion-schema";
 

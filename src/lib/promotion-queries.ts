@@ -4,7 +4,7 @@ import { normalizeCode } from "@/lib/promo-code";
 import { describeOffer, formatLastDay, type TargetNames } from "@/lib/promotion-copy";
 import type { PromotionCandidate, PromotionTerms } from "@/lib/promotion-engine";
 import { promotionRewardSchema } from "@/lib/promotion-schema";
-import { codeUsage, phoneKeySql, promotionUsage } from "@/lib/promotion-usage";
+import { codeUsage, promotionUsage } from "@/lib/promotion-usage";
 
 export type PromotionRow = typeof promotions.$inferSelect;
 
@@ -13,14 +13,12 @@ export function toTerms(row: PromotionRow): PromotionTerms {
   return { ...row, reward: promotionRewardSchema.parse(row.reward) };
 }
 
-const kept = ne(orders.status, "canceled");
-
 async function hasOrdered(customerKey: string | null): Promise<boolean> {
   if (!customerKey) return false;
   const [row] = await db
     .select({ id: orders.id })
     .from(orders)
-    .where(and(kept, sql`${phoneKeySql} = ${customerKey}`))
+    .where(and(ne(orders.status, "canceled"), eq(orders.customerKey, customerKey)))
     .limit(1);
   return Boolean(row);
 }

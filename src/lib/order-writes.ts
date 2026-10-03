@@ -1,9 +1,9 @@
 import "server-only";
 import { and, eq, inArray, sql, type SQL } from "drizzle-orm";
 import { db, orderDiscounts, orderEvents, orders } from "@/db";
-import { formatCents } from "@/lib/money";
+import { bpsOf, formatCents } from "@/lib/money";
 import { getSettings } from "@/lib/orders";
-import { customerKeyFromPhone, discountedTotals } from "@/lib/promotion-engine";
+import { discountedTotals } from "@/lib/promotion-engine";
 import {
   canTransition,
   COOKING_STATUSES,
@@ -254,12 +254,12 @@ export async function applyDiscount(args: {
       const cents =
         "cents" in args.amount
           ? Math.min(args.amount.cents, itemsLeft)
-          : Math.min(itemsLeft, Math.floor((itemsLeft * args.amount.percentBps + 5_000) / 10_000));
+          : Math.min(itemsLeft, bpsOf(itemsLeft, args.amount.percentBps));
       if (cents <= 0) return { error: "Nothing left on the items to discount." };
       return {
         ledger: sql`
           insert into ${orderDiscounts} (order_id, promotion_id, label, amount_cents, target, customer_key, source, operator_id)
-          select id, ${args.promotionId}::integer, ${args.label}, ${cents}::integer, 'items', ${customerKeyFromPhone(order.customerPhone) ?? ""},
+          select id, ${args.promotionId}::integer, ${args.label}, ${cents}::integer, 'items', ${order.customerKey},
             'comp', ${args.actor.operatorId}::integer
           from prev
           returning id`,

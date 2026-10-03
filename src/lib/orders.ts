@@ -1,4 +1,4 @@
-import { eq, inArray, sql } from "drizzle-orm";
+import { eq, inArray, sql, type SQL } from "drizzle-orm";
 import {
   categories,
   db,
@@ -15,19 +15,7 @@ import {
   type OrderItemModifier,
 } from "@/db";
 import type { KitchenStation } from "@/lib/kds";
-import { formatCents, taxFromBps } from "@/lib/money";
-import { loadCandidates } from "@/lib/promotion-queries";
-import { redemptionGuard } from "@/lib/promotion-usage";
-import { lostDealCopy, refusalCopy } from "@/lib/promotion-copy";
-import { normalizeCode } from "@/lib/promo-code";
-import type { TargetNames } from "@/lib/promotion-copy";
-import {
-  customerKeyFromPhone,
-  discountedTotals,
-  evaluatePromotions,
-  type AppliedDiscount,
-  type Evaluation,
-} from "@/lib/promotion-engine";
+import type { AppliedDiscount } from "@/lib/promotion-engine";
 import type { CheckoutInput } from "@/lib/validation";
 
 export type PricedLine = {
@@ -47,14 +35,14 @@ export type PricedLine = {
 export type PricedCart = {
   lines: PricedLine[];
   subtotalCents: number;
-  taxCents: number;
   deliveryFeeCents: number;
-  totalCents: number; // before tip
 };
 
 export class OrderError extends Error {}
 
-export async function getSettings() {
+export type StoreSettings = typeof storeSettings.$inferSelect;
+
+export async function getSettings(): Promise<StoreSettings> {
   const [settings] = await db
     .select()
     .from(storeSettings)
@@ -71,9 +59,8 @@ export async function getSettings() {
 export async function priceCart(
   lines: CheckoutInput["lines"],
   orderType: "pickup" | "delivery",
+  settings: StoreSettings,
 ): Promise<PricedCart> {
-  const settings = await getSettings();
-
   const itemIds = [...new Set(lines.map((l) => l.itemId))];
   const items = await db
     .select({ item: menuItems, station: categories.station })
@@ -172,167 +159,38 @@ export async function priceCart(
   const subtotalCents = priced.reduce((sum, l) => sum + l.lineTotalCents, 0);
   const deliveryFeeCents =
     orderType === "delivery" ? settings.deliveryFeeCents : 0;
-  const taxCents = taxFromBps(subtotalCents, settings.taxRateBps);
 
-  return {
-    lines: priced,
-    subtotalCents,
-    taxCents,
-    deliveryFeeCents,
-    totalCents: subtotalCents + taxCents + deliveryFeeCents,
-  };
+  return { lines: priced, subtotalCents, deliveryFeeCents };
 }
 
-export type CheckoutQuote = Evaluation & {
+/** Everything an order row and its children are written from. */
+export type NewOrder = {
+  input: CheckoutInput;
+  customerKey: string;
+  prepMinutes: number;
   lines: PricedLine[];
   subtotalCents: number;
-  deliveryFeeCents: number;
+  discountCents: number;
   taxCents: number;
-  /** Everything but the tip, which the customer picks. */
-  totalBeforeTipCents: number;
-  timezone: string;
-  /** For the words of a refusal. */
-  names: TargetNames;
-  customerKey: string | null;
+  deliveryFeeCents: number;
+  /** Including the tip. */
+  totalCents: number;
+  discounts: AppliedDiscount[];
 };
 
 /**
- * The one pricing path: the live preview in cart and checkout and the order
- * insert both come through here, so what the customer sees is what is charged.
- */
-export async function quoteCheckout(
-  input: {
-    lines: CheckoutInput["lines"];
-    orderType: "pickup" | "delivery";
-    customerPhone?: string;
-    promoCodes?: string[];
-  },
-  now = new Date(),
-): Promise<CheckoutQuote> {
-  const customerKey = customerKeyFromPhone(input.customerPhone);
-  const [settings, cart, loaded] = await Promise.all([
-    getSettings(),
-    priceCart(input.lines, input.orderType),
-    loadCandidates(input.promoCodes ?? [], customerKey),
-  ]);
-  const evaluation = evaluatePromotions({
-    lines: cart.lines,
-    orderType: input.orderType,
-    subtotalCents: cart.subtotalCents,
-    deliveryFeeCents: cart.deliveryFeeCents,
-    now,
-    timezone: settings.timezone,
-    customerKey,
-    customerHasOrdered: loaded.customerHasOrdered,
-    enteredCodes: loaded.enteredCodes,
-    candidates: loaded.candidates,
-  });
-  const totals = discountedTotals({
-    subtotalCents: cart.subtotalCents,
-    deliveryFeeCents: cart.deliveryFeeCents,
-    tipCents: 0,
-    taxRateBps: settings.taxRateBps,
-    discounts: evaluation.applied,
-  });
-  return {
-    ...evaluation,
-    lines: cart.lines,
-    subtotalCents: cart.subtotalCents,
-    deliveryFeeCents: cart.deliveryFeeCents,
-    taxCents: totals.taxCents,
-    totalBeforeTipCents: totals.totalCents,
-    timezone: settings.timezone,
-    names: loaded.names,
-    customerKey,
-  };
-}
-
-function lostDealMessage(lost: AppliedDiscount, fresh: CheckoutQuote): string {
-  const code = lost.code && normalizeCode(lost.code);
-  return lostDealCopy(lost, fresh.rejected.find((r) => r.code === code)?.refusal);
-}
-
-/**
- * Creates an order (payment_status = 'pending').
- *
- * STRIPE SEAM: when payments land, create a PaymentIntent for
- * `totalCents` here (or in a wrapping action), store its id on the order,
- * and flip payment_status to 'paid' from the Stripe webhook. Everything
- * upstream (validation, pricing) and downstream (confirmation page,
- * admin inbox) already works off the persisted order.
- */
-export async function createOrder(input: CheckoutInput) {
-  const settings = await getSettings();
-
-  if (!settings.isPublished) {
-    throw new OrderError("This store is not accepting online orders yet.");
-  }
-  if (!settings.isAcceptingOrders) {
-    throw new OrderError(
-      "Online ordering is temporarily paused. Please call the store.",
-    );
-  }
-  if (input.orderType === "pickup" && !settings.pickupEnabled) {
-    throw new OrderError("Pickup is not available right now.");
-  }
-  if (input.orderType === "delivery" && !settings.deliveryEnabled) {
-    throw new OrderError("Delivery is not available right now.");
-  }
-
-  let quote = await quoteCheckout(input);
-  for (let attempt = 0; ; attempt++) {
-    const totalCents = quote.totalBeforeTipCents + input.tipCents;
-    if (input.expectedTotalCents !== undefined && input.expectedTotalCents !== totalCents) {
-      const rejected = quote.rejected[0];
-      const typed = rejected && (input.promoCodes ?? []).find((c) => normalizeCode(c) === rejected.code);
-      const why = rejected
-        ? `${(typed ?? rejected.code).toUpperCase()}: ${refusalCopy(rejected.refusal, { display: rejected.display, timezone: quote.timezone, names: quote.names })}. `
-        : "";
-      throw new OrderError(`${why}Your total is now ${formatCents(totalCents)}. Check it and place your order again.`);
-    }
-    const order = await insertOrder(input, settings, quote);
-    if (order) return order;
-    // Lost a limit race: say which deal went, from why a fresh quote refuses it.
-    const fresh = await quoteCheckout(input);
-    const lost = quote.applied.find((a) => !fresh.applied.some((f) => f.promotionId === a.promotionId));
-    if (lost || attempt > 0) {
-      throw new OrderError(
-        `${lost ? lostDealMessage(lost, fresh) : "A deal on your order just changed"} — your total is now ${formatCents(fresh.totalBeforeTipCents + input.tipCents)}.`,
-      );
-    }
-    quote = fresh;
-  }
-}
-
-/**
  * Inserts the order, its lines, its "placed" event and its redemptions as
- * one statement that writes nothing unless the redemption guard still
- * holds. Returns null when it didn't: a deal's limit went to another order
- * after the quote. Drizzle's builders can't express a data-modifying CTE,
- * hence the SQL template (the same pattern as order-writes.ts).
+ * one statement that writes nothing unless `guard` holds, after locking the
+ * promotions it redeems. Returns null when the guard failed (a deal's limit
+ * went to another order after the quote). Drizzle's builders can't express
+ * a data-modifying CTE, hence the SQL template, as in order-writes.ts.
  */
-async function insertOrder(
-  input: CheckoutInput,
-  settings: Awaited<ReturnType<typeof getSettings>>,
-  quote: CheckoutQuote,
-): Promise<typeof orders.$inferSelect | null> {
-  if (
-    input.orderType === "delivery" &&
-    quote.subtotalCents < settings.deliveryMinimumCents
-  ) {
-    throw new OrderError(
-      `Delivery orders have a minimum subtotal of $${(
-        settings.deliveryMinimumCents / 100
-      ).toFixed(2)}.`,
-    );
-  }
-
+export async function insertOrder(o: NewOrder, guard: SQL): Promise<typeof orders.$inferSelect | null> {
+  const { input } = o;
   const placedAt = new Date();
-  const prepMinutes =
-    input.orderType === "delivery" ? settings.deliveryPrepMinutes : settings.pickupPrepMinutes;
   const at = placedAt.toISOString();
-  const promisedAt = new Date(placedAt.getTime() + prepMinutes * 60_000).toISOString();
-  const lines = quote.lines.map((l) => ({
+  const promisedAt = new Date(placedAt.getTime() + o.prepMinutes * 60_000).toISOString();
+  const lines = o.lines.map((l) => ({
     menu_item_id: l.itemId,
     item_name: l.itemName,
     quantity: l.quantity,
@@ -342,28 +200,28 @@ async function insertOrder(
     notes: l.notes || null,
     station: l.station,
   }));
-  const discounts = quote.applied.map((a) => ({
+  const discounts = o.discounts.map((a) => ({
     promotion_id: a.promotionId,
     code_id: a.codeId,
     label: a.label,
     amount_cents: a.amountCents,
     target: a.target,
-    customer_key: quote.customerKey,
+    customer_key: o.customerKey,
   }));
 
   const orderId = crypto.randomUUID();
   const place = db.execute(sql`
     with placed as (
-      insert into ${orders} (id, placed_at, promised_at, order_type, customer_name, customer_phone, customer_email,
+      insert into ${orders} (id, placed_at, promised_at, order_type, customer_name, customer_phone, customer_key, customer_email,
         address_line1, address_line2, city, zip, order_notes, subtotal_cents, discount_cents, tax_cents,
         delivery_fee_cents, tip_cents, total_cents, payment_status)
       select ${orderId}::uuid, ${at}::timestamptz, ${promisedAt}::timestamptz, ${input.orderType}::order_type,
-        ${input.customerName}::text, ${input.customerPhone}::text, ${input.customerEmail || null}::text,
+        ${input.customerName}::text, ${input.customerPhone}::text, ${o.customerKey}::text, ${input.customerEmail || null}::text,
         ${input.addressLine1 || null}::text, ${input.addressLine2 || null}::text, ${input.city || null}::text,
-        ${input.zip || null}::text, ${input.orderNotes || null}::text, ${quote.subtotalCents}::integer,
-        ${quote.discountCents}::integer, ${quote.taxCents}::integer, ${quote.deliveryFeeCents}::integer,
-        ${input.tipCents}::integer, ${quote.totalBeforeTipCents + input.tipCents}::integer, 'pending'
-      where ${redemptionGuard(quote.applied, quote.customerKey)}
+        ${input.zip || null}::text, ${input.orderNotes || null}::text, ${o.subtotalCents}::integer,
+        ${o.discountCents}::integer, ${o.taxCents}::integer, ${o.deliveryFeeCents}::integer,
+        ${input.tipCents}::integer, ${o.totalCents}::integer, 'pending'
+      where ${guard}
       returning id
     ), placed_event as (
       insert into ${orderEvents} (order_id, type, to_status, actor, created_at)
@@ -384,7 +242,7 @@ async function insertOrder(
   // Read back in the same transaction; no row means the guard failed.
   const read = db.select().from(orders).where(eq(orders.id, orderId));
 
-  const promotionIds = [...new Set(quote.applied.map((a) => a.promotionId))].sort((a, b) => a - b);
+  const promotionIds = [...new Set(o.discounts.map((a) => a.promotionId))].sort((a, b) => a - b);
   if (promotionIds.length === 0) {
     const [, [order]] = await db.batch([place, read]);
     return order ?? null;

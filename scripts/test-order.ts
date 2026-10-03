@@ -1,4 +1,5 @@
-import { createOrder, OrderError } from "../src/lib/orders";
+import { createOrder } from "../src/lib/checkout";
+import { OrderError } from "../src/lib/orders";
 import { db, menuItems, modifiers, modifierGroups } from "../src/db";
 import { eq } from "drizzle-orm";
 

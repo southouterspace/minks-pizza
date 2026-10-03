@@ -4,6 +4,7 @@
  * I/O and no English (promotion-copy.ts owns the words).
  */
 import { zonedParts } from "./hours";
+import { bpsOf } from "./money";
 import {
   REWARD_SPEC,
   type DiscountTarget,
@@ -174,11 +175,6 @@ export function lineQualifies(line: EvalLine, t: Target): boolean {
     (t.itemIds.length === 0 || t.itemIds.includes(line.itemId)) &&
     (t.modifierIds.length === 0 || line.modifierIds.some((m) => t.modifierIds.includes(m)))
   );
-}
-
-/** Half-up rounding of a basis-point share, in integers so no float drift. */
-function bpsOf(amount: number, bps: number): number {
-  return Math.floor((amount * bps + 5_000) / 10_000);
 }
 
 /**

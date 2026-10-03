@@ -6,9 +6,6 @@ import { sql, type SQL } from "drizzle-orm";
 import { db, orderDiscounts, orders, promotions } from "@/db";
 import type { AppliedDiscount } from "@/lib/promotion-engine";
 
-/** Digits-only phone, last ten, in SQL: the same key customerKeyFromPhone makes. */
-export const phoneKeySql = sql`right(regexp_replace(${orders.customerPhone}, '\\D', '', 'g'), 10)`;
-
 /** Ledger rows (aliased d) on orders (aliased o) that weren't canceled, comps included. */
 export const keptLedger = sql`${orderDiscounts} d join ${orders} o on o.id = d.order_id where o.status <> 'canceled'`;
 
@@ -47,7 +44,7 @@ export async function codeUsage(codeIds: number[]) {
  * a statement after the promotion rows are locked, so its snapshot includes
  * any order that just won the race.
  */
-export function redemptionGuard(applied: AppliedDiscount[], customerKey: string | null): SQL {
+export function redemptionGuard(applied: AppliedDiscount[], customerKey: string): SQL {
   const conditions = applied.flatMap(({ promotionId, codeId, limits }) => [
     sql`exists (select 1 from ${promotions} where id = ${promotionId} and is_active and archived_at is null)`,
     ...(limits.totalLimit !== null ? [sql`${usesOf(sql`d.promotion_id = ${promotionId}`)} < ${limits.totalLimit}`] : []),
@@ -55,7 +52,7 @@ export function redemptionGuard(applied: AppliedDiscount[], customerKey: string 
       ? [sql`${usesOf(sql`d.promotion_id = ${promotionId} and d.customer_key = ${customerKey}`)} < ${limits.perCustomerLimit}`]
       : []),
     ...(limits.codeMaxUses !== null ? [sql`${usesOf(sql`d.code_id = ${codeId}`)} < ${limits.codeMaxUses}`] : []),
-    ...(limits.newCustomersOnly ? [sql`not exists (select 1 from ${orders} where status <> 'canceled' and ${phoneKeySql} = ${customerKey})`] : []),
+    ...(limits.newCustomersOnly ? [sql`not exists (select 1 from ${orders} where status <> 'canceled' and customer_key = ${customerKey})`] : []),
   ]);
   return conditions.length ? sql.join(conditions, sql` and `) : sql`true`;
 }
