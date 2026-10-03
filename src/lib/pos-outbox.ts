@@ -8,8 +8,7 @@
  * Client only. Falls back to memory where IndexedDB is unavailable (private
  * windows), which keeps the retry loop but not the crash safety.
  */
-import type { OrderView } from "@/lib/orders";
-import type { MutationResult, SubmitOrderRequest } from "@/lib/orders-server";
+import type { MutationResult, OrderView, SubmitOrderRequest } from "@/lib/orders";
 
 export type OutboxEntry = {
   orderId: string;

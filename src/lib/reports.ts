@@ -19,6 +19,15 @@ import {
   type Totals,
 } from "@/lib/orders";
 
+/**
+ * The window a report covers. A shift's money is its own tenders and drawer
+ * events (only one shift is open at a time, so its window holds nothing
+ * else); a day's is everything stamped inside the day.
+ */
+export type ReportScope =
+  | { kind: "shift"; shiftId: string; from: Date; to: Date | null }
+  | { kind: "day"; from: Date; to: Date };
+
 export type OrderRef = { id: string; number: number };
 
 export const TENDER_METHOD_LABEL: Record<TenderMethod, string> = {

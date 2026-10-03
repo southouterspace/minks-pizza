@@ -2,8 +2,13 @@
 
 import { useCallback, useEffect, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
-import { channelLabel, dueCents, type OrderView } from "@/lib/orders";
-import type { PosMenu, SubmitOrderRequest } from "@/lib/orders-server";
+import {
+  channelLabel,
+  dueCents,
+  type OrderView,
+  type PosMenu,
+  type SubmitOrderRequest,
+} from "@/lib/orders";
 import { findItem, lineSummary } from "@/lib/pos-client/draft";
 import { formatCents } from "@/lib/money";
 import { priceLine } from "@/lib/pricing";

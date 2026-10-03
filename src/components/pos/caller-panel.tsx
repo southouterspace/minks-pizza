@@ -3,7 +3,7 @@
 import { useEffect, useRef, useState, type Dispatch } from "react";
 import { notify } from "./notify";
 import { AlertTriangle, ArrowRight, History, MapPin, Phone, RotateCcw } from "lucide-react";
-import type { CustomerLookup } from "@/lib/orders-server";
+import type { CustomerLookup } from "@/lib/orders";
 import { allItems, draftLine, lineSummary, type Draft, type DraftAction } from "@/lib/pos-client/draft";
 import { formatCents } from "@/lib/money";
 import { reorderLines } from "@/lib/pricing";

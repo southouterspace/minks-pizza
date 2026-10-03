@@ -1,8 +1,7 @@
 "use client";
 
 import { createContext, useContext } from "react";
-import type { Actor, Approval } from "@/lib/orders";
-import type { Board, PosMenu } from "@/lib/orders-server";
+import type { Actor, Approval, Board, PosMenu } from "@/lib/orders";
 
 export type StoreInfo = {
   name: string;

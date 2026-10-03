@@ -2,8 +2,8 @@
 
 import { randomUUID } from "node:crypto";
 import { checkoutSchema, type CheckoutInput } from "@/lib/validation";
-import { submitOrder, type SubmitOrderRequest } from "@/lib/orders-server";
-import type { Fulfillment } from "@/lib/orders";
+import { submitOrder } from "@/lib/orders-server";
+import type { Fulfillment, SubmitOrderRequest } from "@/lib/orders";
 
 export type PlaceOrderResult =
   | { ok: true; orderId: string }

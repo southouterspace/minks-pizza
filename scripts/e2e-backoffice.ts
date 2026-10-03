@@ -22,9 +22,8 @@ import {
   openShift,
   recordDrawerEvent,
   submitOrder,
-  type SubmitOrderRequest,
 } from "../src/lib/orders-server";
-import type { OrderMutation, OrderView } from "../src/lib/orders";
+import type { OrderMutation, OrderView, SubmitOrderRequest } from "../src/lib/orders";
 import { pinDigest } from "../src/lib/pin";
 import { storeDateOf } from "../src/lib/store-time";
 import type { StaffContext } from "../src/lib/staff";

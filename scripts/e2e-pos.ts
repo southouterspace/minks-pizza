@@ -19,7 +19,8 @@ import { and, eq, gte, isNull, type SQL } from "drizzle-orm";
 import { randomUUID } from "node:crypto";
 import { adjustments, customers, db, drawerEvents, menuItems, modifierGroups, modifiers, orderItems, orders, pinAttempts, shifts, storeSettings, tenders } from "../src/db";
 import type { KdsSnapshot } from "../src/lib/kds";
-import { normalizePhone, submitOrder } from "../src/lib/orders-server";
+import { normalizePhone } from "../src/lib/orders";
+import { submitOrder } from "../src/lib/orders-server";
 import { formatStoreDateTime, formatStoreTime } from "../src/lib/store-time";
 
 const BASE = process.env.E2E_BASE_URL ?? "http://localhost:3000";

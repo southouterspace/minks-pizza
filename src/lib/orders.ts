@@ -4,7 +4,7 @@
  * reads and writes these lives in orders-server.ts.
  */
 import type { KitchenStation } from "@/lib/kds";
-import type { LineModifier, Selection } from "@/lib/pricing";
+import type { LineModifier, MenuItem, PricingPolicy, Selection } from "@/lib/pricing";
 
 export type KitchenStatus = "held" | "new" | "preparing" | "ready" | "completed" | "canceled";
 export type Channel = "online" | "walk_in" | "phone";
@@ -257,6 +257,70 @@ export const DRAWER_ROLE: Record<DrawerEventKind, RequiredRole> = {
 
 export function roleSatisfies(role: EmployeeRole, required: RequiredRole): boolean {
   return required === "cashier" || role === "manager" || role === "owner";
+}
+
+// ---------------------------------------------------------------------------
+// The wire contract: what the POS, the storefront and the server seam exchange
+// ---------------------------------------------------------------------------
+
+export type SubmitOrderRequest = {
+  orderId: string;
+  channel: Channel;
+  fulfillment: Fulfillment;
+  customer: CustomerInput | null;
+  notes: string | null;
+  fire: FirePlan;
+  promisedAt: string | null;
+  /** Online gratuity added to the order total; POS card tips ride on tenders. */
+  tipCents: number;
+  lines: SubmitLine[];
+  tenders: TenderInput[];
+};
+
+export type Rejected = { ok: false; reason: "rejected"; message: string };
+
+export type Failure =
+  | { ok: false; reason: "needs_manager" | "bad_pin" | "locked_out" | "no_open_shift" | "not_found" }
+  | Rejected;
+
+export type FailureReason = Failure["reason"];
+
+export const rejected = (message: string): Rejected => ({ ok: false, reason: "rejected", message });
+
+export type MutationResult = { ok: true; order: OrderView } | Failure;
+
+export type ShiftResult = { ok: true; shiftId: string } | Failure;
+
+export type PosMenu = {
+  /** Changes whenever anything that affects entry or pricing changes. */
+  version: string;
+  policy: PricingPolicy;
+  taxRateBps: number;
+  deliveryFeeCents: number;
+  discountApprovalCents: number;
+  categories: { id: number; name: string; items: MenuItem[] }[];
+};
+
+export type Quote = { pickupMinutes: number; deliveryMinutes: number; piesAhead: number };
+
+export type Board = {
+  serverNow: string;
+  /** Held (scheduled or open checks) and on-the-line orders, oldest first. */
+  openOrders: OrderView[];
+  quote: Quote;
+  shift: { id: string; openedAt: string; openedBy: number } | null;
+};
+
+export type CustomerLookup = {
+  customer: { id: string; name: string; phone: string; email: string | null; notes: string | null } | null;
+  addresses: { id: string; line1: string; line2: string | null; city: string | null; zip: string }[];
+  recentOrders: OrderView[];
+};
+
+/** "+1 (555) 010-2233" → "5550102233". The customers table keys on this. */
+export function normalizePhone(raw: string): string {
+  const digits = raw.replace(/\D/g, "");
+  return digits.length === 11 && digits.startsWith("1") ? digits.slice(1) : digits;
 }
 
 // ---------------------------------------------------------------------------

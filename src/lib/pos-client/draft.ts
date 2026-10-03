@@ -4,8 +4,16 @@
  * replayable `SubmitOrderRequest`. Prices come from `priceLine`, the same
  * function the server runs, so the panel never waits on the network.
  */
-import type { Address, Channel, FirePlan, Fulfillment, SubmitLine, TenderInput } from "@/lib/orders";
-import type { PosMenu, SubmitOrderRequest } from "@/lib/orders-server";
+import type {
+  Address,
+  Channel,
+  FirePlan,
+  Fulfillment,
+  PosMenu,
+  SubmitLine,
+  SubmitOrderRequest,
+  TenderInput,
+} from "@/lib/orders";
 import { ticketLine } from "@/lib/kds";
 import { priceLine, type LineModifier, type MenuItem, type PricingPolicy, type Selection } from "@/lib/pricing";
 import { taxFromBps } from "@/lib/money";

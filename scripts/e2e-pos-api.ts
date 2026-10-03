@@ -11,7 +11,7 @@ import { randomUUID } from "node:crypto";
 import { SignJWT } from "jose";
 import { count, eq } from "drizzle-orm";
 import { db, employees, operators, orders } from "../src/db";
-import type { PosMenu } from "../src/lib/orders-server";
+import type { PosMenu } from "../src/lib/orders";
 
 const BASE = process.env.E2E_BASE_URL ?? "http://localhost:3000";
 

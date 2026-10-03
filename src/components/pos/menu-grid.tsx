@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Search, X } from "lucide-react";
-import type { PosMenu } from "@/lib/orders-server";
+import type { PosMenu } from "@/lib/orders";
 import type { MenuItem } from "@/lib/pricing";
 import { formatCents } from "@/lib/money";
 import { cn } from "@/lib/utils";

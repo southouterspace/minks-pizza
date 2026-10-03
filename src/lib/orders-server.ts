@@ -31,8 +31,17 @@ import {
   dueCents,
   requiredRole,
   roleSatisfies,
+  normalizePhone,
+  rejected,
   type Approval,
-  type Channel,
+  type Board,
+  type CustomerLookup,
+  type Failure,
+  type MutationResult,
+  type PosMenu,
+  type Quote,
+  type ShiftResult,
+  type SubmitOrderRequest,
   type CustomerInput,
   type DrawerEventKind,
   type FirePlan,
@@ -44,7 +53,7 @@ import {
   type SubmitLine,
   type TenderInput,
 } from "@/lib/orders";
-import { shiftReport, type ReportFacts, type ShiftReport } from "@/lib/reports";
+import { shiftReport, type ReportFacts, type ReportScope, type ShiftReport } from "@/lib/reports";
 import {
   PricingError,
   priceLine,
@@ -57,18 +66,6 @@ import { DEFAULT_TIMEZONE } from "@/lib/store-time";
 import type { StaffContext } from "@/lib/staff";
 
 type Statement = BatchItem<"pg">;
-
-export type Failure =
-  | { ok: false; reason: "needs_manager" }
-  | { ok: false; reason: "bad_pin" }
-  | { ok: false; reason: "locked_out" }
-  | { ok: false; reason: "no_open_shift" }
-  | { ok: false; reason: "not_found" }
-  | { ok: false; reason: "rejected"; message: string };
-
-export type MutationResult = { ok: true; order: OrderView } | Failure;
-
-const rejected = (message: string): Failure => ({ ok: false, reason: "rejected", message });
 
 export class StoreNotConfiguredError extends Error {}
 
@@ -91,12 +88,6 @@ export async function getStoreBasics(): Promise<{ name: string; timezone: string
 
 function policyOf(s: Settings): PricingPolicy {
   return { halfToppingRule: s.halfToppingRule, extraToppingBps: s.extraToppingBps };
-}
-
-/** "+1 (555) 010-2233" → "5550102233". The customers table keys on this. */
-export function normalizePhone(raw: string): string {
-  const digits = raw.replace(/\D/g, "");
-  return digits.length === 11 && digits.startsWith("1") ? digits.slice(1) : digits;
 }
 
 // ---------------------------------------------------------------------------
@@ -166,16 +157,6 @@ async function loadMenuItems(itemIds?: number[]): Promise<(MenuItem & { category
       }),
   }));
 }
-
-export type PosMenu = {
-  /** Changes whenever anything that affects entry or pricing changes. */
-  version: string;
-  policy: PricingPolicy;
-  taxRateBps: number;
-  deliveryFeeCents: number;
-  discountApprovalCents: number;
-  categories: { id: number; name: string; items: MenuItem[] }[];
-};
 
 export async function getPosMenu(): Promise<PosMenu> {
   const [settings, items, cats] = await Promise.all([
@@ -472,8 +453,6 @@ export async function getOpenShift() {
   return shift ?? null;
 }
 
-export type Quote = { pickupMinutes: number; deliveryMinutes: number; piesAhead: number };
-
 export async function getQuote(settings?: Settings): Promise<Quote> {
   const s = settings ?? (await getSettings());
   const [row] = await db
@@ -501,14 +480,6 @@ export async function getQuote(settings?: Settings): Promise<Quote> {
   return { pickupMinutes, deliveryMinutes: pickupMinutes + deliveryExtra, piesAhead };
 }
 
-export type Board = {
-  serverNow: string;
-  /** Held (scheduled or open checks) and on-the-line orders, oldest first. */
-  openOrders: OrderView[];
-  quote: Quote;
-  shift: { id: string; openedAt: string; openedBy: number } | null;
-};
-
 /** The POS board poll. Also fires any scheduled order that has come due. */
 export async function getBoard(): Promise<Board> {
   const now = new Date();
@@ -529,12 +500,6 @@ export async function getBoard(): Promise<Board> {
     shift: shift ? { id: shift.id, openedAt: shift.openedAt.toISOString(), openedBy: shift.openedBy } : null,
   };
 }
-
-export type CustomerLookup = {
-  customer: { id: string; name: string; phone: string; email: string | null; notes: string | null } | null;
-  addresses: { id: string; line1: string; line2: string | null; city: string | null; zip: string }[];
-  recentOrders: OrderView[];
-};
 
 export async function lookupCustomer(phone: string): Promise<CustomerLookup> {
   const [customer] = await db.select().from(customers).where(eq(customers.phone, normalizePhone(phone)));
@@ -585,20 +550,6 @@ async function authorize(
 // ---------------------------------------------------------------------------
 // Submit
 // ---------------------------------------------------------------------------
-
-export type SubmitOrderRequest = {
-  orderId: string;
-  channel: Channel;
-  fulfillment: Fulfillment;
-  customer: CustomerInput | null;
-  notes: string | null;
-  fire: FirePlan;
-  promisedAt: string | null;
-  /** Online gratuity added to the order total; POS card tips ride on tenders. */
-  tipCents: number;
-  lines: SubmitLine[];
-  tenders: TenderInput[];
-};
 
 export type Submitter = { kind: "pos"; staff: StaffContext } | { kind: "online" };
 
@@ -1047,8 +998,6 @@ export async function fireDue(now: Date): Promise<number> {
 // Shifts and the drawer
 // ---------------------------------------------------------------------------
 
-export type ShiftResult = { ok: true; shiftId: string } | Failure;
-
 export async function openShift(
   input: { shiftId: string; startingBankCents: number },
   staff: StaffContext,
@@ -1060,15 +1009,6 @@ export async function openShift(
   const open = await getOpenShift();
   return open?.id === input.shiftId ? { ok: true, shiftId: open.id } : rejected("Another shift is already open.");
 }
-
-/**
- * The window a report covers. A shift's money is its own tenders and drawer
- * events (only one shift is open at a time, so its window holds nothing
- * else); a day's is everything stamped inside the day.
- */
-export type ReportScope =
-  | { kind: "shift"; shiftId: string; from: Date; to: Date | null }
-  | { kind: "day"; from: Date; to: Date };
 
 /** [from, to), or open-ended while a shift is still open. */
 function within(col: Parameters<typeof gte>[0], scope: ReportScope) {

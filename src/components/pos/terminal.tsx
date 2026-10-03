@@ -16,8 +16,15 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { keepUnlocked, lockTerminal, mutateOrderAction, readOrder, switchEmployee } from "@/app/pos/actions";
-import { type Actor, type Approval, type DrawerEventKind, type OrderView, type TenderInput } from "@/lib/orders";
-import type { Board, PosMenu } from "@/lib/orders-server";
+import type {
+  Actor,
+  Approval,
+  Board,
+  DrawerEventKind,
+  OrderView,
+  PosMenu,
+  TenderInput,
+} from "@/lib/orders";
 import * as outbox from "@/lib/pos-outbox";
 import { defaultSelections, needsBuilder } from "@/lib/pos-client/builder";
 import { draftLine, draftReducer, draftTotals, emptyDraft, findItem, isPhoneFirst, toSubmitRequest, type Draft, type DraftLine, type Mode } from "@/lib/pos-client/draft";

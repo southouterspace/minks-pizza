@@ -22,10 +22,19 @@ import {
   openShift,
   recordDrawerEvent,
   submitOrder,
-  type MutationResult,
-  type SubmitOrderRequest,
 } from "../src/lib/orders-server";
-import { channelLabel, orderHistory, paymentState, sourceLabel, type Channel, type Fulfillment, type OrderMutation, type OrderView } from "../src/lib/orders";
+import {
+  channelLabel,
+  orderHistory,
+  paymentState,
+  sourceLabel,
+  type Channel,
+  type Fulfillment,
+  type MutationResult,
+  type OrderMutation,
+  type OrderView,
+  type SubmitOrderRequest,
+} from "../src/lib/orders";
 import { allocate, priceLine, shareByItem, splitEvenly, type MenuItem, type Selection } from "../src/lib/pricing";
 import { checkPin } from "../src/lib/pin";
 import { storeDateOf, storeDayRange } from "../src/lib/store-time";

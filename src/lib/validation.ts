@@ -6,9 +6,9 @@ import type {
   Fulfillment,
   OrderMutation,
   SubmitLine,
+  SubmitOrderRequest,
   TenderInput,
 } from "@/lib/orders";
-import type { SubmitOrderRequest } from "@/lib/orders-server";
 import { AMOUNTS, PLACEMENTS, type Selection } from "@/lib/pricing";
 
 const id = z.number().int().positive();
