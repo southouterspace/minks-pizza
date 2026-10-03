@@ -5,7 +5,6 @@ import {
   normalizePhone,
   type Board,
   type CustomerLookup,
-  type Fulfillment,
   type KitchenStatus,
   type OrderView,
   type Quote,
@@ -14,7 +13,7 @@ import { quoteMinutes } from "@/lib/pricing";
 import { getSettings, type Settings } from "@/lib/settings-server";
 import { getOpenShift } from "@/lib/shifts-server";
 import { fireDue } from "./folds";
-import { staffNames, totalsOf } from "./rows";
+import { fulfillmentOf, staffNames, totalsOf } from "./rows";
 
 const withFacts = { items: true, tenders: true, adjustments: true } as const;
 type OrderRow = NonNullable<Awaited<ReturnType<typeof findOrder>>>;
@@ -33,25 +32,6 @@ async function toViews(rows: OrderRow[]): Promise<OrderView[]> {
     ]),
   );
   return rows.map((o) => toView(o, staff));
-}
-
-/**
- * The address and table columns are nullable because only one order type
- * uses each; every writer (fulfillmentColumns, the old storefront checkout)
- * fills the ones its type needs. A row without them is corrupt, not a
- * delivery to an empty street.
- */
-function fulfillmentOf(o: OrderRow): Fulfillment {
-  switch (o.orderType) {
-    case "pickup":
-      return { kind: "pickup" };
-    case "delivery":
-      if (o.addressLine1 === null || o.zip === null) throw new Error(`Order ${o.id} is a delivery with no address.`);
-      return { kind: "delivery", address: { line1: o.addressLine1, line2: o.addressLine2, city: o.city, zip: o.zip } };
-    case "dine_in":
-      if (o.tableLabel === null) throw new Error(`Order ${o.id} is dine-in with no table.`);
-      return { kind: "dine_in", table: o.tableLabel };
-  }
 }
 
 const iso = (d: Date | null) => d?.toISOString() ?? null;

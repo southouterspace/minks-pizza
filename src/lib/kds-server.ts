@@ -3,12 +3,14 @@ import { and, asc, desc, eq, gte, inArray, isNull, or, sql } from "drizzle-orm";
 import { db, orderItems, orders, storeSettings } from "@/db";
 import {
   bumpPlan,
-  type ItemStage,
   type KdsAction,
+  type KdsItem,
   type KdsOrder,
   type KdsSnapshot,
+  type WorkStage,
 } from "@/lib/kds";
 import { complete, fireDue, recall, run, syncStatus } from "@/lib/orders-server/folds";
+import { fulfillmentOf } from "@/lib/orders-server/rows";
 
 const LINE_STATUSES = ["new", "preparing"] as const;
 const RECENT_WINDOW_MS = 2 * 60 * 60 * 1000;
@@ -18,71 +20,73 @@ type OrderRow = typeof orders.$inferSelect & {
   items: (typeof orderItems.$inferSelect)[];
 };
 
-function toKdsOrder(o: OrderRow): KdsOrder {
-  const address =
-    o.orderType === "delivery" && o.addressLine1
-      ? [o.addressLine1, o.addressLine2, o.city, o.zip].filter(Boolean).join(", ")
-      : null;
-  return {
-    id: o.id,
-    number: o.orderNumber,
-    status: o.status,
-    type: o.orderType,
-    channel: o.channel,
-    table: o.tableLabel,
-    fireAt: o.fireAt?.toISOString() ?? null,
-    promisedAt: o.promisedAt?.toISOString() ?? null,
-    customerName: o.customerName,
-    customerPhone: o.customerPhone,
-    address,
-    notes: o.orderNotes,
-    placedAt: o.placedAt.toISOString(),
-    readyAt: o.readyAt?.toISOString() ?? null,
-    items: o.items
-      .filter((i) => i.firedAt !== null)
-      .toSorted((a, b) => a.id - b.id)
-      .map((i) => ({
-        id: i.id,
-        name: i.itemName,
-        quantity: i.quantity,
-        station: i.station,
-        modifiers: i.modifiers,
-        notes: i.notes,
-        ovenAt: i.ovenAt?.toISOString() ?? null,
-        doneAt: i.doneAt?.toISOString() ?? null,
-        voidedAt: i.voidedAt?.toISOString() ?? null,
-      })),
-  };
+function kdsItems(o: OrderRow): KdsItem[] {
+  return o.items
+    .filter((i) => i.firedAt !== null)
+    .map((i) => ({
+      id: i.id,
+      name: i.itemName,
+      quantity: i.quantity,
+      station: i.station,
+      modifiers: i.modifiers,
+      notes: i.notes,
+      ovenAt: i.ovenAt?.toISOString() ?? null,
+      doneAt: i.doneAt?.toISOString() ?? null,
+      voidedAt: i.voidedAt?.toISOString() ?? null,
+    }));
 }
 
 const ticketKey = (o: Pick<OrderRow, "id" | "ticketOrderId">) => o.ticketOrderId ?? o.id;
 
+/** The orders riding on one kitchen ticket: the parent and any checks split off it. */
+const onTicket = (ticketId: string) => or(eq(orders.id, ticketId), eq(orders.ticketOrderId, ticketId));
+
 /**
  * Folds checks split off a parent back onto the parent's ticket, so the
- * kitchen keeps seeing one ticket for one table's food.
+ * kitchen keeps seeing one ticket for one table's food. `numbers` names
+ * tickets whose parent is not among `rows` (it moved on to another list).
  */
-function toTickets(rows: OrderRow[]): KdsOrder[] {
-  const byTicket = new Map<string, OrderRow[]>();
-  for (const row of rows) byTicket.set(ticketKey(row), [...(byTicket.get(ticketKey(row)) ?? []), row]);
+function toTickets(rows: OrderRow[], numbers: ReadonlyMap<string, number>): KdsOrder[] {
+  const byTicket = Map.groupBy(rows, ticketKey);
   return [...byTicket.entries()].map(([key, group]) => {
     const head = group.find((o) => o.id === key) ?? group[0];
-    const ticket = toKdsOrder(head);
     return {
-      ...ticket,
       id: key,
-      status: group.some((o) => o.status === "preparing") ? "preparing" : ticket.status,
-      items: group.flatMap((o) => toKdsOrder(o).items).toSorted((a, b) => a.id - b.id),
+      number: numbers.get(key) ?? head.orderNumber,
+      // A started check makes the ticket preparing; a check still on the shelf keeps it ready.
+      status: (["preparing", "ready"] as const).find((s) => group.some((o) => o.status === s)) ?? head.status,
+      channel: head.channel,
+      fulfillment: fulfillmentOf(head),
+      fireAt: head.fireAt?.toISOString() ?? null,
+      promisedAt: head.promisedAt?.toISOString() ?? null,
+      customerName: head.customerName,
+      customerPhone: head.customerPhone,
+      notes: head.orderNotes,
+      placedAt: head.placedAt.toISOString(),
+      readyAt: head.readyAt?.toISOString() ?? null,
+      items: group.flatMap(kdsItems).toSorted((a, b) => a.id - b.id),
     };
   });
+}
+
+/** Ticket numbers for split checks whose parent row is not in the same list. */
+async function orphanTicketNumbers(lists: OrderRow[][]): Promise<Map<string, number>> {
+  const orphans = lists.flatMap((rows) => {
+    const ids = new Set(rows.map((o) => o.id));
+    return rows.map(ticketKey).filter((key) => !ids.has(key));
+  });
+  if (orphans.length === 0) return new Map();
+  const parents = await db
+    .select({ id: orders.id, number: orders.orderNumber })
+    .from(orders)
+    .where(inArray(orders.id, [...new Set(orphans)]));
+  return new Map(parents.map((p) => [p.id, p.number]));
 }
 
 /** The orders on one ticket that are still on the line. */
 function lineGroup(ticketId: string) {
   return db.query.orders.findMany({
-    where: and(
-      or(eq(orders.id, ticketId), eq(orders.ticketOrderId, ticketId)),
-      inArray(orders.status, [...LINE_STATUSES]),
-    ),
+    where: and(onTicket(ticketId), inArray(orders.status, [...LINE_STATUSES])),
     with: { items: true },
   });
 }
@@ -134,18 +138,19 @@ export async function getKdsSnapshot(): Promise<KdsSnapshot> {
   ]);
 
   const timing = settingsRows[0] ?? { warnMinutes: 10, lateMinutes: 15, ovenMinutes: 7 };
+  const numbers = await orphanTicketNumbers([line, ready, recent]);
   return {
     serverNow: now.toISOString(),
     timing,
-    line: toTickets(line),
-    ready: ready.map(toKdsOrder),
-    recent: recent.map(toKdsOrder),
+    line: toTickets(line, numbers),
+    ready: toTickets(ready, numbers),
+    recent: toTickets(recent, numbers),
     canceled,
     avgTicketSeconds: avg?.seconds == null ? null : Math.round(Number(avg.seconds)),
   };
 }
 
-function stageColumns(stage: ItemStage, now: Date) {
+function stageColumns(stage: WorkStage, now: Date) {
   switch (stage) {
     case "queued":
       return { ovenAt: null, doneAt: null };
@@ -186,9 +191,9 @@ export async function applyKdsAction(action: KdsAction): Promise<void> {
   if (action.type === "bump") {
     const group = await lineGroup(action.orderId);
     if (group.length === 0) return;
-    const [ticket] = toTickets(group);
+    const [ticket] = toTickets(group, new Map());
     const plan = bumpPlan(ticket, action.view);
-    const ids = (stage: ItemStage) => plan.filter((p) => p.stage === stage).map((p) => p.item.id);
+    const ids = (stage: WorkStage) => plan.filter((p) => p.stage === stage).map((p) => p.item.id);
     const moves = (["oven", "done"] as const)
       .map((stage) => ({ stage, ids: ids(stage) }))
       .filter((m) => m.ids.length > 0)
@@ -201,16 +206,15 @@ export async function applyKdsAction(action: KdsAction): Promise<void> {
     return;
   }
 
-  const onTicket = or(eq(orders.id, action.orderId), eq(orders.ticketOrderId, action.orderId));
   if (action.type === "recall") {
     const recallable = await db
       .select({ id: orders.id })
       .from(orders)
-      .where(and(onTicket, inArray(orders.status, ["ready", "completed"])));
+      .where(and(onTicket(action.orderId), inArray(orders.status, ["ready", "completed"])));
     if (recallable.length === 0) return;
     await run(recall(recallable.map((o) => o.id)));
     return;
   }
 
-  await run([complete(onTicket)]);
+  await run([complete(onTicket(action.orderId))]);
 }

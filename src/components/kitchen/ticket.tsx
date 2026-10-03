@@ -14,6 +14,7 @@ import {
   type TicketMod,
   type TimerLevel,
 } from "@/lib/kds";
+import { fulfillmentLabel, type Fulfillment } from "@/lib/orders";
 import { cn } from "@/lib/utils";
 
 const HEADER_TONE: Record<TimerLevel, string> = {
@@ -29,23 +30,21 @@ const BUMP_LABEL: Record<KdsView, string> = {
   kitchen: "Bump kitchen",
 };
 
-const TYPE_CHIP: Record<KdsOrder["type"], { label: string; tone: string }> = {
-  pickup: { label: "Pickup", tone: "bg-zinc-100 text-zinc-950" },
-  delivery: { label: "Delivery", tone: "bg-sky-500 text-zinc-950" },
-  dine_in: { label: "Dine-in", tone: "bg-violet-400 text-zinc-950" },
+const CHIP_TONE: Record<Fulfillment["kind"], string> = {
+  pickup: "bg-zinc-100 text-zinc-950",
+  delivery: "bg-sky-500 text-zinc-950",
+  dine_in: "bg-violet-400 text-zinc-950",
 };
 
-export function TypeChip({ type, table }: { type: KdsOrder["type"]; table?: string | null }) {
-  const chip = TYPE_CHIP[type];
+export function TypeChip({ fulfillment }: { fulfillment: Fulfillment }) {
   return (
     <span
       className={cn(
         "rounded px-1.5 py-0.5 text-[0.7rem] font-extrabold tracking-wider uppercase",
-        chip.tone,
+        CHIP_TONE[fulfillment.kind],
       )}
     >
-      {chip.label}
-      {type === "dine_in" && table ? ` · T${table}` : ""}
+      {fulfillmentLabel(fulfillment)}
     </span>
   );
 }
@@ -128,20 +127,19 @@ function ItemRow({
   onTap: () => void;
 }) {
   const stage = stageOf(item);
-  const voided = item.voidedAt !== null;
   const { size, crust, whole, left, right } = ticketLine(item.modifiers);
   return (
     <li>
       <button
         type="button"
         onClick={onTap}
-        disabled={voided}
+        disabled={stage === "void"}
         data-testid={`kds-item-${item.id}`}
-        data-stage={voided ? "void" : stage}
+        data-stage={stage}
         className={cn(
           "w-full px-3 py-2 text-left transition-colors hover:bg-zinc-800/60 active:bg-zinc-800",
           stage === "done" && "opacity-35",
-          voided && "bg-red-950/60 hover:bg-red-950/60",
+          stage === "void" && "bg-red-950/60 hover:bg-red-950/60",
         )}
       >
         <span className="flex items-start gap-2">
@@ -157,10 +155,10 @@ function ItemRow({
             <span
               className={cn(
                 "block text-lg leading-tight font-bold",
-                (stage === "done" || voided) && "line-through",
+                (stage === "done" || stage === "void") && "line-through",
               )}
             >
-              {voided ? (
+              {stage === "void" ? (
                 <span className="mr-1.5 rounded bg-red-600 px-1 text-sm font-black text-white no-underline">
                   VOID
                 </span>
@@ -243,7 +241,7 @@ export function Ticket({
             </kbd>
           ) : null}
           <span className="text-xl font-black tabular-nums">#{order.number}</span>
-          <TypeChip type={order.type} table={order.table} />
+          <TypeChip fulfillment={order.fulfillment} />
           <span className="ml-auto text-xl font-black tabular-nums">{formatElapsed(age)}</span>
         </div>
         <div className="mt-0.5 flex items-center gap-2 text-sm font-semibold">

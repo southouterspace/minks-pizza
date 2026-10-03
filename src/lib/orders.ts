@@ -151,6 +151,11 @@ export function channelLabel(channel: Channel, kind: Fulfillment["kind"]): strin
   return SALES_CHANNEL_LABEL[salesChannel(channel, kind)];
 }
 
+/** "1 Main St, Apt 2, The Woodlands, 77354". */
+export function formatAddress(a: Address): string {
+  return [a.line1, a.line2, a.city, a.zip].filter(Boolean).join(", ");
+}
+
 export const FULFILLMENT_LABEL: Record<Fulfillment["kind"], string> = {
   pickup: "Pickup",
   delivery: "Delivery",
