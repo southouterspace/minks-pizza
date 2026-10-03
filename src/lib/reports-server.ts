@@ -115,7 +115,8 @@ export async function loadReportFacts(scope: ReportScope): Promise<ReportFacts> 
       .leftJoin(orderItems, eq(orderItems.lineUid, adjustments.lineUid))
       .where(within(adjustments.createdAt, scope)),
     db
-      .select({ i: orderItems, order: ref, item: lineName })
+      // Non-null by the within() filter below; selected on its own so the row type says so.
+      .select({ i: orderItems, voidedAt: sql`${orderItems.voidedAt}`.mapWith(orderItems.voidedAt), order: ref, item: lineName })
       .from(orderItems)
       .innerJoin(orders, eq(orders.id, orderItems.orderId))
       .where(within(orderItems.voidedAt, scope)),
@@ -153,12 +154,12 @@ export async function loadReportFacts(scope: ReportScope): Promise<ReportFacts> 
       order,
       item,
     })),
-    voids: voidRows.map(({ i, order, item }) => ({
+    voids: voidRows.map(({ i, voidedAt, order, item }) => ({
       employeeId: i.voidedBy,
       approvedBy: i.voidApprovedBy,
       cents: i.lineTotalCents,
       reason: i.voidReason,
-      at: i.voidedAt!.toISOString(),
+      at: voidedAt.toISOString(),
       order,
       item,
     })),

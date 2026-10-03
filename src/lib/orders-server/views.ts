@@ -35,17 +35,22 @@ async function toViews(rows: OrderRow[]): Promise<OrderView[]> {
   return rows.map((o) => toView(o, staff));
 }
 
+/**
+ * The address and table columns are nullable because only one order type
+ * uses each; every writer (fulfillmentColumns, the old storefront checkout)
+ * fills the ones its type needs. A row without them is corrupt, not a
+ * delivery to an empty street.
+ */
 function fulfillmentOf(o: OrderRow): Fulfillment {
   switch (o.orderType) {
     case "pickup":
       return { kind: "pickup" };
     case "delivery":
-      return {
-        kind: "delivery",
-        address: { line1: o.addressLine1 ?? "", line2: o.addressLine2, city: o.city, zip: o.zip ?? "" },
-      };
+      if (o.addressLine1 === null || o.zip === null) throw new Error(`Order ${o.id} is a delivery with no address.`);
+      return { kind: "delivery", address: { line1: o.addressLine1, line2: o.addressLine2, city: o.city, zip: o.zip } };
     case "dine_in":
-      return { kind: "dine_in", table: o.tableLabel ?? "" };
+      if (o.tableLabel === null) throw new Error(`Order ${o.id} is dine-in with no table.`);
+      return { kind: "dine_in", table: o.tableLabel };
   }
 }
 
@@ -133,8 +138,7 @@ export async function listOrderViews(statuses: KitchenStatus[]): Promise<OrderVi
   );
 }
 
-export async function getQuote(settings?: Settings): Promise<Quote> {
-  const s = settings ?? (await getSettings());
+export async function getQuote(s: Settings): Promise<Quote> {
   const [row] = await db
     .select({ pies: sql<number>`coalesce(sum(${orderItems.quantity}), 0)::int` })
     .from(orderItems)
@@ -170,7 +174,7 @@ export async function getBoard(): Promise<Board> {
       with: withFacts,
       orderBy: [asc(orders.placedAt)],
     }),
-    getQuote(),
+    getSettings().then(getQuote),
     getOpenShift(),
   ]);
   return {
