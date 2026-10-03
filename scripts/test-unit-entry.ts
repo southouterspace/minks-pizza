@@ -25,9 +25,10 @@ test("cost per pound and per case to millicents per gram", () => {
   assert.equal(costToMillicents(3850, unitFor("case", "g", [CASE])!), 424);
 });
 
-test("unitFor refuses another family's unit", () => {
+test("unitFor refuses another family's unit and lets a pack win a name clash", () => {
   assert.equal(unitFor("fl oz", "g"), undefined);
   assert.equal(unitFor("case", "g"), undefined);
+  assert.equal(unitFor("lb", "g", [{ name: "lb", baseQtyMilli: 1 }])!.baseQtyMilli, 1);
 });
 
 test("unit cost display", () => {

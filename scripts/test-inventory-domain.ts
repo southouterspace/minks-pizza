@@ -15,7 +15,7 @@ import {
   type RecipeContext,
 } from "../src/lib/recipes";
 import { describeChoice, selectionFactorBps, toppingPriceCents } from "../src/lib/toppings";
-import { findUnit, formatQty, toMilli } from "../src/lib/units";
+import { formatQty } from "../src/lib/units";
 
 let passed = 0;
 function test(name: string, fn: () => void) {
@@ -23,18 +23,6 @@ function test(name: string, fn: () => void) {
   passed++;
   console.log(`PASS  ${name}`);
 }
-
-test("toMilli: standard units and packs", () => {
-  assert.equal(toMilli(1, "oz"), 28350);
-  assert.equal(toMilli(2.5, "lb"), 1133980);
-  assert.equal(toMilli(500, "g"), 500000);
-  assert.equal(toMilli(1, "fl oz"), 29574);
-  assert.equal(toMilli(3, "each"), 3000);
-  assert.equal(toMilli(2, "case", [{ name: "case", baseQtyMilli: 9071840 }]), 18143680);
-  assert.equal(toMilli(1, "lb", [{ name: "lb", baseQtyMilli: 1 }]), 1);
-  assert.throws(() => toMilli(1, "stone"), /Unknown unit "stone"/);
-  assert.deepEqual(findUnit("qt"), { name: "qt", baseQtyMilli: 946353 });
-});
 
 test("formatQty: US kitchen units", () => {
   assert.equal(formatQty(28350, "g"), "1 oz");

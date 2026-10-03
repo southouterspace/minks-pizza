@@ -3,7 +3,7 @@
  * quantities and millicent costs, and picking a readable unit to show stored
  * values back in. Shared by server and client — no I/O.
  */
-import { UNITS, type BaseUnit, type UnitDef } from "@/lib/units";
+import { trimAmount, UNITS, type BaseUnit, type UnitDef } from "@/lib/units";
 
 /** A unit by name among the ones `unitsFor` in units.ts offers; undefined for another family's unit. */
 export function unitFor(
@@ -37,11 +37,6 @@ export function formatUnitCost(unitCostMillicents: number, baseUnit: BaseUnit): 
   const cents = centsPerUnit(unitCostMillicents, unit);
   const dollars = (cents / 100).toFixed(cents < 10 && cents > 0 ? 4 : 2);
   return `$${dollars}/${name}`;
-}
-
-/** At most `decimals` places, trailing zeros dropped: 8, 0.25, 1.333. */
-export function trimAmount(n: number, decimals = 3): string {
-  return n.toFixed(decimals).replace(/\.?0+$/, "").replace(/^-0$/, "0");
 }
 
 /** Within rounding of the milli storage, `v` has at most two decimals. */

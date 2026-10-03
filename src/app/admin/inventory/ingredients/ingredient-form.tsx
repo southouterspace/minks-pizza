@@ -22,10 +22,17 @@ import {
   COST_DISPLAY_UNIT,
   ENTRY_UNIT,
   readableUnit,
-  trimAmount,
   unitFor,
 } from "@/lib/unit-entry";
-import { BASE_UNIT_LABEL, BASE_UNITS, UNITS, unitsFor, type BaseUnit, type UnitDef } from "@/lib/units";
+import {
+  BASE_UNIT_LABEL,
+  BASE_UNITS,
+  trimAmount,
+  UNITS,
+  unitsFor,
+  type BaseUnit,
+  type UnitDef,
+} from "@/lib/units";
 import { saveIngredient, type IngredientFormState } from "./actions";
 
 export type IngredientFormValue = {

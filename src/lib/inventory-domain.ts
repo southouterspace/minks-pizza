@@ -6,13 +6,6 @@
 export const INVENTORY_MOVE_KINDS = ["sale", "receive", "waste", "count"] as const;
 export type InventoryMoveKind = (typeof INVENTORY_MOVE_KINDS)[number];
 
-export const MOVE_KIND_LABEL: Record<InventoryMoveKind, string> = {
-  sale: "Sale",
-  receive: "Received",
-  waste: "Waste",
-  count: "Count",
-};
-
 export const WASTE_REASONS = ["dropped", "burnt", "expired", "remake", "other"] as const;
 export type WasteReason = (typeof WASTE_REASONS)[number];
 
