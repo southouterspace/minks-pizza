@@ -5,6 +5,7 @@ import { usePathname } from "next/navigation";
 import {
   CalendarClock,
   ClipboardList,
+  History,
   Settings,
   SlidersHorizontal,
   Users,
@@ -14,6 +15,7 @@ import { cn } from "@/lib/utils";
 
 const LINKS = [
   { href: "/admin", label: "Orders", exact: true, icon: ClipboardList },
+  { href: "/admin/orders", label: "History", exact: false, icon: History },
   { href: "/admin/menu", label: "Menu", exact: false, icon: UtensilsCrossed },
   {
     href: "/admin/modifiers",

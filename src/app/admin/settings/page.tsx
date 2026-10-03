@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import { eq } from "drizzle-orm";
 import { db, storeSettings, type DayHours } from "@/db";
 import { requireOperator } from "@/lib/auth";
+import { STORE_TIMEZONES } from "@/lib/hours";
 import { DAY_NAMES } from "@/lib/zoned";
 import {
   saveSettings,
@@ -273,6 +274,26 @@ export default async function SettingsPage({
 
         <FieldSet>
           <FieldLegend className="w-full border-b border-border pb-2 text-sm!">
+            Time zone
+          </FieldLegend>
+          <Field className="max-w-xs">
+            <FieldLabel htmlFor="s-timezone">Store time zone</FieldLabel>
+            <NativeSelect id="s-timezone" name="timezone" defaultValue={settings.timezone}>
+              {STORE_TIMEZONES.map((tz) => (
+                <NativeSelectOption key={tz.value} value={tz.value}>
+                  {tz.label} ({tz.value})
+                </NativeSelectOption>
+              ))}
+            </NativeSelect>
+            <FieldDescription>
+              Decides when the store&apos;s day starts for order stats, history
+              dates and promised times, and for every shift and payroll week.
+            </FieldDescription>
+          </Field>
+        </FieldSet>
+
+        <FieldSet>
+          <FieldLegend className="w-full border-b border-border pb-2 text-sm!">
             Ordering
           </FieldLegend>
           <div className="grid gap-4 sm:grid-cols-2">
@@ -422,17 +443,6 @@ export default async function SettingsPage({
           </FieldDescription>
           <Card>
             <div className="grid gap-4 px-4 sm:grid-cols-2">
-              <Field>
-                <FieldLabel htmlFor="s-tz">Store timezone</FieldLabel>
-                <NativeSelect id="s-tz" name="timezone" defaultValue={settings.timezone} className="w-full">
-                  {[...new Set([settings.timezone, ...Intl.supportedValuesOf("timeZone")])].map((tz) => (
-                    <NativeSelectOption key={tz} value={tz}>
-                      {tz.replaceAll("_", " ")}
-                    </NativeSelectOption>
-                  ))}
-                </NativeSelect>
-                <FieldDescription>Every shift, day and payroll week uses this clock.</FieldDescription>
-              </Field>
               <Field>
                 <FieldLabel htmlFor="s-week">Payroll week starts on</FieldLabel>
                 <NativeSelect id="s-week" name="weekStartsOn" defaultValue={String(settings.weekStartsOn)} className="w-full">

@@ -17,25 +17,22 @@ import { relations, sql } from "drizzle-orm";
 import { KITCHEN_STATIONS } from "../lib/kds";
 import {
   DEFAULT_STAFF_RULES,
-  DEFAULT_TIMEZONE,
   JOB_ROLES,
   TIME_AUDIT_ACTIONS,
   type AuditSnapshot,
   type StoredAvailability,
 } from "../lib/timeclock";
+import {
+  ORDER_EVENT_TYPES,
+  ORDER_STATUSES,
+  PAYMENT_METHODS,
+} from "../lib/order-workflow";
 
 // ---------------------------------------------------------------------------
 // Enums
 // ---------------------------------------------------------------------------
 
-export const orderStatusEnum = pgEnum("order_status", [
-  "new",
-  "confirmed",
-  "preparing",
-  "ready",
-  "completed",
-  "canceled",
-]);
+export const orderStatusEnum = pgEnum("order_status", ORDER_STATUSES);
 
 export const orderTypeEnum = pgEnum("order_type", ["pickup", "delivery"]);
 
@@ -45,6 +42,11 @@ export const orderTypeEnum = pgEnum("order_type", ["pickup", "delivery"]);
  * ticket for the expo but never hold an order back from "ready".
  */
 export const kitchenStationEnum = pgEnum("kitchen_station", KITCHEN_STATIONS);
+
+/** How an operator says the order was paid at the counter or door. */
+export const paymentMethodEnum = pgEnum("payment_method", PAYMENT_METHODS);
+
+export const orderEventTypeEnum = pgEnum("order_event_type", ORDER_EVENT_TYPES);
 
 export const paymentStatusEnum = pgEnum("payment_status", [
   "pending", // awaiting payment integration (Stripe) — v1 default
@@ -111,8 +113,8 @@ export const storeSettings = pgTable("store_settings", {
   kdsLateMinutes: integer("kds_late_minutes").notNull().default(15),
   /** Kitchen display: oven bake countdown for a pie (minutes). */
   kdsOvenMinutes: integer("kds_oven_minutes").notNull().default(7),
-  /** IANA zone. Every staff day and payroll week is computed in it. */
-  timezone: text("timezone").notNull().default(DEFAULT_TIMEZONE),
+  /** IANA zone that defines the store's day for stats, history and times. */
+  timezone: text("timezone").notNull().default("America/Chicago"),
   /** Payroll week start: 0 = Sunday … 6 = Saturday. */
   weekStartsOn: integer("week_starts_on").notNull().default(DEFAULT_STAFF_RULES.weekStartsOn),
   otWeeklyMinutes: integer("ot_weekly_minutes").notNull().default(DEFAULT_STAFF_RULES.otWeeklyMinutes),
@@ -255,6 +257,15 @@ export const orders = pgTable("orders", {
   paymentStatus: paymentStatusEnum("payment_status")
     .notNull()
     .default("pending"),
+  paymentMethod: paymentMethodEnum("payment_method"),
+  /**
+   * The ready time quoted to the customer: placedAt + prep minutes at
+   * checkout, pushed later by operators. Null on orders from before it existed.
+   */
+  promisedAt: timestamp("promised_at", { withTimezone: true }),
+  completedAt: timestamp("completed_at", { withTimezone: true }),
+  canceledAt: timestamp("canceled_at", { withTimezone: true }),
+  cancelReason: text("cancel_reason"),
   placedAt: timestamp("placed_at", { withTimezone: true })
     .notNull()
     .defaultNow(),
@@ -290,6 +301,30 @@ export const orderItems = pgTable("order_items", {
   /** Set when the item is finished (pies: out of the oven, cut and boxed). */
   doneAt: timestamp("done_at", { withTimezone: true }),
 });
+
+/** Append-only audit trail: one row per thing that happened to an order. */
+export const orderEvents = pgTable(
+  "order_events",
+  {
+    id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+    orderId: uuid("order_id")
+      .notNull()
+      .references(() => orders.id, { onDelete: "cascade" }),
+    type: orderEventTypeEnum("type").notNull(),
+    fromStatus: orderStatusEnum("from_status"),
+    toStatus: orderStatusEnum("to_status"),
+    /** Display name at the time: operator name, "Customer", or "Kitchen display · <name>". */
+    actor: text("actor").notNull(),
+    operatorId: integer("operator_id").references(() => operators.id, {
+      onDelete: "set null",
+    }),
+    note: text("note"),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (t) => [index("order_events_order_id_created_at_idx").on(t.orderId, t.createdAt)],
+);
 
 // ---------------------------------------------------------------------------
 // Staff: employees, schedule, time clock
@@ -494,6 +529,18 @@ export const itemModifierGroupsRelations = relations(
 
 export const ordersRelations = relations(orders, ({ many }) => ({
   items: many(orderItems),
+  events: many(orderEvents),
+}));
+
+export const orderEventsRelations = relations(orderEvents, ({ one }) => ({
+  order: one(orders, {
+    fields: [orderEvents.orderId],
+    references: [orders.id],
+  }),
+  operator: one(operators, {
+    fields: [orderEvents.operatorId],
+    references: [operators.id],
+  }),
 }));
 
 export const orderItemsRelations = relations(orderItems, ({ one }) => ({

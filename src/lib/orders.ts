@@ -1,4 +1,4 @@
-import { and, eq, gte, inArray, lt, ne, sql } from "drizzle-orm";
+import { eq, inArray } from "drizzle-orm";
 import {
   categories,
   db,
@@ -6,6 +6,7 @@ import {
   menuItems,
   modifierGroups,
   modifiers,
+  orderEvents,
   orderItems,
   orders,
   storeSettings,
@@ -14,7 +15,6 @@ import {
 import type { KitchenStation } from "@/lib/kds";
 import { taxFromBps } from "@/lib/money";
 import type { CheckoutInput } from "@/lib/validation";
-import type { LocalDate } from "@/lib/zoned";
 
 export type PricedLine = {
   itemId: number;
@@ -204,51 +204,58 @@ export async function createOrder(input: CheckoutInput) {
     );
   }
 
-  const [order] = await db
-    .insert(orders)
-    .values({
-      orderType: input.orderType,
-      customerName: input.customerName,
-      customerPhone: input.customerPhone,
-      customerEmail: input.customerEmail || null,
-      addressLine1: input.addressLine1 || null,
-      addressLine2: input.addressLine2 || null,
-      city: input.city || null,
-      zip: input.zip || null,
-      orderNotes: input.orderNotes || null,
-      subtotalCents: cart.subtotalCents,
-      taxCents: cart.taxCents,
-      deliveryFeeCents: cart.deliveryFeeCents,
-      tipCents: input.tipCents,
-      totalCents: cart.totalCents + input.tipCents,
-      paymentStatus: "pending",
-    })
-    .returning();
+  const placedAt = new Date();
+  const prepMinutes =
+    input.orderType === "delivery" ? settings.deliveryPrepMinutes : settings.pickupPrepMinutes;
 
-  await db.insert(orderItems).values(
-    cart.lines.map((l) => ({
-      orderId: order.id,
-      menuItemId: l.itemId,
-      itemName: l.itemName,
-      quantity: l.quantity,
-      unitPriceCents: l.unitPriceCents,
-      lineTotalCents: l.lineTotalCents,
-      modifiers: l.modifiers,
-      notes: l.notes || null,
-      station: l.station,
-    })),
-  );
+  // The id is minted here so the order, its lines and its "placed" event go
+  // in as one transaction: a failure can't leave an order with no items.
+  const orderId = crypto.randomUUID();
+  const [[order]] = await db.batch([
+    db
+      .insert(orders)
+      .values({
+        id: orderId,
+        placedAt,
+        promisedAt: new Date(placedAt.getTime() + prepMinutes * 60_000),
+        orderType: input.orderType,
+        customerName: input.customerName,
+        customerPhone: input.customerPhone,
+        customerEmail: input.customerEmail || null,
+        addressLine1: input.addressLine1 || null,
+        addressLine2: input.addressLine2 || null,
+        city: input.city || null,
+        zip: input.zip || null,
+        orderNotes: input.orderNotes || null,
+        subtotalCents: cart.subtotalCents,
+        taxCents: cart.taxCents,
+        deliveryFeeCents: cart.deliveryFeeCents,
+        tipCents: input.tipCents,
+        totalCents: cart.totalCents + input.tipCents,
+        paymentStatus: "pending",
+      })
+      .returning(),
+    db.insert(orderEvents).values({
+      orderId,
+      type: "placed",
+      toStatus: "new",
+      actor: "Customer",
+      createdAt: placedAt,
+    }),
+    db.insert(orderItems).values(
+      cart.lines.map((l) => ({
+        orderId,
+        menuItemId: l.itemId,
+        itemName: l.itemName,
+        quantity: l.quantity,
+        unitPriceCents: l.unitPriceCents,
+        lineTotalCents: l.lineTotalCents,
+        modifiers: l.modifiers,
+        notes: l.notes || null,
+        station: l.station,
+      })),
+    ),
+  ]);
 
   return order;
-}
-
-/** Non-canceled order subtotals per store-local date, for [from, to). */
-export async function salesByDate(from: Date, to: Date, tz: string): Promise<Map<LocalDate, number>> {
-  const day = sql<string>`to_char(${orders.placedAt} at time zone ${tz}, 'YYYY-MM-DD')`;
-  const rows = await db
-    .select({ day, cents: sql<number>`sum(${orders.subtotalCents})::int` })
-    .from(orders)
-    .where(and(ne(orders.status, "canceled"), gte(orders.placedAt, from), lt(orders.placedAt, to)))
-    .groupBy(sql`1`);
-  return new Map(rows.map((r) => [r.day, r.cents]));
 }

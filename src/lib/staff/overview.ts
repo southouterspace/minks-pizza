@@ -1,7 +1,7 @@
 import "server-only";
 import { and, asc, eq, gte, isNotNull, isNull, lt, sql } from "drizzle-orm";
 import { db, employees, shifts, timeEntries, timeOffRequests } from "@/db";
-import { salesByDate } from "@/lib/orders";
+import { salesByDate } from "@/lib/order-queries";
 import {
   atOvertimeRisk,
   ENTRY_FLAGS,
