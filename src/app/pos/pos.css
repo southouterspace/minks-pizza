@@ -1,0 +1,27 @@
+/* Receipts and fallback kitchen tickets print from a portal mounted directly
+ * under <body>. Everything else is hidden on paper; the slip is sized for
+ * 80mm thermal rolls and reads fine on A4/Letter too. */
+#pos-print {
+  display: none;
+}
+
+@media print {
+  @page {
+    size: 80mm auto;
+    margin: 3mm;
+  }
+
+  body > *:not(#pos-print) {
+    display: none !important;
+  }
+
+  #pos-print {
+    display: block;
+    width: 74mm;
+    color: #000;
+    background: #fff;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 11pt;
+    line-height: 1.3;
+  }
+}

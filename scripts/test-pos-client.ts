@@ -39,7 +39,7 @@ const cheese: MenuItem = {
 };
 const soda: MenuItem = { id: 2, name: "Soda", description: null, basePriceCents: 399, isAvailable: true, station: "counter", groups: [] };
 const policy: PricingPolicy = { halfToppingRule: "average", extraToppingBps: 20_000 };
-const [pep, mush, basil] = cheese.groups[0].modifiers;
+const [pep, , basil] = cheese.groups[0].modifiers;
 
 check(
   "a fresh pizza starts with every default",
