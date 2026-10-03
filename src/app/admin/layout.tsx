@@ -4,6 +4,7 @@ import { eq } from "drizzle-orm";
 import { ChefHat, ExternalLink } from "lucide-react";
 import { db, storeSettings } from "@/db";
 import { getCurrentOperator } from "@/lib/auth";
+import { InventoryBanner } from "@/components/admin/inventory-banner";
 import { AdminNavLinks } from "@/components/admin/nav-links";
 import { StoreMark } from "@/components/store-mark";
 import { Button } from "@/components/ui/button";
@@ -125,6 +126,7 @@ export default async function AdminLayout({ children }: LayoutProps<"/admin">) {
         </header>
 
         <main className="mx-auto w-full max-w-4xl flex-1 px-4 py-6 sm:px-6 lg:py-8 has-[[data-wide]]:max-w-6xl print:max-w-none print:p-0">
+          <InventoryBanner />
           {children}
         </main>
       </div>
