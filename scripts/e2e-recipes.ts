@@ -64,7 +64,6 @@ async function signIn(browser: Browser, width: number): Promise<Page> {
   return page;
 }
 
-/** Desktop and 375 px shots of the same page, and whether the phone width scrolls sideways. */
 async function shoot(desktop: Page, phone: Page, path: string, name: string) {
   for (const [page, suffix] of [[desktop, "desktop"], [phone, "375"]] as const) {
     await page.goto(`${BASE}${path}`, { waitUntil: "networkidle" });
@@ -224,6 +223,10 @@ async function itemRecipeFlow(page: Page, phone: Page) {
   const mozz = (await ingredientByName("Whole-milk mozzarella")).id;
   const largeMozz = and(eq(recipeLines.menuItemId, cheese), eq(recipeLines.sizeModifierId, large), eq(recipeLines.ingredientId, mozz));
   await db.update(recipeLines).set({ qtyMilli: 170_100 }).where(largeMozz);
+  // The plate-cost literals below assume seeded prices; other e2e scripts post deliveries that move them.
+  for (const [name, unitCostMillicents] of [["Dough ball", 60_000], ["Pizza sauce", 265], ["Whole-milk mozzarella", 882]] as const) {
+    await db.update(ingredients).set({ unitCostMillicents }).where(eq(ingredients.name, name));
+  }
 
   await page.goto(`${BASE}/admin/menu/items/${cheese}`, { waitUntil: "networkidle" });
   const cell = page.getByLabel('Whole-milk mozzarella Large 14"');
