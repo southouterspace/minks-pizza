@@ -31,6 +31,7 @@ import {
   type KdsSnapshot,
   type KdsView,
 } from "@/lib/kds";
+import { formatStoreTime } from "@/lib/store-time";
 import { cn } from "@/lib/utils";
 import { SizeCrust, Ticket, TypeChip } from "./ticket";
 
@@ -97,7 +98,7 @@ function chime(ctx: AudioContext) {
 
 // --- component ---------------------------------------------------------------
 
-export function KitchenDisplay({ initial, storeName }: { initial: KdsSnapshot; storeName: string }) {
+export function KitchenDisplay({ initial, storeName, timeZone }: { initial: KdsSnapshot; storeName: string; timeZone: string }) {
   const router = useRouter();
   const [snapshot, setSnapshot] = useState(initial);
   const [offsetMs, setOffsetMs] = useState(() => Date.parse(initial.serverNow) - Date.now());
@@ -441,12 +442,12 @@ export function KitchenDisplay({ initial, storeName }: { initial: KdsSnapshot; s
           >
             <Maximize />
           </IconButton>
-          <span className="flex items-center gap-1.5 px-2 text-lg font-bold tabular-nums">
+          <span className="flex items-center gap-1.5 px-2 text-lg font-bold tabular-nums" data-testid="kds-clock">
             <span
               className={cn("size-2 rounded-full", stale ? "bg-red-500" : "bg-emerald-400")}
               aria-hidden="true"
             />
-            {new Date(screenNow).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}
+            {formatStoreTime(new Date(screenNow), timeZone)}
           </span>
         </div>
       </header>
@@ -456,7 +457,7 @@ export function KitchenDisplay({ initial, storeName }: { initial: KdsSnapshot; s
         <div role="alert" className="flex shrink-0 items-center gap-2 bg-red-600 px-4 py-2 font-bold">
           <WifiOff className="size-5" aria-hidden="true" />
           Connection lost — showing tickets as of{" "}
-          {new Date(lastSync + offsetMs).toLocaleTimeString([], { hour: "numeric", minute: "2-digit", second: "2-digit" })}
+          {new Date(lastSync + offsetMs).toLocaleTimeString("en-US", { timeZone, hour: "numeric", minute: "2-digit", second: "2-digit" })}
           . Retrying… Check the wifi or call orders in by phone.
         </div>
       ) : null}

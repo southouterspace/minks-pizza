@@ -4,6 +4,7 @@ import { db, employees, storeSettings } from "@/db";
 import { requireOperator } from "@/lib/auth";
 import { getBoard, getPosMenu } from "@/lib/orders-server";
 import { getStaff } from "@/lib/staff";
+import { DEFAULT_TIMEZONE } from "@/lib/store-time";
 import { PosTerminal } from "@/components/pos/terminal";
 import "./pos.css";
 
@@ -31,7 +32,7 @@ export default async function PosPage({ searchParams }: PageProps<"/pos">) {
       initialMenu={menu}
       initialBoard={board}
       initialStaff={staff?.actor ?? null}
-      store={{ name: settings?.name ?? "Mink's Pizza", phone: settings?.phone ?? null, address: address || null }}
+      store={{ name: settings?.name ?? "Mink's Pizza", phone: settings?.phone ?? null, address: address || null, timeZone: settings?.timezone ?? DEFAULT_TIMEZONE }}
       lockSeconds={settings?.posLockSeconds ?? 120}
       names={Object.fromEntries(staffNames.map((e) => [e.id, e.name]))}
       deepLinkOrderId={typeof order === "string" && /^[0-9a-f-]{36}$/i.test(order) ? order : null}

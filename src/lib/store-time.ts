@@ -52,9 +52,9 @@ function offsetMs(at: Date, tz: string): number {
   return Date.UTC(w.y, w.mo - 1, w.d, w.h, w.mi, w.s) - Math.floor(at.getTime() / 1000) * 1000;
 }
 
-function zonedMidnight(date: StoreDate, tz: string): Date {
+function zonedWallTime(date: StoreDate, minutes: number, tz: string): Date {
   const [y, mo, d] = date.split("-").map(Number);
-  const guess = Date.UTC(y, mo - 1, d);
+  const guess = Date.UTC(y, mo - 1, d, 0, minutes);
   // Second pass: the offset at the guess can differ from the offset at the
   // answer when a DST change falls between them.
   const first = guess - offsetMs(new Date(guess), tz);
@@ -68,7 +68,21 @@ export function addDays(date: StoreDate, days: number): StoreDate {
 
 /** [store midnight, next store midnight) as instants. */
 export function storeDayRange(date: StoreDate, tz: string): { from: Date; to: Date } {
-  return { from: zonedMidnight(date, tz), to: zonedMidnight(addDays(date, 1), tz) };
+  return { from: zonedWallTime(date, 0, tz), to: zonedWallTime(addDays(date, 1), 0, tz) };
+}
+
+/** "18:30": the store's wall clock at `at`, as a time input's value. */
+export function storeHhmm(at: Date | string, tz: string): string {
+  const w = wallClock(new Date(at), tz);
+  return `${String(w.h).padStart(2, "0")}:${String(w.mi).padStart(2, "0")}`;
+}
+
+/** The next instant, from `now` on, when the store's clock reads `hhmm`: today, or tomorrow once it has passed. */
+export function nextStoreTime(hhmm: string, now: Date, tz: string): Date {
+  const [h, m] = hhmm.split(":").map(Number);
+  const today = storeDateOf(now, tz);
+  const at = zonedWallTime(today, h * 60 + m, tz);
+  return at.getTime() < now.getTime() ? zonedWallTime(addDays(today, 1), h * 60 + m, tz) : at;
 }
 
 export function storeDateOf(at: Date, tz: string): StoreDate {

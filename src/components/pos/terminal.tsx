@@ -23,6 +23,7 @@ import { defaultSelections, needsBuilder } from "@/lib/pos-client/builder";
 import { draftLine, draftReducer, draftTotals, emptyDraft, findItem, isPhoneFirst, toSubmitRequest, type Draft, type DraftLine, type Mode } from "@/lib/pos-client/draft";
 import { formatCents } from "@/lib/money";
 import type { MenuItem, Selection } from "@/lib/pricing";
+import { formatStoreTime } from "@/lib/store-time";
 import { cn } from "@/lib/utils";
 import { OrdersBoard, orderLabel } from "./board";
 import { CallerPanel } from "./caller-panel";
@@ -333,7 +334,7 @@ export function PosTerminal({
         return { ok: true, order: out.order };
       case "queued":
         notify.error("NOT SENT: printing a paper ticket. It will send when the connection is back.", { duration: 10_000 });
-        print(<FallbackTicket req={req} lines={slipLines(req, menu)} at={Date.now()} />);
+        print(<FallbackTicket req={req} lines={slipLines(req, menu)} at={Date.now()} timeZone={store.timeZone} />);
         setOnline(false);
         return { ok: true, order: null };
       case "locked":
@@ -449,7 +450,7 @@ export function PosTerminal({
   if (!pos) {
     return (
       <>
-        <LockScreen storeName={store.name} lastName={lastName} onPin={unlock} />
+        <LockScreen storeName={store.name} timeZone={store.timeZone} lastName={lastName} onPin={unlock} />
         {portal}
       </>
     );
@@ -510,7 +511,7 @@ export function PosTerminal({
             </DropdownMenuTrigger>
             <DropdownMenuContent align="end" className="w-60">
               <DropdownMenuGroup>
-              <DropdownMenuLabel>{board?.shift ? `Shift open since ${new Date(board.shift.openedAt).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}` : "No open shift"}</DropdownMenuLabel>
+              <DropdownMenuLabel>{board?.shift ? `Shift open since ${formatStoreTime(board.shift.openedAt, store.timeZone)}` : "No open shift"}</DropdownMenuLabel>
               {board?.shift ? (
                 <>
                   <DropdownMenuItem onClick={() => setDialog({ kind: "drawer", drawer: "no_sale" })}>Open drawer (no sale)</DropdownMenuItem>
@@ -632,7 +633,8 @@ export function PosTerminal({
           queue={queue}
           online={online}
           lastSync={lastSync}
-          onPrint={(e) => print(<FallbackTicket req={e.request} lines={slipLines(e.request, menu)} at={e.createdAt} />)}
+          timeZone={store.timeZone}
+          onPrint={(e) => print(<FallbackTicket req={e.request} lines={slipLines(e.request, menu)} at={e.createdAt} timeZone={store.timeZone} />)}
           onRetry={async (e) => {
             const out = await outbox.retry(e.orderId);
             if (out?.kind === "sent") notify.success(`#${out.order.number} sent`);
@@ -667,6 +669,7 @@ function OutboxDialog({
   queue,
   online,
   lastSync,
+  timeZone,
   onPrint,
   onRetry,
   onDiscard,
@@ -675,6 +678,7 @@ function OutboxDialog({
   queue: outbox.OutboxEntry[];
   online: boolean;
   lastSync: number;
+  timeZone: string;
   onPrint: (e: outbox.OutboxEntry) => void;
   onRetry: (e: outbox.OutboxEntry) => void;
   onDiscard: (e: outbox.OutboxEntry) => void;
@@ -688,7 +692,7 @@ function OutboxDialog({
             <ClipboardList className="size-5" /> Connection and unsent orders
           </DialogTitle>
           <DialogDescription>
-            {online ? "Connected" : "Not connected"}. Last sync {new Date(lastSync).toLocaleTimeString()}. Orders that fail to send are kept on this
+            {online ? "Connected" : "Not connected"}. Last sync {formatStoreTime(new Date(lastSync), timeZone)}. Orders that fail to send are kept on this
             device and retried automatically. While the internet is down the kitchen screen is down too, so hand the printed paper ticket to the
             kitchen. Payments, voids and approvals on existing orders need the connection.
           </DialogDescription>

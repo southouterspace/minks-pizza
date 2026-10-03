@@ -11,9 +11,10 @@
 import { chromium, type Page } from "playwright";
 import { eq } from "drizzle-orm";
 import { randomUUID } from "node:crypto";
-import { db, employees, menuItems, modifierGroups, modifiers, operators, orderItems, orders } from "../src/db";
+import { db, employees, menuItems, modifierGroups, modifiers, operators, orderItems, orders, storeSettings } from "../src/db";
 import { mutateOrder, submitOrder } from "../src/lib/orders-server";
 import type { Fulfillment } from "../src/lib/orders";
+import { formatStoreTime } from "../src/lib/store-time";
 
 /** Places an online order through the same seam the storefront uses. */
 async function createOrder(o: {
@@ -158,7 +159,8 @@ async function main() {
   const browser = await chromium.launch({
     executablePath: process.env.CHROMIUM_PATH ?? "/opt/pw-browsers/chromium",
   });
-  const page = await browser.newPage({ viewport: { width: 1366, height: 900 } });
+  // Neither the server's zone (UTC) nor the store's, so a wrong zone shows.
+  const page = await browser.newPage({ viewport: { width: 1366, height: 900 }, timezoneId: "Asia/Tokyo" });
   const shot = (name: string) => page.screenshot({ path: `${SHOT_DIR}/${name}.png` });
   const tab = (name: string) => page.getByRole("button", { name: new RegExp(`^${name}\\s*\\d+$`) });
   const ticketA = page.getByTestId(`kds-ticket-${a.orderNumber}`);
@@ -171,6 +173,13 @@ async function main() {
   // --- All view: both tickets, pizza-first layout --------------------------
   await ticketA.waitFor();
   check("ticket A on the All screen", await ticketA.isVisible());
+  const [{ timezone: tz }] = await db.select({ timezone: storeSettings.timezone }).from(storeSettings).where(eq(storeSettings.id, 1));
+  const clock = await page.getByTestId("kds-clock").innerText();
+  check(
+    "KDS clock reads the store's time",
+    [Date.now(), Date.now() - 60_000].some((t) => formatStoreTime(new Date(t), tz) === clock.trim()),
+    `${clock} vs ${formatStoreTime(new Date(), tz)} in ${tz}`,
+  );
   check("ticket B on the All screen", await ticketB.isVisible());
   const aText = await ticketA.innerText();
   check(

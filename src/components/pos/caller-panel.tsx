@@ -7,6 +7,7 @@ import type { CustomerLookup } from "@/lib/orders-server";
 import { allItems, draftLine, lineSummary, type Draft, type DraftAction } from "@/lib/pos-client/draft";
 import { formatCents } from "@/lib/money";
 import { reorderLines } from "@/lib/pricing";
+import { formatStoreDateTime } from "@/lib/store-time";
 import { cn } from "@/lib/utils";
 import { usePos } from "./context";
 import { Tap } from "./touch";
@@ -20,7 +21,7 @@ type Lookup = { phone: string; state: "loading" } | { phone: string; state: "don
  * last orders with one-tap Reorder, re-priced at today's menu.
  */
 export function CallerPanel({ draft, dispatch, onContinue }: { draft: Draft; dispatch: Dispatch<DraftAction>; onContinue: () => void }) {
-  const { menu } = usePos();
+  const { menu, store } = usePos();
   const [lookup, setLookup] = useState<Lookup | null>(null);
   const [unavailable, setUnavailable] = useState<{ name: string; reason: string }[]>([]);
   const phoneInput = useRef<HTMLInputElement>(null);
@@ -179,7 +180,7 @@ export function CallerPanel({ draft, dispatch, onContinue }: { draft: Draft; dis
             <div key={o.id} className="flex items-center gap-3 rounded-xl border bg-card p-3" data-testid="recent-order">
               <div className="min-w-0 flex-1">
                 <p className="text-sm text-muted-foreground">
-                  #{o.number} · {new Date(o.placedAt).toLocaleDateString([], { month: "short", day: "numeric" })} · {formatCents(o.totals.totalCents)}
+                  #{o.number} · {formatStoreDateTime(o.placedAt, store.timeZone)} · {formatCents(o.totals.totalCents)}
                 </p>
                 <p className="truncate font-medium">
                   {o.lines

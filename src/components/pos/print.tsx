@@ -7,6 +7,7 @@ import type { PosMenu, SubmitOrderRequest } from "@/lib/orders-server";
 import { findItem, lineSummary } from "@/lib/pos-client/draft";
 import { formatCents } from "@/lib/money";
 import { priceLine } from "@/lib/pricing";
+import { formatStoreDateTime, formatStoreTime } from "@/lib/store-time";
 import type { StoreInfo } from "./context";
 
 export function usePrinter() {
@@ -33,9 +34,6 @@ function Row({ left, right, bold }: { left: ReactNode; right: ReactNode; bold?: 
     </div>
   );
 }
-
-const time = (iso: string) =>
-  new Date(iso).toLocaleString([], { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
 
 function Fulfillment({ order }: { order: Pick<OrderView, "fulfillment" | "customer" | "notes"> }) {
   const f = order.fulfillment;
@@ -75,7 +73,7 @@ export function Receipt({ order, store }: { order: OrderView; store: StoreInfo }
       </div>
       <Rule />
       <Row left={<b>Order #{order.number}</b>} right={CHANNEL_LABEL[order.channel]} />
-      <div>{time(order.placedAt)}</div>
+      <div>{formatStoreDateTime(order.placedAt, store.timeZone)}</div>
       <Fulfillment order={order} />
       <Rule />
       {live.map((l) => (
@@ -135,14 +133,14 @@ export function slipLines(req: SubmitOrderRequest, menu: PosMenu): SlipLine[] {
  * no order number (the server assigns those), so it carries the last six
  * characters of the client id, which the screen shows next to the order.
  */
-export function FallbackTicket({ req, lines, at }: { req: SubmitOrderRequest; lines: SlipLine[]; at: number }) {
+export function FallbackTicket({ req, lines, at, timeZone }: { req: SubmitOrderRequest; lines: SlipLine[]; at: number; timeZone: string }) {
   const f = req.fulfillment;
   return (
     <div>
       <div style={{ fontSize: "16pt", fontWeight: 800, textAlign: "center" }}>NOT SENT · PAPER TICKET</div>
       <div style={{ textAlign: "center" }}>Kitchen screen did not get this order</div>
       <Rule />
-      <Row left={<b>ID {req.orderId.slice(-6).toUpperCase()}</b>} right={new Date(at).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })} />
+      <Row left={<b>ID {req.orderId.slice(-6).toUpperCase()}</b>} right={formatStoreTime(new Date(at), timeZone)} />
       <Fulfillment
         order={{
           fulfillment: f,
@@ -150,7 +148,7 @@ export function FallbackTicket({ req, lines, at }: { req: SubmitOrderRequest; li
           notes: req.notes,
         }}
       />
-      {req.fire.kind === "at" && <div style={{ fontWeight: 700 }}>START AT {new Date(req.fire.at).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}</div>}
+      {req.fire.kind === "at" && <div style={{ fontWeight: 700 }}>START AT {formatStoreTime(req.fire.at, timeZone)}</div>}
       {req.fire.kind === "hold" && <div style={{ fontWeight: 700 }}>HOLD · DO NOT START</div>}
       <Rule />
       {lines.map((l, i) => (

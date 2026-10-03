@@ -5,6 +5,7 @@ import { Search } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { channelLabel, dueCents, PAYMENT_LABEL, paymentState, type KitchenStatus, type OrderView } from "@/lib/orders";
 import { formatCents } from "@/lib/money";
+import { formatStoreTime } from "@/lib/store-time";
 import { cn } from "@/lib/utils";
 import { usePos } from "./context";
 import { Segmented } from "./touch";
@@ -50,14 +51,13 @@ export function PaymentChip({ order }: { order: OrderView }) {
   );
 }
 
-const clock = (iso: string) => new Date(iso).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
-
 export function orderLabel(o: OrderView): string {
   return o.fulfillment.kind === "dine_in" ? `Table ${o.fulfillment.table}` : o.customer.name;
 }
 
 export function OrdersBoard() {
-  const { board, openOrder } = usePos();
+  const { board, openOrder, store } = usePos();
+  const clock = (iso: string) => formatStoreTime(iso, store.timeZone);
   const [lane, setLane] = useState<Lane>("all");
   const [query, setQuery] = useState("");
   const orders = useMemo(() => board?.openOrders ?? [], [board]);

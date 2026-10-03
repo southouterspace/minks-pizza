@@ -3,6 +3,7 @@ import { eq } from "drizzle-orm";
 import { db, storeSettings } from "@/db";
 import { requireOperator } from "@/lib/auth";
 import { getKdsSnapshot } from "@/lib/kds-server";
+import { DEFAULT_TIMEZONE } from "@/lib/store-time";
 import { KitchenDisplay } from "@/components/kitchen/kitchen-display";
 
 export const dynamic = "force-dynamic";
@@ -15,7 +16,7 @@ export default async function KitchenPage() {
   await requireOperator();
   const [snapshot, [settings]] = await Promise.all([
     getKdsSnapshot(),
-    db.select({ name: storeSettings.name }).from(storeSettings).where(eq(storeSettings.id, 1)),
+    db.select({ name: storeSettings.name, timezone: storeSettings.timezone }).from(storeSettings).where(eq(storeSettings.id, 1)),
   ]);
-  return <KitchenDisplay initial={snapshot} storeName={settings?.name ?? "Mink's Pizza"} />;
+  return <KitchenDisplay initial={snapshot} storeName={settings?.name ?? "Mink's Pizza"} timeZone={settings?.timezone ?? DEFAULT_TIMEZONE} />;
 }

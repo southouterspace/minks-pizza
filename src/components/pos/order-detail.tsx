@@ -7,6 +7,7 @@ import { mutateOrderAction } from "@/app/pos/actions";
 import { channelLabel, dueCents, orderHistory, type LineView, type OrderMutation, type OrderView } from "@/lib/orders";
 import { lineSummary } from "@/lib/pos-client/draft";
 import { formatCents } from "@/lib/money";
+import { formatStoreTime } from "@/lib/store-time";
 import { cn } from "@/lib/utils";
 import { PaymentChip, StatusChip, orderLabel } from "./board";
 import { usePos } from "./context";
@@ -18,8 +19,6 @@ const VOID_REASONS = ["Customer changed mind", "Rang in wrong", "Made wrong", "T
 const COMP_REASONS = ["Made wrong", "Long wait", "Regular / goodwill", "Staff meal"];
 const DISCOUNT_REASONS = ["Coupon", "Manager special", "Long wait", "Employee"];
 const REFUND_REASONS = ["Order wrong", "Never received", "Overcharged", "Canceled"];
-
-const clock = (iso: string) => new Date(iso).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
 
 /**
  * One order, any channel: collect payment, add to the check, fire held
@@ -40,7 +39,8 @@ export function OrderDetail({
   onAddItems: (o: OrderView) => void;
   onReceipt: (o: OrderView) => void;
 }) {
-  const { act } = usePos();
+  const { act, store } = usePos();
+  const clock = (iso: string) => formatStoreTime(iso, store.timeZone);
   const [prompt, setPrompt] = useState<PromptSpec | null>(null);
   const [paying, setPaying] = useState(false);
   const [splitting, setSplitting] = useState<Set<string> | null>(null);

@@ -4,25 +4,10 @@ import type { Dispatch } from "react";
 import { Clock, Copy, Minus, Pencil, Plus, Trash2, X } from "lucide-react";
 import { draftProblem, draftTotals, isPhoneFirst, lineSummary, MODES, type Draft, type DraftAction, type DraftLine, type Mode } from "@/lib/pos-client/draft";
 import { formatCents } from "@/lib/money";
+import { formatStoreTime, nextStoreTime, storeHhmm } from "@/lib/store-time";
 import { cn } from "@/lib/utils";
 import { usePos } from "./context";
 import { Segmented, Tap } from "./touch";
-
-const timeOf = (d: Date) => d.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
-
-/** "18:30" today (or tomorrow if already past) as an ISO instant. */
-function laterIso(hhmm: string): string {
-  const [h, m] = hhmm.split(":").map(Number);
-  const d = new Date();
-  d.setHours(h, m, 0, 0);
-  if (d.getTime() < Date.now()) d.setDate(d.getDate() + 1);
-  return d.toISOString();
-}
-
-const hhmmOf = (iso: string) => {
-  const d = new Date(iso);
-  return `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
-};
 
 export function OrderPanel({
   draft,
@@ -41,7 +26,8 @@ export function OrderPanel({
   onSend: () => void;
   onPay: () => void;
 }) {
-  const { menu, board, now } = usePos();
+  const { menu, board, now, store } = usePos();
+  const timeOf = (at: Date) => formatStoreTime(at, store.timeZone);
   const totals = draftTotals(draft, menu);
   const problem = draftProblem(draft);
   const quote = draft.mode === "delivery" ? board?.quote.deliveryMinutes : board?.quote.pickupMinutes;
@@ -160,8 +146,8 @@ export function OrderPanel({
               <input
                 type="time"
                 aria-label="Ready at"
-                value={hhmmOf(draft.schedule.readyAt)}
-                onChange={(e) => e.target.value && dispatch({ type: "schedule", schedule: { kind: "later", readyAt: laterIso(e.target.value) } })}
+                value={storeHhmm(draft.schedule.readyAt, store.timeZone)}
+                onChange={(e) => e.target.value && dispatch({ type: "schedule", schedule: { kind: "later", readyAt: nextStoreTime(e.target.value, new Date(), store.timeZone).toISOString() } })}
                 className="h-11 min-w-0 flex-1 rounded-lg border bg-background px-2 text-base"
               />
             ) : (

@@ -8,6 +8,8 @@ export type StoreInfo = {
   name: string;
   phone: string | null;
   address: string | null;
+  /** IANA zone every time on the terminal, its tickets and its receipts is shown in. */
+  timeZone: string;
 };
 
 /** What every action result looks like on the wire, after `act` catches network errors. */

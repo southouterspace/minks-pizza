@@ -1,10 +1,11 @@
 /**
  * Counter POS e2e against a running dev server and its database: PIN unlock,
  * a walk-in half-and-half paid in cash, a returning caller's delivery
- * reordered for later, collecting on an online order, a dine-in check split
- * three ways, a cashier void after send approved by a manager (and seen as
- * VOID on the KDS), a discount over the threshold, an order rung in while
- * offline and replayed once, and a shift opened and closed with over/short.
+ * reordered for later in the store's timezone, collecting on an online order,
+ * a dine-in check split three ways, a cashier void after send approved by a
+ * manager (and seen as VOID on the KDS), a discount over the threshold, an
+ * order rung in while offline and replayed once, and a shift opened and
+ * closed with over/short.
  * Asserts what the screen shows and what the database recorded.
  *
  * Run: npx tsx --env-file=.env.local scripts/e2e-pos.ts
@@ -19,6 +20,7 @@ import { randomUUID } from "node:crypto";
 import { adjustments, customers, db, drawerEvents, menuItems, modifierGroups, modifiers, orderItems, orders, pinAttempts, shifts, storeSettings, tenders } from "../src/db";
 import type { KdsSnapshot } from "../src/lib/kds";
 import { normalizePhone, submitOrder } from "../src/lib/orders-server";
+import { formatStoreDateTime, formatStoreTime } from "../src/lib/store-time";
 
 const BASE = process.env.E2E_BASE_URL ?? "http://localhost:3000";
 const SHOT_DIR = process.env.E2E_SHOT_DIR ?? "/tmp";
@@ -142,14 +144,16 @@ async function setup() {
     { kind: "online" },
   );
   if (!online.ok) throw new Error(`online order rejected: ${JSON.stringify(online)}`);
-  return { online: online.order };
+  return { online: online.order, tz: settings.timezone };
 }
 
 async function main() {
-  const { online } = await setup();
+  const { online, tz } = await setup();
 
   const browser = await chromium.launch({ executablePath: process.env.CHROMIUM_PATH ?? "/opt/pw-browsers/chromium" });
-  const context = await browser.newContext({ viewport: { width: 1024, height: 768 } });
+  // A browser zone that is neither the server's (UTC) nor the store's, so a
+  // time formatted in the wrong zone can't pass by accident.
+  const context = await browser.newContext({ viewport: { width: 1024, height: 768 }, timezoneId: "Asia/Tokyo" });
   // Count print dialogs instead of opening them.
   await context.addInitScript(() => {
     (window as unknown as { __prints: number }).__prints = 0;
@@ -273,6 +277,11 @@ async function main() {
     phoneOrder && delivery.status === "held" && delivery.fireAt !== null && delivery.orderType === "delivery" && delivery.addressLine1 === "42 Oak Lane" && delivery.deliveryFeeCents >= 0,
     JSON.stringify({ status: delivery.status, fireAt: delivery.fireAt, type: delivery.orderType }),
   );
+  check(
+    "Later 23:45 means 11:45 PM on the store's clock, within the next day",
+    delivery.promisedAt !== null && formatStoreTime(delivery.promisedAt, tz) === "11:45 PM" && delivery.promisedAt.getTime() - Date.now() < 86_400_000,
+    `${delivery.promisedAt?.toISOString()} in ${tz}`,
+  );
   const kds = (await (await context.request.get(`${BASE}/api/kds`)).json()) as KdsSnapshot;
   check("scheduled delivery is not on the KDS", !kds.line.some((o) => o.id === delivery.id));
   await db.update(menuItems).set({ isAvailable: true }).where(eq(menuItems.name, "Caesar Salad"));
@@ -281,7 +290,9 @@ async function main() {
   await page.getByTestId("tab-board").click();
   await page.getByTestId("board").waitFor();
   await page.locator(`[data-order="${delivery.orderNumber}"]`).waitFor();
-  check("board shows the held delivery in the scheduled lane", (await page.locator(`[data-order="${delivery.orderNumber}"]`).innerText()).includes("HELD"));
+  const heldRow = await page.locator(`[data-order="${delivery.orderNumber}"]`).innerText();
+  check("board shows the held delivery in the scheduled lane", heldRow.includes("HELD"));
+  check("board shows the fire time in the store's zone", heldRow.includes(`fires ${formatStoreTime(delivery.fireAt!, tz)}`), heldRow.replace(/\n/g, " | "));
   await page.locator(`[data-order="${online.number}"]`).waitFor();
   await shot("08-board");
   await page.getByLabel("Search open orders").fill("Olive");
@@ -375,6 +386,11 @@ async function main() {
   check("$6 discount stored with the manager's approval", discounts.length === 1 && discounts[0].approvedBy === 1);
   await page.getByRole("button", { name: "Log" }).click();
   const log = await page.getByTestId("activity-log").innerText();
+  check(
+    "activity log shows the store's time",
+    log.startsWith(`${formatStoreTime(dine.placedAt, tz)} Placed (`),
+    log.split("\n")[0],
+  );
   check("activity log names who voided and who approved", /Voided 2 × Garlic Knots.*Casey Cashier · approved by Morgan Manager/.test(log.replace(/\n/g, " ")), log.replace(/\n/g, " | "));
   await shot("11-order-detail");
 
@@ -424,7 +440,9 @@ async function main() {
   await page.getByRole("button", { name: "Receipt" }).click();
   await page.waitForTimeout(300);
   check("reprint sends a receipt to the printer", (await prints()) === beforeReceipt + 1);
-  check("receipt shows the order and the discount", /Order #\d+[\s\S]*Discounts/.test(await page.locator("#pos-print").innerText()));
+  const receiptText = await page.locator("#pos-print").innerText();
+  check("receipt shows the order and the discount", /Order #\d+[\s\S]*Discounts/.test(receiptText));
+  check("receipt prints the store's date and time", receiptText.includes(formatStoreDateTime(dine.placedAt, tz)), receiptText.split("\n").slice(0, 8).join(" | "));
 
   // --- Dine-in hold → fire → split by item; a note on a plain line ------------------------
   await page.getByRole("button", { name: "New order" }).click();

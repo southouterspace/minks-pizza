@@ -1,11 +1,15 @@
 /**
  * Customer-flow smoke test against a running dev server (http://localhost:3000):
- * menu → customize item → cart → checkout → order confirmation.
+ * menu → customize item → cart → checkout → order confirmation, whose
+ * ready-by time reads in the store's timezone.
  *
  * Run: npx tsx --env-file=.env.local scripts/e2e-customer.ts
  * Requires the store to be published with the seeded menu.
  */
 import { chromium } from "playwright";
+import { eq } from "drizzle-orm";
+import { db, orders, storeSettings } from "../src/db";
+import { formatStoreTime } from "../src/lib/store-time";
 
 const BASE = process.env.E2E_BASE_URL ?? "http://localhost:3000";
 const SHOT_DIR = process.env.E2E_SHOT_DIR ?? "/tmp";
@@ -16,7 +20,7 @@ async function main() {
     // installed playwright package, so point at the binary directly.
     executablePath: process.env.CHROMIUM_PATH ?? "/opt/pw-browsers/chromium",
   });
-  const page = await browser.newPage({ viewport: { width: 1280, height: 900 } });
+  const page = await browser.newPage({ viewport: { width: 1280, height: 900 }, timezoneId: "Asia/Tokyo" });
   const shot = (name: string) =>
     page.screenshot({ path: `${SHOT_DIR}/${name}.png`, fullPage: false });
 
@@ -61,6 +65,11 @@ async function main() {
   await shot("05-confirmation");
   const orderText = await page.textContent("body");
   if (!orderText?.includes("Order details")) throw new Error("No order details on confirmation");
+  const orderId = new URL(page.url()).pathname.split("/").pop()!;
+  const [placed] = await db.select({ promisedAt: orders.promisedAt }).from(orders).where(eq(orders.id, orderId));
+  const [{ timezone }] = await db.select({ timezone: storeSettings.timezone }).from(storeSettings).where(eq(storeSettings.id, 1));
+  const readyBy = `Estimated ready by ${formatStoreTime(placed!.promisedAt!, timezone)}`;
+  if (!orderText.includes(readyBy)) throw new Error(`Tracker should say "${readyBy}" (${timezone})`);
 
   await browser.close();
   console.log("CUSTOMER E2E PASSED — screenshots in", SHOT_DIR);

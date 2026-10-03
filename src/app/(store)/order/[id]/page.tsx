@@ -5,6 +5,7 @@ import { eq } from "drizzle-orm";
 import { db, orderItems, orders } from "@/db";
 import { formatCents } from "@/lib/money";
 import { getSettings } from "@/lib/orders-server";
+import { formatStoreTime } from "@/lib/store-time";
 import { dueCents, paymentState, type KitchenStatus } from "@/lib/orders";
 import { OrderAutoRefresh } from "@/components/store/order-auto-refresh";
 import { buttonVariants } from "@/components/ui/button";
@@ -76,7 +77,7 @@ export default async function OrderPage({
   const payment = paymentState(order);
   const pickupOrDelivery = order.orderType === "delivery" ? "delivery" : "pickup";
   const readyBy = order.promisedAt
-    ? order.promisedAt.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" })
+    ? formatStoreTime(order.promisedAt, settings.timezone)
     : null;
 
   return (

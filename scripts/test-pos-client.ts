@@ -1,6 +1,7 @@
 /**
  * POS terminal rules with no DOM and no database: the builder's tap cycle,
- * the draft reducer, local totals and the submit body. Every assertion
+ * the draft reducer, local totals, the submit body and the Later picker's
+ * store-timezone arithmetic. Every assertion
  * compares to a literal.
  *
  * Run: npx tsx scripts/test-pos-client.ts
@@ -8,6 +9,7 @@
 import { cyclePlacement, defaultSelections, tapTopping } from "../src/lib/pos-client/builder";
 import { draftLine, draftProblem, draftReducer, draftTotals, emptyDraft, firePlan, lineSummary, toSubmitRequest } from "../src/lib/pos-client/draft";
 import type { MenuItem, PricingPolicy } from "../src/lib/pricing";
+import { formatStoreTime, nextStoreTime, storeHhmm } from "../src/lib/store-time";
 
 let failures = 0;
 function check(label: string, actual: unknown, expected: unknown) {
@@ -113,6 +115,13 @@ check(
   firePlan({ kind: "later", readyAt: "2026-10-03T23:30:00.000Z" }, 24),
   { fire: { kind: "at", at: "2026-10-03T23:06:00.000Z" }, promisedAt: "2026-10-03T23:30:00.000Z" },
 );
+const CHICAGO = "America/Chicago";
+check("Later 18:30 picked at 3 PM Chicago is 18:30 Chicago today", nextStoreTime("18:30", new Date("2026-10-03T20:00:00Z"), CHICAGO).toISOString(), "2026-10-03T23:30:00.000Z");
+check("Later 09:00 picked at 3 PM Chicago rolls to tomorrow morning", nextStoreTime("09:00", new Date("2026-10-03T20:00:00Z"), CHICAGO).toISOString(), "2026-10-04T14:00:00.000Z");
+check("Later 23:45 picked at 11:30 PM Chicago stays on the store's day, not UTC's", nextStoreTime("23:45", new Date("2026-10-04T04:30:00Z"), CHICAGO).toISOString(), "2026-10-04T04:45:00.000Z");
+check("Later 18:00 on the day DST ends uses CST", nextStoreTime("18:00", new Date("2026-11-01T12:00:00Z"), CHICAGO).toISOString(), "2026-11-02T00:00:00.000Z");
+check("the picker shows the store's wall clock", storeHhmm("2026-10-04T04:45:00Z", CHICAGO), "23:45");
+check("times read in the store's zone", formatStoreTime("2026-10-04T04:45:00Z", CHICAGO), "11:45 PM");
 check("dine-in needs a table", draftProblem(draftReducer(d, { type: "mode", mode: "dine_in" })), "Enter the table.");
 
 console.log(failures === 0 ? "\nAll POS client checks passed." : `\n${failures} check(s) failed.`);
