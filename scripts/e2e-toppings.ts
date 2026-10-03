@@ -64,9 +64,9 @@ async function main() {
   await db
     .update(orders)
     .set({ status: "completed" })
-    .where(inArray(orders.status, ["new", "confirmed", "preparing", "ready"]));
+    .where(inArray(orders.status, ["held", "new", "preparing", "ready"]));
 
-  const [toppingsGroup] = await db.select().from(modifierGroups).where(eq(modifierGroups.kind, "toppings"));
+  const [toppingsGroup] = await db.select().from(modifierGroups).where(eq(modifierGroups.role, "topping"));
   const [pepperoni] = await db.select().from(modifiers).where(eq(modifiers.name, "Pepperoni"));
   if (pepperoni.extraPriceDeltaCents === null) {
     await db.update(modifiers).set({ extraPriceDeltaCents: 300 }).where(eq(modifiers.id, pepperoni.id));
@@ -132,14 +132,14 @@ async function main() {
     order.subtotalCents === halfPie + wholePie,
     `${order.subtotalCents} vs ${halfPie} + ${wholePie}`,
   );
-  const half = lines.find((l) => l.modifiers.some((m) => m.placement === "left"));
+  const half = lines.find((l) => l.modifiers.some((m) => m.kind === "placed" && m.placement === "left"));
   check("half pie line charged the dialog total", half?.unitPriceCents === halfPie, `${half?.unitPriceCents}`);
   check(
-    "half pie snapshot carries ids, placements, portions and charged deltas",
+    "half pie snapshot carries ids, roles, placements, amounts and charged deltas",
     isDeepStrictEqual(half?.modifiers.filter((m) => m.groupName === toppingsGroup.name), [
-        { modifierId: pepperoni.id, groupName: toppingsGroup.name, modifierName: "Pepperoni", priceDeltaCents: 150, placement: "left", portion: "extra" },
-        { modifierId: mushrooms.id, groupName: toppingsGroup.name, modifierName: "Mushrooms", priceDeltaCents: 75, placement: "right", portion: "regular" },
-        { modifierId: cheese.id, groupName: toppingsGroup.name, modifierName: "Extra Cheese", priceDeltaCents: 200, placement: "whole", portion: "regular" },
+        { kind: "placed", modifierId: pepperoni.id, role: "topping", groupName: toppingsGroup.name, modifierName: "Pepperoni", priceDeltaCents: 150, placement: "left", amount: "extra" },
+        { kind: "placed", modifierId: mushrooms.id, role: "topping", groupName: toppingsGroup.name, modifierName: "Mushrooms", priceDeltaCents: 75, placement: "right", amount: "regular" },
+        { kind: "placed", modifierId: cheese.id, role: "topping", groupName: toppingsGroup.name, modifierName: "Extra Cheese", priceDeltaCents: 200, placement: "whole", amount: "regular" },
     ]),
     JSON.stringify(half?.modifiers),
   );

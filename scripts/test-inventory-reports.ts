@@ -42,6 +42,10 @@ import {
 } from "../src/lib/inventory-reports";
 import { createOrder } from "../src/lib/checkout";
 import { transitionOrder, type Actor } from "../src/lib/order-writes";
+import type { Amount, Placement, Selection } from "../src/lib/pricing";
+import { cancelOrder, moveOrder } from "./e2e/harness";
+
+const sel = (modifierId: number, placement: Placement = "whole", amount: Amount = "regular"): Selection => ({ modifierId, placement, amount });
 
 let passed = 0;
 async function test(name: string, fn: () => Promise<void>) {
@@ -60,15 +64,15 @@ async function main() {
     .insert(operators)
     .values({ email: `${tag}@minks.example`, passwordHash: "x", name: "Reports Test" })
     .returning();
-  const actor: Actor = { name: operator.name, operatorId: operator.id };
+  const actor: Actor = { name: operator.name, operatorId: operator.id, employeeId: null };
 
   const [category] = await db.insert(categories).values({ name: `${tag} Pizzas` }).returning();
   const [sizeGroup, crustGroup, toppingGroup] = await db
     .insert(modifierGroups)
     .values([
-      { name: `${tag} Size`, kind: "size", minSelect: 1, maxSelect: 1, sortOrder: 0 },
-      { name: `${tag} Crust`, kind: "choice", minSelect: 1, maxSelect: 1, sortOrder: 1 },
-      { name: `${tag} Toppings`, kind: "toppings", minSelect: 0, sortOrder: 2 },
+      { name: `${tag} Size`, role: "size", minSelect: 1, maxSelect: 1, sortOrder: 0 },
+      { name: `${tag} Crust`, role: "crust", minSelect: 1, maxSelect: 1, sortOrder: 1 },
+      { name: `${tag} Toppings`, role: "topping", minSelect: 0, sortOrder: 2 },
     ])
     .returning();
   const [small, large, garlic, , pepMod, mushMod] = await db
@@ -156,10 +160,11 @@ async function main() {
       .update(orders)
       .set({ placedAt: sql`(${localTime}::timestamp at time zone ${tz})` })
       .where(eq(orders.id, order.id));
-    const path = to === "completed" ? (["confirmed", "preparing", "ready", "completed"] as const) : (["canceled"] as const);
-    for (const status of path) {
-      const result = await transitionOrder({ orderId: order.id, to: status, actor, cancelReason: "Customer request" });
-      assert.deepEqual(result, { ok: true });
+    if (to === "completed") {
+      await moveOrder(order.id, "ready");
+      assert.deepEqual(await transitionOrder({ orderId: order.id, to: "completed", actor }), { ok: true });
+    } else {
+      await cancelOrder(order.id);
     }
     return order;
   }
@@ -186,22 +191,23 @@ async function main() {
     ]);
     const countA = await count("full", [[mozz.id, 4900 * G], [pep.id, 1000 * G], [dough.id, 20_000]]);
 
-    const crust = { id: garlic.id };
+    const crust = sel(garlic.id);
     const o1 = await sell("2020-03-02 12:00", [
-      { itemId: pizza.id, quantity: 2, modifiers: [{ id: large.id }, crust, { id: pepMod.id }] },
+      { itemId: pizza.id, quantity: 2, notes: null, selections: [sel(large.id), crust, sel(pepMod.id)] },
     ]);
     const o2 = await sell("2020-03-02 23:30", [
       {
         itemId: pizza.id,
         quantity: 1,
-        modifiers: [{ id: small.id }, crust, { id: pepMod.id, placement: "left", portion: "extra" }, { id: mushMod.id, portion: "light" }],
+        notes: null,
+        selections: [sel(small.id), crust, sel(pepMod.id, "left", "extra"), sel(mushMod.id, "whole", "light")],
       },
     ]);
     const o3 = await sell("2020-03-03 00:30", [
-      { itemId: pizza.id, quantity: 1, modifiers: [{ id: large.id }, crust, { id: mushMod.id, placement: "right" }] },
+      { itemId: pizza.id, quantity: 1, notes: null, selections: [sel(large.id), crust, sel(mushMod.id, "right")] },
     ]);
-    const o4 = await sell("2020-03-03 18:00", [{ itemId: soda.id, quantity: 1, modifiers: [] }]);
-    await sell("2020-03-03 19:00", [{ itemId: soda.id, quantity: 3, modifiers: [] }], "canceled");
+    const o4 = await sell("2020-03-03 18:00", [{ itemId: soda.id, quantity: 1, notes: null, selections: [] }]);
+    await sell("2020-03-03 19:00", [{ itemId: soda.id, quantity: 3, notes: null, selections: [] }], "canceled");
     await db.update(orderItems).set({ costCents: null }).where(eq(orderItems.orderId, o4.id));
 
     await recordMoves([{ ingredientId: mozz.id, kind: "waste", qtyMilli: -50 * G, wasteReason: "burnt" }]);
@@ -210,7 +216,7 @@ async function main() {
 
     await test("checkout priced the scenario as hand-computed", async () => {
       assert.deepEqual(
-        [o1.subtotalCents, o2.subtotalCents, o3.subtotalCents, o4.subtotalCents],
+        [o1.totals.subtotalCents, o2.totals.subtotalCents, o3.totals.subtotalCents, o4.totals.subtotalCents],
         [3200, 1275, 1500, 200],
       );
       const costs = await db

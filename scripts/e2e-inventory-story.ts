@@ -209,7 +209,7 @@ async function main() {
   const [pep] = await db.select().from(ingredients).where(eq(ingredients.name, PEP));
   const [pepMod] = await db.select().from(modifiers).where(eq(modifiers.name, PEP));
   const [cheesePizza] = await db.select().from(menuItems).where(eq(menuItems.name, "Cheese Pizza"));
-  const [sizeGroup] = await db.select().from(modifierGroups).where(eq(modifierGroups.kind, "size"));
+  const [sizeGroup] = await db.select().from(modifierGroups).where(eq(modifierGroups.role, "size"));
   const [large] = await db
     .select()
     .from(modifiers)
@@ -274,7 +274,7 @@ async function main() {
     const [line] = await db.select().from(orderItems).where(eq(orderItems.orderId, first.id));
     check(
       "order line carries pepperoni left half extra",
-      line.modifiers.some((m) => m.modifierId === pepMod.id && m.placement === "left" && m.portion === "extra"),
+      line.modifiers.some((m) => m.kind === "placed" && m.modifierId === pepMod.id && m.placement === "left" && m.amount === "extra"),
       JSON.stringify(line.modifiers),
     );
     check("no sale moves before the order is completed", (await saleRowCount(first.id)) === 0);

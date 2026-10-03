@@ -13,7 +13,7 @@ import { requireOperator } from "@/lib/auth";
 import Link from "next/link";
 import { ItemForm } from "@/components/admin/item-form";
 import { RecipeEditor } from "@/components/admin/recipe-editor";
-import { itemRecipe, recipeIngredients } from "@/components/admin/recipe-data";
+import { itemRecipe, recipeIngredients } from "@/lib/recipe-data";
 
 export const dynamic = "force-dynamic";
 

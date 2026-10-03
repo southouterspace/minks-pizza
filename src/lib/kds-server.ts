@@ -1,7 +1,6 @@
 import "server-only";
 import { and, asc, desc, eq, gte, inArray, isNull, or, sql } from "drizzle-orm";
 import { db, orderItems, orders, storeSettings } from "@/db";
-import { syncStockOuts } from "@/lib/inventory";
 import { RECALLABLE } from "@/lib/order-workflow";
 import type { Actor } from "@/lib/order-writes";
 import {
@@ -12,7 +11,7 @@ import {
   type KdsSnapshot,
   type WorkStage,
 } from "@/lib/kds";
-import { complete, fireDue, recall, run, syncStatus } from "@/lib/orders-server/folds";
+import { complete, fireDue, folds, foldsAll, recall, run } from "@/lib/orders-server/folds";
 import { fulfillmentOf } from "@/lib/orders-server/rows";
 
 const LINE_STATUSES = ["new", "preparing"] as const;
@@ -192,9 +191,9 @@ export async function applyKdsAction(
     if (!item) return;
     // Only pies go through the oven.
     const stage = action.stage === "oven" && item.station !== "pizza" ? "done" : action.stage;
-    await db.batch([
+    await run([
       db.update(orderItems).set(stageColumns(stage, now)).where(eq(orderItems.id, action.itemId)),
-      ...syncStatus(item.orderId, actor),
+      ...(await folds(item.orderId, actor)),
     ]);
     return;
   }
@@ -211,7 +210,7 @@ export async function applyKdsAction(
       .map((m) =>
         db.update(orderItems).set(stageColumns(m.stage, now)).where(inArray(orderItems.id, m.ids)),
       );
-    await run([...moves, ...group.flatMap((o) => syncStatus(o.id, actor))]);
+    await run([...moves, ...(await foldsAll(group.map((o) => o.id), actor))]);
     return;
   }
 
@@ -221,7 +220,8 @@ export async function applyKdsAction(
       .from(orders)
       .where(and(onTicket(action.orderId), inArray(orders.status, [...RECALLABLE])));
     if (recallable.length === 0) return;
-    await run(recall(recallable.map((o) => o.id), actor));
+    const ids = recallable.map((o) => o.id);
+    await run([...recall(ids, actor), ...(await foldsAll(ids, actor))]);
     return;
   }
 
@@ -229,5 +229,6 @@ export async function applyKdsAction(
     .select({ id: orders.id })
     .from(orders)
     .where(and(onTicket(action.orderId), eq(orders.status, "ready")));
-  await run(complete(ready.map((o) => o.id), actor));
+  const ids = ready.map((o) => o.id);
+  await run([...complete(ids, actor), ...(await foldsAll(ids, actor))]);
 }

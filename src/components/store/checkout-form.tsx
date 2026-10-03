@@ -30,7 +30,7 @@ import { PromoCodeField, QuoteTotals, useCheckoutQuote } from "@/components/stor
 import { Textarea } from "@/components/ui/textarea";
 import { cn } from "@/lib/utils";
 import { LoyaltyPanel } from "@/components/store/checkout-loyalty";
-import { describeChoice } from "@/lib/toppings";
+import { describeChoice } from "@/lib/pricing";
 
 export type CheckoutConfig = {
   storeName: string;
@@ -415,7 +415,7 @@ export function CheckoutForm({ config }: { config: CheckoutConfig }) {
                     {line.itemName}
                     {line.modifiers.length > 0 ? (
                       <span className="block text-xs text-muted-foreground">
-                        {line.modifiers.map((m) => describeChoice(m.modifierName, m)).join(", ")}
+                        {line.modifiers.map((m) => describeChoice(m)).join(", ")}
                       </span>
                     ) : null}
                   </span>

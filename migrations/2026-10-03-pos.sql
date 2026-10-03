@@ -1,7 +1,9 @@
 -- Front-of-house POS: tenders, drawer sessions, customers, held orders, POS
 -- access and the kitchen status fold. Takes a database at the promotions
 -- migration (2026-10-03-promotions.sql, plus the delivery-integrations
--- columns db:push added) to the merged schema without losing a row.
+-- columns db:push added), with or without the topping-inventory schema
+-- (PR #17: modifier_groups.kind, placement/portion on line modifiers), to
+-- the merged schema without losing a row.
 --
 -- Run BEFORE `npm run db:push`:
 --
@@ -90,12 +92,29 @@ BEGIN
     ADD COLUMN IF NOT EXISTS pos_lock_seconds integer DEFAULT 120 NOT NULL;
 
   -- Group roles replace the KDS's name regexes; existing groups get theirs
-  -- from the same names, once.
+  -- from the same names, once. A database that already carries PR #17's
+  -- `kind` (choice | size | toppings) keeps what it says: kind is a
+  -- projection of role, so nothing is lost when it goes.
   IF NOT EXISTS (SELECT 1 FROM information_schema.columns
                  WHERE table_name = 'modifier_groups' AND column_name = 'role') THEN
     ALTER TABLE modifier_groups ADD COLUMN role modifier_role DEFAULT 'option' NOT NULL;
-    UPDATE modifier_groups SET role = pg_temp.modifier_role_of(name)::modifier_role;
+    IF EXISTS (SELECT 1 FROM information_schema.columns
+               WHERE table_name = 'modifier_groups' AND column_name = 'kind') THEN
+      EXECUTE $kind$
+        UPDATE modifier_groups SET role = (CASE kind::text
+          WHEN 'size' THEN 'size'
+          WHEN 'toppings' THEN 'topping'
+          ELSE pg_temp.modifier_role_of(name) END)::modifier_role
+      $kind$;
+    ELSE
+      UPDATE modifier_groups SET role = pg_temp.modifier_role_of(name)::modifier_role;
+    END IF;
   END IF;
+  IF EXISTS (SELECT 1 FROM information_schema.columns
+             WHERE table_name = 'modifier_groups' AND column_name = 'kind') THEN
+    ALTER TABLE modifier_groups DROP COLUMN kind;
+  END IF;
+  DROP TYPE IF EXISTS modifier_group_kind;
 
   -- POS access is a permission, not a job: managers and shift leads may
   -- approve at the till, cashiers may ring, everyone else keeps the clock only.
@@ -231,30 +250,41 @@ BEGIN
   END IF;
   CREATE INDEX IF NOT EXISTS "order_items_order" ON "order_items" USING btree ("order_id");
 
-  -- Old modifier snapshots carried names only. Give each a kind, role, id
-  -- (matched by name within the item's groups; null when unmatched) and, for
-  -- placeable roles, whole/regular.
+  -- Snapshots written before `kind` existed come in two shapes: names only
+  -- (the first menu), and PR #17's id + placement + portion. Each becomes a
+  -- LineModifier: the id it carried, or the one its names match within the
+  -- item's groups (null when unmatched); the role of that modifier's group,
+  -- or the role its group name implies; and for placeable roles the
+  -- placement and amount it carried, else whole/regular. priceDeltaCents
+  -- stays: both shapes stored what the line was charged.
   UPDATE order_items i SET modifiers = (
     SELECT coalesce(jsonb_agg(
       CASE WHEN r.role IN ('sauce', 'cheese', 'topping') THEN
         jsonb_build_object('kind', 'placed', 'modifierId', r.mid, 'role', r.role,
           'groupName', r.m->>'groupName', 'modifierName', r.m->>'modifierName',
           'priceDeltaCents', (r.m->>'priceDeltaCents')::int,
-          'placement', 'whole', 'amount', 'regular')
+          'placement', coalesce(r.m->>'placement', 'whole'),
+          'amount', coalesce(r.m->>'portion', r.m->>'amount', 'regular'))
       ELSE
         jsonb_build_object('kind', 'option', 'modifierId', r.mid, 'role', r.role,
           'groupName', r.m->>'groupName', 'modifierName', r.m->>'modifierName',
           'priceDeltaCents', (r.m->>'priceDeltaCents')::int)
       END ORDER BY r.ord), '[]'::jsonb)
     FROM (
-      SELECT e.m, e.ord, pg_temp.modifier_role_of(e.m->>'groupName') AS role,
-        (SELECT md.id FROM modifiers md
-           JOIN modifier_groups g ON g.id = md.group_id
-           JOIN item_modifier_groups img ON img.group_id = g.id
-          WHERE img.item_id = i.menu_item_id
-            AND g.name = e.m->>'groupName' AND md.name = e.m->>'modifierName'
-          LIMIT 1) AS mid
-      FROM jsonb_array_elements(i.modifiers) WITH ORDINALITY AS e(m, ord)
+      SELECT q.m, q.ord, q.mid,
+        coalesce((SELECT g.role::text FROM modifiers md JOIN modifier_groups g ON g.id = md.group_id WHERE md.id = q.mid),
+                 pg_temp.modifier_role_of(q.m->>'groupName')) AS role
+      FROM (
+        SELECT e.m, e.ord,
+          coalesce((e.m->>'modifierId')::int,
+            (SELECT md.id FROM modifiers md
+               JOIN modifier_groups g ON g.id = md.group_id
+               JOIN item_modifier_groups img ON img.group_id = g.id
+              WHERE img.item_id = i.menu_item_id
+                AND g.name = e.m->>'groupName' AND md.name = e.m->>'modifierName'
+              LIMIT 1)) AS mid
+        FROM jsonb_array_elements(i.modifiers) WITH ORDINALITY AS e(m, ord)
+      ) q
     ) r)
   WHERE EXISTS (SELECT 1 FROM jsonb_array_elements(i.modifiers) x WHERE NOT x ? 'kind');
 

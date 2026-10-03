@@ -5,7 +5,7 @@
 import { and, asc, desc, eq, gte, inArray, isNull, lt, or, sql, type SQL } from "drizzle-orm";
 import { alias, type PgColumn } from "drizzle-orm/pg-core";
 import { db, drawerEvents, drawerSessions, employees, orderDiscounts, orderItems, orders, tenders } from "@/db";
-import { modifierLabel } from "@/lib/orders";
+import { describeChoice } from "@/lib/pricing";
 import {
   reconcileDrawer,
   salesReport,
@@ -288,7 +288,7 @@ export async function orderLinesCsv(scope: ReportScope, tz: string): Promise<str
       i.quantity,
       dollars(i.unitPriceCents),
       dollars(i.lineTotalCents),
-      i.modifiers.map(modifierLabel).join("; "),
+      i.modifiers.map(describeChoice).join("; "),
       i.notes,
       i.voidedAt ? formatSortable(i.voidedAt, tz) : null,
       i.voidReason,

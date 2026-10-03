@@ -266,9 +266,9 @@ run(async () => {
   if (!d.ok || !later.ok) throw new Error("counter orders rejected");
   const ticketD = page.getByTestId(`kds-ticket-${d.order.number}`);
   await ticketD.waitFor({ timeout: 10_000 });
-  const left = await ticketD.getByTestId("kds-half-left").innerText();
-  const right = await ticketD.getByTestId("kds-half-right").innerText();
-  check("half toppings print in LEFT and RIGHT blocks", [left, right].map((t) => t.replace(/\s+/g, " ")), ["LEFT HALF + Pepperoni", "RIGHT HALF + Mushrooms"]);
+  const left = await ticketD.locator("[data-placement=left]").locator("..").innerText();
+  const right = await ticketD.locator("[data-placement=right]").locator("..").innerText();
+  check("half toppings print in L and R blocks", [left, right].map((t) => t.replace(/\s+/g, " ")), ["L + Pepperoni", "R + Mushrooms"]);
   await reloadServerSnapshot();
   await ticketD.waitFor();
   check("a scheduled order stays off the line", await page.getByTestId(`kds-ticket-${later.order.number}`).count(), 0);

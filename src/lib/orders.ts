@@ -222,14 +222,6 @@ export function sourceLabel(source: OrderSource, f: Fulfillment): string {
   return source === "walk_in" && f.kind === "pickup" ? "Walk-in" : `${SOURCE_LABEL[source]}, ${f.kind}`;
 }
 
-/** "Pepperoni (left half)", "extra Onions", "Size: Large 14\"". */
-export function modifierLabel(m: LineModifier): string {
-  if (m.kind === "option") return `${m.groupName}: ${m.modifierName}`;
-  const amount = m.amount === "regular" ? "" : `${m.amount} `;
-  const half = m.placement === "whole" ? "" : ` (${m.placement} half)`;
-  return `${amount}${m.modifierName}${half}`;
-}
-
 // ---------------------------------------------------------------------------
 // Mutations and the role policy
 // ---------------------------------------------------------------------------

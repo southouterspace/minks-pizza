@@ -7,6 +7,15 @@ import type { KitchenStation } from "@/lib/kds";
 export const GROUP_ROLES = ["size", "crust", "sauce", "cheese", "topping", "option"] as const;
 export type GroupRole = (typeof GROUP_ROLES)[number];
 
+export const GROUP_ROLE_LABEL: Record<GroupRole, string> = {
+  size: "Size",
+  crust: "Crust",
+  sauce: "Sauce",
+  cheese: "Cheese",
+  topping: "Topping",
+  option: "Option",
+};
+
 /** Only these roles take a half placement and an amount. */
 export const PLACEABLE_ROLES = ["sauce", "cheese", "topping"] as const;
 export type PlaceableRole = (typeof PLACEABLE_ROLES)[number];
@@ -58,9 +67,34 @@ export type MenuModifier = {
   id: number;
   name: string;
   priceDeltaCents: number;
+  /** What "extra" costs when the menu names a price; null falls back to `extraToppingBps`. */
+  extraPriceDeltaCents: number | null;
   isDefault: boolean;
   isAvailable: boolean;
 };
+
+export const PLACEMENT_LABEL: Record<Placement, string> = {
+  whole: "Whole",
+  left: "Left half",
+  right: "Right half",
+};
+
+export const AMOUNT_LABEL: Record<Amount, string> = {
+  regular: "Regular",
+  extra: "Extra",
+  light: "Light",
+  none: "None",
+};
+
+/** "Pepperoni (left half, extra)", "Mushrooms", "No Onions". */
+export function describeChoice(m: LineModifier): string {
+  if (m.kind === "option") return m.modifierName;
+  if (m.amount === "none") return `No ${m.modifierName}`;
+  const parts: string[] = [];
+  if (m.placement !== "whole") parts.push(PLACEMENT_LABEL[m.placement].toLowerCase());
+  if (m.amount !== "regular") parts.push(m.amount);
+  return parts.length ? `${m.modifierName} (${parts.join(", ")})` : m.modifierName;
+}
 
 export type MenuGroup = {
   id: number;
@@ -81,30 +115,46 @@ export type MenuItem = {
   groups: MenuGroup[];
 };
 
-export type PricingPolicy = { halfToppingRule: HalfToppingRule; extraToppingBps: number };
+/**
+ * `halfToppingRule` picks how a half-and-half pie charges its toppings:
+ * `average` charges each half topping `halfToppingPriceBps` of its whole-pie
+ * price (5000 = half, so two different halves average out); `highest`
+ * charges the dearer half in full and the other nothing. `extraToppingBps`
+ * prices an extra portion as a multiple of the topping (20000 = 2×) unless
+ * the modifier names its own extra price.
+ */
+export type PricingPolicy = {
+  halfToppingRule: HalfToppingRule;
+  halfToppingPriceBps: number;
+  extraToppingBps: number;
+};
 
 export class PricingError extends Error {}
 
 const roundHalfUp = (n: number) => Math.round(n);
 
-function amountWeight(deltaCents: number, amount: Amount, policy: PricingPolicy): number {
+export function applyBps(cents: number, bps: number): number {
+  return roundHalfUp((cents * bps) / 10_000);
+}
+
+function amountWeight(mod: MenuModifier, amount: Amount, policy: PricingPolicy): number {
   switch (amount) {
     case "none":
       return 0;
     case "light":
     case "regular":
-      return deltaCents;
+      return mod.priceDeltaCents;
     case "extra":
-      return roundHalfUp((deltaCents * policy.extraToppingBps) / 10_000);
+      return mod.extraPriceDeltaCents ?? applyBps(mod.priceDeltaCents, policy.extraToppingBps);
   }
 }
 
 /**
- * unit = base + Σ option deltas + toppings, where over placeable groups
- * L = Σw(whole ∪ left), R = Σw(whole ∪ right) and toppings is
- * roundHalfUp((L + R) / 2) under `average` or max(L, R) under `highest`.
- * "Half price per half topping" is algebraically `average`, so it has no
- * value of its own.
+ * unit = base + Σ modifier.priceDeltaCents, where each snapshot carries what
+ * it was charged: an option its delta; a placed topping its weight w (its
+ * delta, its extra price, or 0 for "none") when whole, and for a half
+ * `applyBps(w, halfToppingPriceBps)` under `average`, or under `highest` w
+ * on the dearer side (ties to the left) and 0 on the other.
  */
 export function priceLine(
   item: MenuItem,
@@ -122,9 +172,8 @@ export function priceLine(
   const seen = new Set<number>();
   const counts = new Map<number, number>();
   const modifiers: LineModifier[] = [];
-  let optionCents = 0;
-  let left = 0;
-  let right = 0;
+  const halves: { index: number; placement: "left" | "right"; weight: number }[] = [];
+  let unitPriceCents = item.basePriceCents;
 
   for (const s of selections) {
     const found = owner.get(s.modifierId);
@@ -138,20 +187,28 @@ export function priceLine(
     const { group, mod } = found;
     if (s.amount !== "none") counts.set(group.id, (counts.get(group.id) ?? 0) + 1);
 
-    const base = { modifierId: mod.id, groupName: group.name, modifierName: mod.name, priceDeltaCents: mod.priceDeltaCents };
+    const base = { modifierId: mod.id, groupName: group.name, modifierName: mod.name };
     if (isPlaceable(group.role)) {
-      const w = amountWeight(mod.priceDeltaCents, s.amount, policy);
-      if (s.placement !== "right") left += w;
-      if (s.placement !== "left") right += w;
-      modifiers.push({ kind: "placed", role: group.role, placement: s.placement, amount: s.amount, ...base });
+      const w = amountWeight(mod, s.amount, policy);
+      const charged = s.placement === "whole" ? w : policy.halfToppingRule === "average" ? applyBps(w, policy.halfToppingPriceBps) : 0;
+      if (s.placement !== "whole") halves.push({ index: modifiers.length, placement: s.placement, weight: w });
+      modifiers.push({ kind: "placed", role: group.role, placement: s.placement, amount: s.amount, priceDeltaCents: charged, ...base });
     } else {
       if (s.placement !== "whole" || s.amount !== "regular") {
         throw new PricingError(`${group.name} on "${item.name}" cannot be split or changed in amount.`);
       }
-      optionCents += mod.priceDeltaCents;
-      modifiers.push({ kind: "option", role: group.role, ...base });
+      modifiers.push({ kind: "option", role: group.role, priceDeltaCents: mod.priceDeltaCents, ...base });
     }
   }
+
+  if (policy.halfToppingRule === "highest" && halves.length > 0) {
+    const side = (p: "left" | "right") => halves.filter((h) => h.placement === p).reduce((n, h) => n + h.weight, 0);
+    const dearer = side("left") >= side("right") ? "left" : "right";
+    for (const h of halves) {
+      if (h.placement === dearer) modifiers[h.index].priceDeltaCents = h.weight;
+    }
+  }
+  for (const m of modifiers) unitPriceCents += m.priceDeltaCents;
 
   for (const group of item.groups) {
     const count = counts.get(group.id) ?? 0;
@@ -163,9 +220,7 @@ export function priceLine(
     }
   }
 
-  const toppings =
-    policy.halfToppingRule === "average" ? roundHalfUp((left + right) / 2) : Math.max(left, right);
-  return { unitPriceCents: item.basePriceCents + optionCents + toppings, modifiers };
+  return { unitPriceCents, modifiers };
 }
 
 /**

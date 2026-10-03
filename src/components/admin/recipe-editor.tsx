@@ -15,7 +15,7 @@ import {
   type RecipeLine,
   type RecipeOwner,
 } from "@/lib/recipes";
-import type { PortionSettings } from "@/lib/toppings";
+import type { PortionSettings } from "@/lib/recipes";
 import { amountIn, readableUnit, unitFor } from "@/lib/unit-entry";
 import { trimAmount, unitsFor, type BaseUnit, type UnitDef } from "@/lib/units";
 

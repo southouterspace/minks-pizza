@@ -1,6 +1,7 @@
 // Not server-only: the order e2e and the loyalty tests transition orders the way the app does.
 import { and, eq, inArray, sql, type SQL } from "drizzle-orm";
 import { db, orderEvents, orders } from "@/db";
+import { inventorySyncStatement, planOrderUsage, syncStockOuts } from "@/lib/inventory";
 import type { BatchItem } from "drizzle-orm/batch";
 import { cancellationStatements, completionStatements } from "@/lib/loyalty-server";
 import {
@@ -91,7 +92,7 @@ const ON_ENTER: Partial<Record<OrderStatus, (orderId: string) => BatchItem<"pg">
  * `also` adds assignments to the same update. Spread into a `db.batch`; the
  * first result is the move's logged rows.
  */
-export async function transitionStatements(args: {
+export function transitionStatements(args: {
   orderId: string;
   from: readonly OrderStatus[];
   to: OrderStatus;
@@ -117,11 +118,7 @@ export async function transitionStatements(args: {
     note: args.note ?? args.cancelReason ?? null,
     actor: args.actor,
   });
-  const stock =
-    args.to === "completed" || args.from.includes("completed")
-      ? [inventorySyncStatement(await planOrderUsage(args.orderId))]
-      : [];
-  return [move, ...(ON_ENTER[args.to]?.(args.orderId) ?? []), ...stock] as const;
+  return [move, ...(ON_ENTER[args.to]?.(args.orderId) ?? [])] as const;
 }
 
 /** The admin's manual move along the forward table (today only ready → completed). */
@@ -142,8 +139,13 @@ export async function transitionOrder(args: {
       reason: `Order is already ${STATUS_META[order.status].label.toLowerCase()}.`,
     };
   }
-  const [{ rows }] = await db.batch(transitionStatements({ ...args, from: [order.status] }));
-  return rows.length > 0 ? { ok: true } : { ok: false, reason: STALE };
+  const [{ rows }, ...rest] = await db.batch([
+    ...transitionStatements({ ...args, from: [order.status] }),
+    inventorySyncStatement(await planOrderUsage(args.orderId)),
+  ]);
+  if (rows.length === 0) return { ok: false, reason: STALE };
+  if (rest.at(-1)?.rows.length) await syncStockOuts({ orderId: args.orderId });
+  return { ok: true };
 }
 
 export async function adjustPromisedTime(args: {

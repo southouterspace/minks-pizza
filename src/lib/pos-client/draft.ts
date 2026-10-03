@@ -280,9 +280,12 @@ export function toSubmitRequest(d: NewOrderDraft, quoteMinutes: number, tenders:
 /** `Large 14" · Thin Crust · Pepperoni · L: Mushrooms · R: Red Onions`. */
 export function lineSummary(modifiers: LineModifier[]): string {
   const t = ticketLine(modifiers);
-  const parts = [t.size, t.crust, ...t.whole.map((m) => m.label)].filter((p): p is string => !!p);
-  if (t.left.length) parts.push(`L: ${t.left.map((m) => m.label).join(", ")}`);
-  if (t.right.length) parts.push(`R: ${t.right.map((m) => m.label).join(", ")}`);
+  const section = (p: "whole" | "left" | "right") => t.toppings.find((s) => s.placement === p)?.mods ?? [];
+  const parts = [t.size, t.crust, ...section("whole").map((m) => m.label), ...t.mods.map((m) => m.label)].filter(
+    (p): p is string => !!p,
+  );
+  if (section("left").length) parts.push(`L: ${section("left").map((m) => m.label).join(", ")}`);
+  if (section("right").length) parts.push(`R: ${section("right").map((m) => m.label).join(", ")}`);
   return parts.join(" · ");
 }
 

@@ -1,6 +1,7 @@
 import { eq, getTableColumns } from "drizzle-orm";
 import { db, storeSettings } from "@/db";
 import type { PricingPolicy } from "@/lib/pricing";
+import type { PortionSettings } from "@/lib/recipes";
 import { DEFAULT_TIMEZONE } from "@/lib/zoned";
 
 export class StoreNotConfiguredError extends Error {}
@@ -33,5 +34,9 @@ export async function getStoreBasics(): Promise<{ name: string; timezone: string
 }
 
 export function policyOf(s: Settings): PricingPolicy {
-  return { halfToppingRule: s.halfToppingRule, extraToppingBps: s.extraToppingBps };
+  return { halfToppingRule: s.halfToppingRule, halfToppingPriceBps: s.halfToppingPriceBps, extraToppingBps: s.extraToppingBps };
+}
+
+export function portionsOf(s: Pick<Settings, keyof PortionSettings>): PortionSettings {
+  return { halfPortionBps: s.halfPortionBps, lightPortionBps: s.lightPortionBps, extraPortionBps: s.extraPortionBps };
 }

@@ -17,7 +17,7 @@ import {
 import { Separator } from "@/components/ui/separator";
 import { PromoCodeField, QuoteTotals, useCheckoutQuote } from "@/components/store/promo-summary";
 import { cn } from "@/lib/utils";
-import { describeChoice } from "@/lib/toppings";
+import { describeChoice } from "@/lib/pricing";
 
 export function CartView({ loyalty }: { loyalty: CartLoyalty | null }) {
   const { lines, subtotalCents, updateQuantity, removeLine, removePromoCode, orderType, orderTypes, ready } = useCart();
@@ -73,8 +73,8 @@ export function CartView({ loyalty }: { loyalty: CartLoyalty | null }) {
                   {line.modifiers
                     .map((m) =>
                       m.priceDeltaCents
-                        ? `${describeChoice(m.modifierName, m)} (+${formatCents(m.priceDeltaCents)})`
-                        : describeChoice(m.modifierName, m),
+                        ? `${describeChoice(m)} (+${formatCents(m.priceDeltaCents)})`
+                        : describeChoice(m),
                     )
                     .join(" · ")}
                 </p>

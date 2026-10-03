@@ -149,7 +149,7 @@ export async function submitOrder(req: SubmitOrderRequest, by: Submitter): Promi
     placedEvent(req.orderId, actor),
     ...(online ? online.after(req.orderId) : []),
     ...(drawer ? req.tenders.map((t) => tenderInsert(req.orderId, t, drawer.id, actor.employeeId)) : []),
-    ...folds(req.orderId, actor),
+    ...(await folds(req.orderId, actor)),
   ];
   try {
     await run(statements);

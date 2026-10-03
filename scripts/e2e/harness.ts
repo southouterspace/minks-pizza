@@ -273,13 +273,13 @@ export async function moveOrder(orderId: string, ...steps: Exclude<OrderStatus, 
         await mutate(orderId, { kind: "fire", lineIds: "all" });
         const [first] = await db.select({ id: orderItems.id }).from(orderItems).where(eq(orderItems.orderId, orderId)).limit(1);
         if (first) await db.update(orderItems).set({ ovenAt: new Date() }).where(eq(orderItems.id, first.id));
-        await runStatements(folds(orderId, ACTOR));
+        await runStatements(await folds(orderId, ACTOR));
         break;
       }
       case "ready":
         await mutate(orderId, { kind: "fire", lineIds: "all" });
         await db.update(orderItems).set({ doneAt: new Date() }).where(eq(orderItems.orderId, orderId));
-        await runStatements(folds(orderId, ACTOR));
+        await runStatements(await folds(orderId, ACTOR));
         break;
       case "completed":
         await mutate(orderId, { kind: "handoff" });

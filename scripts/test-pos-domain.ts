@@ -69,11 +69,11 @@ run(async () => {
     ({ modifierId: mod(cheese, name), placement, amount });
   const halfAndHalf = [sel('Large 14"'), sel("Hand Tossed"), sel("Pepperoni", "left"), sel("Mushrooms", "right")];
 
-  check("Large Cheese, L Pepperoni / R Mushroom, average rule", priceLine(cheese, halfAndHalf, { halfToppingRule: "average", extraToppingBps: 20_000 }).unitPriceCents, 1862);
-  check("same pie, highest-half rule", priceLine(cheese, halfAndHalf, { halfToppingRule: "highest", extraToppingBps: 20_000 }).unitPriceCents, 1874);
+  check("Large Cheese, L Pepperoni / R Mushroom, average rule", priceLine(cheese, halfAndHalf, { halfToppingRule: "average", halfToppingPriceBps: 5000, extraToppingBps: 20_000 }).unitPriceCents, 1862);
+  check("same pie, highest-half rule", priceLine(cheese, halfAndHalf, { halfToppingRule: "highest", halfToppingPriceBps: 5000, extraToppingBps: 20_000 }).unitPriceCents, 1874);
   check(
     "extra pepperoni whole costs 2x the topping",
-    priceLine(cheese, [sel('Large 14"'), sel("Hand Tossed"), sel("Pepperoni", "whole", "extra")], { halfToppingRule: "average", extraToppingBps: 20_000 }).unitPriceCents,
+    priceLine(cheese, [sel('Large 14"'), sel("Hand Tossed"), sel("Pepperoni", "whole", "extra")], { halfToppingRule: "average", halfToppingPriceBps: 5000, extraToppingBps: 20_000 }).unitPriceCents,
     2049,
   );
   check(

@@ -111,26 +111,26 @@ async function ids() {
   };
 }
 
-async function setGroupKind(page: Page, groupId: number, kind: string) {
-  await page.locator(`details:has(#group-${groupId}-kind) > summary`).click();
-  await page.selectOption(`#group-${groupId}-kind`, kind);
-  await page.locator(`form:has(#group-${groupId}-kind) button[type="submit"]`).click();
+async function setGroupRole(page: Page, groupId: number, role: string) {
+  await page.locator(`details:has(#group-${groupId}-role) > summary`).click();
+  await page.selectOption(`#group-${groupId}-role`, role);
+  await page.locator(`form:has(#group-${groupId}-role) button[type="submit"]`).click();
 }
 
 async function groupKindsFlow(page: Page) {
-  await db.update(modifierGroups).set({ kind: "choice" });
+  await db.update(modifierGroups).set({ role: "option" });
   const { group } = await ids();
   await page.goto(`${BASE}/admin/modifiers`, { waitUntil: "networkidle" });
-  await setGroupKind(page, group("Size"), "size");
+  await setGroupRole(page, group("Size"), "size");
   await page.waitForLoadState("networkidle");
-  await setGroupKind(page, group("Extra Toppings"), "toppings");
+  await setGroupRole(page, group("Extra Toppings"), "topping");
   const kinds = async () =>
-    Object.fromEntries((await db.select().from(modifierGroups)).map((g) => [g.name, g.kind]));
+    Object.fromEntries((await db.select().from(modifierGroups)).map((g) => [g.name, g.role]));
   check(
-    "group kinds saved: Size = size, Extra Toppings = toppings, Crust = choice",
+    "group roles saved: Size = size, Extra Toppings = topping, Crust = option",
     await eventually(async () => {
       const k = await kinds();
-      return k["Size"] === "size" && k["Extra Toppings"] === "toppings" && k["Crust"] === "choice";
+      return k["Size"] === "size" && k["Extra Toppings"] === "topping" && k["Crust"] === "option";
     }),
     JSON.stringify(await kinds()),
   );

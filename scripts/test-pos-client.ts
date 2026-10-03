@@ -19,6 +19,7 @@ const mod = (id: number, name: string, priceDeltaCents: number, isDefault = fals
   id,
   name,
   priceDeltaCents,
+  extraPriceDeltaCents: null,
   isDefault,
   isAvailable: true,
 });
@@ -37,7 +38,7 @@ const cheese: MenuItem = {
   ],
 };
 const soda: MenuItem = { id: 2, name: "Soda", description: null, basePriceCents: 399, isAvailable: true, station: "counter", groups: [] };
-const policy: PricingPolicy = { halfToppingRule: "average", extraToppingBps: 20_000 };
+const policy: PricingPolicy = { halfToppingRule: "average", halfToppingPriceBps: 5000, extraToppingBps: 20_000 };
 const [pep, , basil] = cheese.groups[0].modifiers;
 
 run(async () => {

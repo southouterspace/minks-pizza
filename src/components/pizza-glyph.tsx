@@ -1,4 +1,4 @@
-import type { Placement } from "@/lib/toppings";
+import type { Placement } from "@/lib/pricing";
 import { cn } from "@/lib/utils";
 
 const FILL: Record<Placement, string> = {

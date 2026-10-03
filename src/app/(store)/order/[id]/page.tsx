@@ -8,7 +8,8 @@ import { COURIER_STATUS_LABEL, TERMINAL_COURIER_STATUSES } from "@/lib/delivery/
 import { formatClock } from "@/lib/zoned";
 import { orderPointsStatus } from "@/lib/loyalty";
 import { formatCents } from "@/lib/money";
-import { dueCents, modifierLabel, paymentState } from "@/lib/orders";
+import { dueCents, paymentState } from "@/lib/orders";
+import { describeChoice } from "@/lib/pricing";
 import { isActive, isCooking } from "@/lib/order-workflow";
 import { getSettings } from "@/lib/settings-server";
 import { OrderAutoRefresh } from "@/components/store/order-auto-refresh";
@@ -206,7 +207,7 @@ export default async function OrderPage({
                   </p>
                   {item.modifiers.length > 0 ? (
                     <p className="mt-0.5 text-xs text-muted-foreground">
-                      {item.modifiers.map(modifierLabel).join(" · ")}
+                      {item.modifiers.map(describeChoice).join(" · ")}
                     </p>
                   ) : null}
                   {item.notes ? (

@@ -10,15 +10,39 @@
 import { and, eq, inArray, isNull, lte, sql, type SQL } from "drizzle-orm";
 import type { BatchItem } from "drizzle-orm/batch";
 import { db, orderItems, orders } from "@/db";
+import { inventorySyncStatement, planOrderUsage, syncStockOuts } from "@/lib/inventory";
 import { ACTIVE_STATUSES, RECALLABLE } from "@/lib/order-workflow";
 import { SCHEDULER, transitionStatements, type Actor } from "@/lib/order-writes";
 import { MARKETPLACE_SOURCES } from "@/lib/orders";
 
 export type Statement = BatchItem<"pg">;
 
+/**
+ * Runs a batch and, when its stock reconcile moved anything, brings the
+ * 86 list in line (that needs the moves committed, so it runs after).
+ */
 export async function run(statements: Statement[]): Promise<void> {
   const [first, ...rest] = statements;
-  if (first) await db.batch([first, ...rest]);
+  if (!first) return;
+  const results = await db.batch([first, ...rest]);
+  const moved = results.flatMap((r) => (isMoves(r) ? r.rows : []));
+  if (moved.length > 0) await syncStockOuts({ orderId: moved[0].order_id });
+}
+
+type MoveRow = { order_id: string; ingredient_id: number };
+
+function isMoves(result: unknown): result is { rows: MoveRow[] } {
+  return (
+    typeof result === "object" &&
+    result !== null &&
+    "rows" in result &&
+    Array.isArray(result.rows) &&
+    result.rows.length > 0 &&
+    typeof result.rows[0] === "object" &&
+    result.rows[0] !== null &&
+    "ingredient_id" in result.rows[0] &&
+    "order_id" in result.rows[0]
+  );
 }
 
 const EXTERNAL = sql.raw(MARKETPLACE_SOURCES.map((s) => `'${s}'`).join(", "));
@@ -104,8 +128,17 @@ export function syncStatus(orderId: string, actor: Actor): Statement[] {
   ];
 }
 
-export function folds(orderId: string, actor: Actor): Statement[] {
-  return [recomputeTotals(orderId), ...syncStatus(orderId, actor)];
+/**
+ * Money, kitchen status, then stock: the reconcile reads the status the
+ * edges above just set, so a completed order holds its usage and any other
+ * holds none, whichever path moved it.
+ */
+export async function folds(orderId: string, actor: Actor): Promise<Statement[]> {
+  return [recomputeTotals(orderId), ...syncStatus(orderId, actor), inventorySyncStatement(await planOrderUsage(orderId))];
+}
+
+export async function foldsAll(orderIds: string[], actor: Actor): Promise<Statement[]> {
+  return (await Promise.all(orderIds.map((id) => folds(id, actor)))).flat();
 }
 
 /** Sends the matching live lines to the kitchen; lines already fired keep their stamp. */
@@ -127,7 +160,7 @@ export async function fireDue(now: Date): Promise<number> {
     .where(and(eq(orders.status, "held"), lte(orders.fireAt, now)));
   if (due.length === 0) return 0;
   const ids = due.map((d) => d.id);
-  await run([fireStamp(inArray(orderItems.orderId, ids)), ...ids.flatMap((id) => folds(id, SCHEDULER))]);
+  await run([fireStamp(inArray(orderItems.orderId, ids)), ...(await foldsAll(ids, SCHEDULER))]);
   return ids.length;
 }
 

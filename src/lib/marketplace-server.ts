@@ -3,7 +3,7 @@ import { and, eq, inArray, sql } from "drizzle-orm";
 import { categories, db, menuItems, orderItems, orders, tenders } from "@/db";
 import { externalOrderRows, type ExternalOrder } from "@/lib/marketplace";
 import { SOURCE_LABEL } from "@/lib/orders";
-import { folds } from "@/lib/orders-server/folds";
+import { folds, run } from "@/lib/orders-server/folds";
 import { placedEvent } from "@/lib/orders-server/writes";
 
 /**
@@ -41,7 +41,7 @@ export async function ingestExternalOrder(
   // the copy that won.
   const orderId = crypto.randomUUID();
   try {
-    await db.batch([
+    await run([
       db
         .insert(orders)
         .values({ ...rows.order, id: orderId })
@@ -49,7 +49,7 @@ export async function ingestExternalOrder(
       db.insert(orderItems).values(rows.items.map((i) => ({ ...i, orderId, firedAt: sql`now()` }))),
       db.insert(tenders).values({ ...rows.tender, id: crypto.randomUUID(), orderId }),
       placedEvent(orderId, actor),
-      ...folds(orderId, actor),
+      ...(await folds(orderId, actor)),
     ]);
   } catch (err) {
     const winner = await existing();

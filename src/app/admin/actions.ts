@@ -31,7 +31,7 @@ import { cancelCourier, dispatchCourier } from "@/lib/delivery/dispatch";
 import { COURIER_PROVIDERS, CourierError } from "@/lib/delivery/types";
 import { OrderError } from "@/lib/checkout";
 import { STORE_TIMEZONES } from "@/lib/hours";
-import { MODIFIER_GROUP_KINDS, type ModifierGroupKind } from "@/lib/toppings";
+import { GROUP_ROLES, isPlaceable, type GroupRole } from "@/lib/pricing";
 import { unitFor } from "@/lib/unit-entry";
 import { KITCHEN_STATIONS, type KitchenStation } from "@/lib/kds";
 import { DEFAULT_STAFF_RULES, parseStaffRules } from "@/lib/timeclock";
@@ -655,7 +655,7 @@ export async function saveItem(formData: FormData): Promise<void> {
 
 function parseGroupFields(fd: FormData): {
   name: string;
-  kind: ModifierGroupKind;
+  role: GroupRole;
   minSelect: number;
   maxSelect: number | null;
 } {
@@ -669,8 +669,8 @@ function parseGroupFields(fd: FormData): {
     maxSelect = null;
   }
   if (maxSelect !== null && maxSelect < minSelect) maxSelect = minSelect;
-  const kind = z.enum(MODIFIER_GROUP_KINDS).catch("choice").parse(textField(fd, "kind"));
-  return { name, kind, minSelect, maxSelect };
+  const role = z.enum(GROUP_ROLES).catch("option").parse(textField(fd, "role"));
+  return { name, role, minSelect, maxSelect };
 }
 
 export async function createModifierGroup(formData: FormData): Promise<void> {
@@ -710,8 +710,8 @@ export async function deleteModifierGroup(formData: FormData): Promise<void> {
 // Modifiers
 // ---------------------------------------------------------------------------
 
-function extraPriceField(fd: FormData, kind: ModifierGroupKind): number | null {
-  if (kind !== "toppings" || textField(fd, "extraPrice") === "") return null;
+function extraPriceField(fd: FormData, role: GroupRole): number | null {
+  if (!isPlaceable(role) || textField(fd, "extraPrice") === "") return null;
   return dollarsToCents(fd, "extraPrice");
 }
 
@@ -749,7 +749,7 @@ export async function createModifier(formData: FormData): Promise<void> {
   const isDefault = checkbox(formData, "isDefault");
 
   const [group] = await db
-    .select({ id: modifierGroups.id, maxSelect: modifierGroups.maxSelect, kind: modifierGroups.kind })
+    .select({ id: modifierGroups.id, maxSelect: modifierGroups.maxSelect, role: modifierGroups.role })
     .from(modifierGroups)
     .where(eq(modifierGroups.id, groupId));
   if (!group) return;
@@ -770,7 +770,7 @@ export async function createModifier(formData: FormData): Promise<void> {
     groupId,
     name,
     priceDeltaCents,
-    extraPriceDeltaCents: extraPriceField(formData, group.kind),
+    extraPriceDeltaCents: extraPriceField(formData, group.role),
     isDefault,
     sortOrder: (last?.sortOrder ?? -1) + 1,
   });
@@ -786,7 +786,7 @@ export async function updateModifier(formData: FormData): Promise<void> {
   const isDefault = checkbox(formData, "isDefault");
 
   const [modifier] = await db
-    .select({ id: modifiers.id, groupId: modifiers.groupId, kind: modifierGroups.kind })
+    .select({ id: modifiers.id, groupId: modifiers.groupId, role: modifierGroups.role })
     .from(modifiers)
     .innerJoin(modifierGroups, eq(modifierGroups.id, modifiers.groupId))
     .where(eq(modifiers.id, modifierId));
@@ -794,7 +794,7 @@ export async function updateModifier(formData: FormData): Promise<void> {
 
   await db
     .update(modifiers)
-    .set({ name, priceDeltaCents, extraPriceDeltaCents: extraPriceField(formData, modifier.kind) })
+    .set({ name, priceDeltaCents, extraPriceDeltaCents: extraPriceField(formData, modifier.role) })
     .where(eq(modifiers.id, modifierId));
   await applyDefault(modifier.groupId, modifierId, isDefault);
   revalidateModifiers();
@@ -875,7 +875,7 @@ export async function saveRecipe(formData: FormData): Promise<RecipeActionState>
       .select({ id: modifiers.id })
       .from(modifiers)
       .innerJoin(modifierGroups, eq(modifierGroups.id, modifiers.groupId))
-      .where(eq(modifierGroups.kind, "size")),
+      .where(eq(modifierGroups.role, "size")),
   ]);
   const byId = new Map(found.map((i) => [i.id, i]));
   const sizes = new Set(sizeIds.map((s) => s.id));

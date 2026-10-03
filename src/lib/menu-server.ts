@@ -60,6 +60,7 @@ async function loadMenuItems(itemIds?: number[]): Promise<(MenuItem & { category
                 id: m.id,
                 name: m.name,
                 priceDeltaCents: m.priceDeltaCents,
+                extraPriceDeltaCents: m.extraPriceDeltaCents,
                 isDefault: m.isDefault,
                 isAvailable: m.isAvailable,
               })),

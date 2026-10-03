@@ -284,7 +284,7 @@ export async function mutateOrder(
   });
   if (!p.ok) return p;
   if (p.statements.length > 0) {
-    await run([...p.statements, ...folds(order.id, actor), ...(p.alsoFold ? folds(p.alsoFold, actor) : [])]);
+    await run([...p.statements, ...(await folds(order.id, actor)), ...(p.alsoFold ? await folds(p.alsoFold, actor) : [])]);
   }
   const fresh = await getOrderView(order.id);
   return fresh ? { ok: true, order: fresh } : { ok: false, reason: "not_found" };
