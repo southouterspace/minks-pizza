@@ -6,18 +6,22 @@ import { and, eq, gte, isNull, notInArray } from "drizzle-orm";
 import { z } from "zod";
 import { db, employeeRoles, employees, shifts, timeEntries } from "@/db";
 import { requireOperator } from "@/lib/auth";
-import { checkbox, dollarsToCents, idField, textField } from "@/lib/form-data";
+import { checkbox, dollarsToCents, idField, textField, textOrNull } from "@/lib/form-data";
 import { JOB_ROLES, ROLE_LABEL, type JobRole, type WeeklyAvailability, type Weekday } from "@/lib/timeclock";
 import {
+  approveWeek,
   copyPreviousWeek,
+  deleteManagerPunch,
   generatePin,
   getStaffConfig,
   isUniqueViolation,
+  managerClockOut,
   pinDigest,
   publishWeek,
   resolveWeek,
+  saveManagerPunch,
 } from "@/lib/timeclock-server";
-import { hhmmSchema, localDateSchema, shiftInstants } from "@/lib/zoned";
+import { hhmmSchema, localDateSchema, shiftInstants, zonedInstant } from "@/lib/zoned";
 
 export type StaffFormState = { error?: string; savedId?: number; pin?: string; notice?: string };
 
@@ -253,4 +257,89 @@ export async function publishSchedule(fd: FormData): Promise<void> {
   const published = await publishWeek(week, cfg);
   revalidateStaff();
   redirect(`/admin/staff/schedule?week=${week}&published=${published}`);
+}
+
+// ---------------------------------------------------------------------------
+// Timesheets (every change to time carries a reason)
+// ---------------------------------------------------------------------------
+
+const reasonSchema = z.string().trim().min(1, "Give a reason for the change.").max(500);
+
+/** A `datetime-local` value ("2026-10-05T16:00") on the store's wall clock. */
+function wallClockField(fd: FormData, name: string, tz: string): Date | null | "invalid" {
+  const raw = textField(fd, name);
+  if (raw === "") return null;
+  const match = /^(\d{4}-\d{2}-\d{2})T(\d{2}:\d{2})$/.exec(raw);
+  if (!match || !localDateSchema.safeParse(match[1]).success) return "invalid";
+  return zonedInstant(match[1], match[2], tz);
+}
+
+export async function savePunch(_prev: StaffFormState, fd: FormData): Promise<StaffFormState> {
+  const operator = await requireOperator();
+  const reason = reasonSchema.safeParse(textField(fd, "reason"));
+  if (!reason.success) return { error: firstIssue(reason.error) };
+  const role = z.enum(JOB_ROLES).safeParse(textField(fd, "role"));
+  if (!role.success) return { error: "Pick a role." };
+  const { timezone } = await getStaffConfig();
+
+  const clockInAt = wallClockField(fd, "clockIn", timezone);
+  const clockOutAt = wallClockField(fd, "clockOut", timezone);
+  if (clockInAt === null || clockInAt === "invalid" || clockOutAt === "invalid") return { error: "Check the clock-in and clock-out times." };
+  const breaks = [];
+  const count = Math.min(10, Number.parseInt(textField(fd, "breakCount"), 10) || 0);
+  for (let i = 0; i < count; i++) {
+    const startedAt = wallClockField(fd, `break-start-${i}`, timezone);
+    const endedAt = wallClockField(fd, `break-end-${i}`, timezone);
+    if (startedAt === null) continue;
+    if (startedAt === "invalid" || endedAt === "invalid") return { error: "Check the break times." };
+    breaks.push({ startedAt, endedAt, paid: checkbox(fd, `break-paid-${i}`) });
+  }
+  let declaredTipsCents: number;
+  try {
+    declaredTipsCents = dollarsToCents(fd, "tips");
+  } catch {
+    return { error: "Enter tips in dollars, like 12.50." };
+  }
+
+  const result = await saveManagerPunch(
+    {
+      entryId: textField(fd, "entryId") === "" ? null : idField(fd, "entryId"),
+      employeeId: idField(fd, "employeeId"),
+      role: role.data,
+      clockInAt,
+      clockOutAt,
+      breaks,
+      declaredTipsCents,
+      note: textOrNull(fd, "note"),
+      reason: reason.data,
+    },
+    operator.id,
+  );
+  if (result.error) return result;
+  revalidateStaff();
+  return { notice: "Saved." };
+}
+
+export async function deletePunch(fd: FormData): Promise<void> {
+  const operator = await requireOperator();
+  await deleteManagerPunch(idField(fd, "entryId"), operator.id, reasonSchema.parse(textField(fd, "reason")));
+  revalidateStaff();
+}
+
+/** Closes a forgotten punch now (overview's "Clock out"). */
+export async function clockOutForEmployee(fd: FormData): Promise<void> {
+  const operator = await requireOperator();
+  await managerClockOut(idField(fd, "entryId"), operator.id, reasonSchema.parse(textField(fd, "reason")));
+  revalidateStaff();
+}
+
+/** Approves one employee's week (`employeeId`) or everyone's. */
+export async function approveTimesheet(fd: FormData): Promise<void> {
+  const operator = await requireOperator();
+  const cfg = await getStaffConfig();
+  const week = resolveWeek(textField(fd, "week"), cfg);
+  const employeeId = textField(fd, "employeeId") === "" ? null : idField(fd, "employeeId");
+  const approved = await approveWeek(week, employeeId, operator.id, cfg);
+  revalidateStaff();
+  redirect(`/admin/staff/timesheets?week=${week}&approved=${approved}`);
 }
