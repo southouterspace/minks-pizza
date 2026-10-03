@@ -11,6 +11,7 @@ import { JOB_ROLES, ROLE_LABEL, type JobRole, type WeeklyAvailability, type Week
 import {
   approveWeek,
   copyPreviousWeek,
+  decideTimeOff,
   deleteManagerPunch,
   generatePin,
   getStaffConfig,
@@ -18,6 +19,7 @@ import {
   managerClockOut,
   pinDigest,
   publishWeek,
+  requestTimeOff,
   resolveWeek,
   saveManagerPunch,
 } from "@/lib/timeclock-server";
@@ -342,4 +344,33 @@ export async function approveTimesheet(fd: FormData): Promise<void> {
   const approved = await approveWeek(week, employeeId, operator.id, cfg);
   revalidateStaff();
   redirect(`/admin/staff/timesheets?week=${week}&approved=${approved}`);
+}
+
+// ---------------------------------------------------------------------------
+// Time off
+// ---------------------------------------------------------------------------
+
+export async function decideTimeOffRequest(fd: FormData): Promise<void> {
+  const operator = await requireOperator();
+  const decision = z.enum(["approved", "denied"]).parse(textField(fd, "decision"));
+  await decideTimeOff(idField(fd, "requestId"), decision, operator.id);
+  revalidateStaff();
+}
+
+/** Time off a manager enters for someone is approved on the spot. */
+export async function addTimeOff(_prev: StaffFormState, fd: FormData): Promise<StaffFormState> {
+  const operator = await requireOperator();
+  const start = localDateSchema.safeParse(textField(fd, "startDate"));
+  const end = localDateSchema.safeParse(textField(fd, "endDate") || textField(fd, "startDate"));
+  if (!start.success || !end.success) return { error: "Pick the first and last day." };
+  if (end.data < start.data) return { error: "The last day can't be before the first." };
+  await requestTimeOff({
+    employeeId: idField(fd, "employeeId"),
+    startDate: start.data,
+    endDate: end.data,
+    reason: textOrNull(fd, "reason"),
+    decidedBy: operator.id,
+  });
+  revalidateStaff();
+  return { notice: "Time off added." };
 }
