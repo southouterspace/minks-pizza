@@ -251,6 +251,231 @@ handoff with database state checked at every step, recall, Undo, bump-bar
 keys, a new order appearing live, the cancel alert, and the offline banner
 appearing and clearing.
 
+## Session 5 — Order management
+
+**Ask:** Toast-grade admin order management: a live board, history with
+search and export, a detail page with an audit trail, promised times, cancel
+reasons, payment recording, printing, day stats and a new-order alert.
+
+**Built:** see README → Order management.
+
+- **One lifecycle table.** `src/lib/order-workflow.ts` (pure) owns
+  `TRANSITIONS`, `NEXT_ACTION`, `STATUS_META`, `CANCEL_REASONS`, `isLate`,
+  `minutesUntil` and `statusTimestamps`. The schema builds its enums from the
+  same tuples. The old copies in `admin/actions.ts` and `order-card.tsx` are
+  deleted, and the KDS moves status only through it. Cancel is now allowed
+  from preparing and ready too (an order can go wrong at any point before
+  handoff). KDS recall stays a separate `RECALLABLE` edge, the only way an
+  order goes backwards, and `statusTimestamps("preparing")` clears
+  `readyAt`/`completedAt` so a recalled order isn't reported as ready.
+- **Audit trail in the same statement as the change.** Every write in
+  `src/lib/order-writes.ts` is one data-modifying CTE: lock the order
+  `for update` only if the guard (`status in (...)`, `payment_status =
+  'pending'`, …) still holds, update it, insert the `order_events` row from
+  what the update returned. The brief asked for an update + insert in one
+  `db.batch`; a batch can't make the insert depend on whether the update
+  matched, and a follow-up insert after `.returning()` could be lost if the
+  second request failed. The CTE gives both: no double-apply when two
+  tablets (or KDS + admin) tap at once, and never a change without its row.
+  `fromStatus` comes from the locked row, so it is exact even for the KDS's
+  multi-source moves (`new|confirmed → preparing`). The statements are
+  plain `db.execute` items, so the KDS still batches them with its item
+  updates in one transaction. Drizzle's insert-select builder can't express
+  this (it requires every column including the identity, and duplicates
+  nested CTEs), hence the SQL template.
+- **The guard is the current status, not the button the operator saw.**
+  `transitionOrder` reads the status, checks `canTransition`, then updates
+  `where status = <that>`. A stale tap from a second tablet is refused with
+  "Order is already confirmed." rather than silently moving the order a
+  further step.
+- **The store's day.** `store_settings.timezone` (Settings select, US zones).
+  "Today" and history date ranges compare `(placed_at at time zone tz)::date`
+  in Postgres, which handles DST. Server-rendered times pass the zone
+  explicitly; before this, admin timestamps rendered in the server's zone
+  (UTC on Vercel).
+- **Net sales = item subtotals of non-canceled orders.** Tax, tips and
+  delivery fees aren't sales (Toast's definition). Average ticket is net
+  sales over those orders. "Late now" is computed with `isLate` over the
+  live orders rather than duplicated in SQL.
+- **Late means the food is still owed.** `isLate` is true only for
+  new/confirmed/preparing past `promisedAt`; a ready order waiting for
+  pickup isn't late.
+- **Checkout** sets `promisedAt` = placedAt + prep minutes and writes the
+  `placed` event (actor "Customer") in the same batch as the order lines.
+  Orders from before the migration have neither; the detail timeline shows a
+  synthetic "Order placed" for them.
+- **New-order alert.** "Seen" is derived, not tracked in an effect: orders
+  present on first render are acknowledged, any `new` order not in that set
+  is unseen, and a tap or key acknowledges the current ones. The chime plays
+  once per order id. The AudioContext is created on the first tap because
+  browsers block audio before a gesture; the title flash works either way.
+- **Action feedback runs in the submit handler.** The first cut kept the
+  result in `useActionState`. A successful move re-renders the board and
+  remounts the card in another lane, so that state vanished and the second
+  tablet's refusal toast never showed. The e2e caught it.
+- **History is a GET form**, so the URL is the state and the CSV link reuses
+  the same query. CSV fields are RFC 4180 quoted, and values starting with
+  `= + - @` get a leading `'` so a spreadsheet won't run them as formulas.
+- **Fixed in passing:** `AutoRefresh` called `router.refresh()` inside a
+  `setState` updater (React warned "Cannot update Router while rendering").
+- **Not built:** refunds (the status exists, nothing sets it), editing items
+  on a placed order, per-operator roles.
+
+**Tested** against a throwaway Neon branch (`ep-purple-unit`):
+
+- `scripts/test-order-workflow.ts`, 7 tests against literal values:
+  the full transition table, every legal move and nothing else, `isLate`
+  edges, `minutesUntil` rounding, `statusTimestamps` per destination.
+- `scripts/e2e-orders.ts`, 60 checks: promised time and placed event at
+  checkout; confirm → preparing → ready → complete on the board with the
+  database, lanes and one event per move checked; +10 min moves
+  `promisedAt` by exactly 600 s; cancel with a reason writes
+  `cancelReason`, `canceledAt` and the event, and the tracker shows it;
+  the title flashes on an arriving order (not on first load), mute persists
+  and a tap acknowledges; two signed-in tablets tap Confirm and it applies
+  once with a toast on the second; history search by name, formatted and
+  bare phone digits and order number; status filter; CSV export content,
+  quoting and 401 when signed out; payment and note events; a KDS recall
+  writes a "Kitchen display · …" event and clears the timestamps; the
+  timeline lists all of it in order; lanes stack and nothing scrolls
+  sideways at 375 px. Screenshots of board, history and detail at desktop
+  and 375 px, plus the print ticket.
+- `scripts/e2e-kds.ts` still passes (26 checks) with the KDS writing
+  through the logged transitions.
+- The e2e creates and deletes its own operator. On a database that already
+  has operators, `e2e-kds.ts` needs `kitchen@minks.example` to exist.
+
+## Session 6 — Employee time tracking
+
+**Ask:** let the owner schedule hourly staff around the rush, see who is on
+the clock, keep labor % in check and hand overtime-correct hours to payroll,
+and let staff clock in on a shared tablet with a PIN and no login of their
+own.
+
+**Built:** `/admin/staff` (Overview, Schedule, Timesheets, Employees, Time
+off), the `/timeclock` kiosk, a Staff & payroll settings card, and the CSV
+export at `/api/admin/timesheets`. See README → Staff: scheduling and time
+clock.
+
+- **Data model.** `employees` (separate from `operators`), `employee_roles`
+  with a rate per role, `shifts` (null employee = open shift, null
+  `published_at` = draft), `time_entries` with `time_breaks`,
+  `time_entry_audit`, and `time_off_requests`. New `store_settings` columns
+  hold the timezone and the payroll rules. Everything is additive.
+- **Pure domain** (`src/lib/timeclock.ts`, `src/lib/zoned.ts`): the clock
+  state machine, payroll math, timesheet flags, schedule conflicts,
+  punch-to-shift matching and calendar math. `scripts/test-timeclock.ts`
+  checks them against hand-computed values.
+
+**Design decisions and why:**
+
+- **The clock is a state machine.** `ClockState` is off, working or on a
+  break, and `ALLOWED` lists the actions each state accepts. `planClock`
+  sorts every request into apply, replay or refuse. An applied plan
+  carries a `ClockStep` that already holds the rows it writes, so the
+  kiosk server switches on the step with no fallback. A replay is an action
+  that finds the clock already where it leads, such as a second clock-in,
+  and it answers with the current view instead of an error. The kiosk draws
+  its buttons from the same table. Clocking out from a break is refused, so
+  every break record gets closed.
+- **The database owns "one open punch".** A partial unique index on
+  `time_entries(employee_id) where clock_out_at is null`, and the same for
+  open breaks. The state check handles retries; the index handles two
+  tablets racing, and its violation is caught and answered as a replay.
+- **Calendar math in the store's zone, with Intl only.** Server, tablet and
+  manager may sit in different zones. Every day boundary goes through
+  `zoned.ts`, and `zonedInstant` re-checks the offset once, so a DST night
+  shift comes out an hour short or long, as it really is.
+- **A punch belongs to the day it started.** This is a common payroll
+  convention, and it keeps a 5 PM to 1 AM close on one day.
+- **Overtime without double counting.** Daily overtime and double time come
+  first. Weekly overtime then converts only regular minutes past the weekly
+  threshold, walking the days in order. Pay uses the FLSA weighted average:
+  straight time at each punch's rate, then half (or a full) regular rate as
+  the premium. Cents are rounded once, at the end, with integer arithmetic.
+- **Rates are snapshotted at clock-in**, so a raise never rewrites past pay.
+  A manager edit that changes the role takes that role's current rate.
+- **Every manager change to time is audited with a reason**, with before
+  and after snapshots, and the audit row survives the punch's deletion.
+  Editing an approved punch clears the approval and logs that too.
+- **PINs are HMAC digests, not bcrypt.** The kiosk looks an employee up by
+  PIN alone, which needs a deterministic digest, and the unique index on it
+  rejects duplicates. The key is `SESSION_SECRET`. Brute force is limited
+  only by requiring an operator session on the tablet (see Not built).
+- **Archiving, not deleting.** Payroll history references the employee
+  (`time_entries` uses `on delete restrict`). Archiving refuses while they
+  are on the clock and turns their upcoming shifts into open shifts.
+- **Edits keep a shift's published state**, so staff see a moved shift at
+  once instead of it vanishing until the next publish.
+
+**Spec changes made while building:**
+
+- `computeWeek` takes `now`. Open punches count up to now, and a pure
+  function can't read the clock. It returns per-punch minutes and an `open`
+  marker. Flags come from `entryFlags`, which needs the shift and the audit
+  history that `computeWeek` doesn't have.
+- `shiftConflicts` takes the weekly overtime threshold and week start. The
+  `overtime` conflict can't be decided without them.
+- Added `punchProblem` (validation for hand-entered punches),
+  `remainingShiftMinutes` (the rest of a shift already under way counts
+  toward projected hours) and a partial unique index on open breaks.
+- The CSV is one rectangular table with a `Line` column (`entry` or
+  `total`), so entry lines and summary lines import into one sheet.
+
+**Tested:**
+
+- `scripts/test-timeclock.ts`: 47 pure checks (29 at first; the
+  restructure added the rest). Covered: zoned helpers
+  across both 2026 New York DST changes and an overnight shift; 45 h →
+  5 h overtime and $712.50; two rates → a $41.67 weighted-average premium;
+  California 8/12 plus weekly 40; paid and unpaid breaks; every state ×
+  action and the step each applied plan carries; every conflict and flag;
+  a shift ending at midnight against the next day's time off; the
+  formatting helpers; the settings field parser; the kiosk reducer.
+- `scripts/e2e-timeclock.ts`: 51 checks in a real browser against the
+  `timeclock-test` branch of `autumn-bar-62526195`, asserting both screen
+  and database. Covered: employee with two roles and a PIN, duplicate PIN,
+  schedule and publish, kiosk wrong PIN, clock in, break, clock out with
+  tips, approve, edit with reason (audit and cleared approval), CSV, kiosk
+  time off through approval to the schedule cell, two concurrent clock-ins
+  leaving one open punch, the database refusing a second open punch,
+  manager clock-out, settings, the early clock-in refusal, and 375px
+  layouts.
+
+**Restructure (review follow-up):**
+
+- `timeclock-server.ts` (1141 lines) became `src/lib/staff/`, one
+  module per feature, and every rule those modules or the pages had
+  re-derived now has one home in `timeclock.ts` or `zoned.ts`. Pages
+  render view models and don't query.
+- Multi-row creates are atomic. `nextId` (`src/db/ids.ts`) reserves an
+  identity value so a punch and its breaks and audit row, or an employee
+  and their roles, go in one `db.batch`. Manager clock-out and approval
+  insert their audit rows from the update's `returning` rows in the same
+  statement, so a lost race audits nothing.
+- `time_off_one_live`, a partial unique index on
+  `(employee_id, start_date, end_date) where status <> 'denied'`, makes
+  requestTimeOff a single upsert.
+- Availability is `Record<Weekday, DayRule>` in the domain. The jsonb
+  column keeps its stored shape and is parsed when read.
+- One intended behavior change: the Time off page uses
+  `shiftTouchesTimeOff`, the schedule's overlap rule. A shift ending at
+  midnight no longer conflicts with time off that starts that day.
+
+**Not built:**
+
+- Payroll provider integration (Gusto, ADP). The CSV is the hand-off.
+- Tip pooling ([#5](https://github.com/southouterspace/minks-pizza/issues/5)).
+  Declared tips are recorded per punch only.
+- SMS shift notifications.
+- Shift swaps between staff ([#6](https://github.com/southouterspace/minks-pizza/issues/6)).
+- Geofenced mobile clock-in. The clock is the shared tablet.
+- PIN brute-force lockout and manager reset
+  ([#7](https://github.com/southouterspace/minks-pizza/issues/7)). Today
+  the only protection is that the tablet needs an operator session.
+- California seventh-consecutive-day overtime, and split-shift or
+  meal-penalty pay. The no-meal-break flag only flags.
+
 ## Gotchas hit (for future sessions)
 
 - Playwright `getByRole(name:)` is substring-matching: "Publish store" also
@@ -274,6 +499,19 @@ appearing and clearing.
   instead of reading it once.
 - Screenshots taken right after a tab click can catch `transition-colors`
   halfway, so two tabs look selected. Check `aria-pressed`, not pixels.
+- Scripts can't import a module with `import "server-only"`: the package
+  only exists inside Next's bundler. The time clock e2e recomputes the PIN
+  digest with `node:crypto` instead of importing `src/lib/staff/employees.ts`.
+  To call a server module (`order-writes.ts`, `order-queries.ts`,
+  `src/lib/staff/*`) from tsx, point `NODE_PATH` at a directory holding an
+  empty `server-only` package, alongside `node_modules`.
+- `npx tsc --noEmit` on a fresh checkout fails on `LayoutProps` and
+  `PageProps` until `npx next typegen` (or `next dev` / `next build`) has
+  generated the route types.
+- A hydration-mismatch warning about `caret-color: transparent` on the
+  history search input showed up only in e2e runs that take screenshots
+  (Playwright hides the caret for them). Loading and searching without
+  screenshots logs nothing.
 - Destructive e2e (creating/removing operator accounts) must not run against the
   production database. `mcp__Neon__create_branch` makes an isolated copy in
   seconds; point `MINKS_DATABASE_URL` at it and delete the branch afterwards.

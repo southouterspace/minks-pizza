@@ -1,5 +1,5 @@
 import { requireOperator } from "@/lib/auth";
-import { DAY_NAMES } from "@/lib/hours";
+import { DAY_NAMES } from "@/lib/zoned";
 import { activePromotion, formatMultiplier } from "@/lib/loyalty";
 import { getLoyaltySettings, listPromotions } from "@/lib/loyalty-server";
 import { deletePromotion, savePromotion } from "../actions";

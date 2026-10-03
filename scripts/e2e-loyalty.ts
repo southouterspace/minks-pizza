@@ -145,8 +145,7 @@ async function completeViaAdmin(page: Page, orderNumber: number, id: string) {
   ] as const;
   for (const [label, status] of steps) {
     await page.goto(`${BASE}/admin`, { waitUntil: "networkidle" });
-    const card = page.getByTestId(`order-card-${orderNumber}`);
-    await card.getByRole("button", { name: label, exact: true }).click();
+    await page.getByTestId(`advance-${orderNumber}`).filter({ hasText: label }).click();
     await eventually(async () => (await orderRow(id)).status === status);
   }
 }
@@ -367,9 +366,10 @@ async function main() {
 
   // --- Cancel refunds -------------------------------------------------------
   await op.goto(`${BASE}/admin`, { waitUntil: "networkidle" });
-  const card2 = op.getByTestId(`order-card-${order2.orderNumber}`);
-  await card2.getByRole("button", { name: "Cancel", exact: true }).click();
-  await card2.getByRole("button", { name: "Confirm cancel" }).click();
+  await op.getByTestId(`cancel-${order2.orderNumber}`).click();
+  const cancelDialog = op.getByRole("dialog");
+  await cancelDialog.locator("select[name=reason]").selectOption("Customer request");
+  await cancelDialog.getByRole("button", { name: "Cancel order", exact: true }).click();
   await eventually(async () => (await orderRow(order2.id)).status === "canceled");
   const afterCancel = await member(RITA.digits);
   check("cancel refunds the points", afterCancel.pointsBalance === 399, String(afterCancel.pointsBalance));

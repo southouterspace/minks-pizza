@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { connection } from "next/server";
 import { CartProvider } from "@/components/cart-context";
 import { StoreMark } from "@/components/store-mark";
 import { CartBadge } from "@/components/store/cart-badge";
@@ -8,6 +9,7 @@ import { getCurrentMember } from "@/lib/member-auth";
 import { getLoyaltySettings } from "@/lib/loyalty-server";
 
 export default async function StoreLayout({ children }: LayoutProps<"/">) {
+  await connection();
   const [settings, loyalty, member] = await Promise.all([
     getSettings(),
     getLoyaltySettings(),

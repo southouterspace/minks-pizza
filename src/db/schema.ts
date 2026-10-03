@@ -9,6 +9,8 @@ import {
   pgTable,
   text,
   timestamp,
+  unique,
+  uniqueIndex,
   uuid,
   type AnyPgColumn,
 } from "drizzle-orm/pg-core";
@@ -20,19 +22,24 @@ import {
   type LoyaltyTier,
   type RewardEffect,
 } from "../lib/loyalty";
+import {
+  DEFAULT_STAFF_RULES,
+  JOB_ROLES,
+  TIME_AUDIT_ACTIONS,
+  type AuditSnapshot,
+  type StoredAvailability,
+} from "../lib/timeclock";
+import {
+  ORDER_EVENT_TYPES,
+  ORDER_STATUSES,
+  PAYMENT_METHODS,
+} from "../lib/order-workflow";
 
 // ---------------------------------------------------------------------------
 // Enums
 // ---------------------------------------------------------------------------
 
-export const orderStatusEnum = pgEnum("order_status", [
-  "new",
-  "confirmed",
-  "preparing",
-  "ready",
-  "completed",
-  "canceled",
-]);
+export const orderStatusEnum = pgEnum("order_status", ORDER_STATUSES);
 
 export const orderTypeEnum = pgEnum("order_type", ["pickup", "delivery"]);
 
@@ -42,6 +49,11 @@ export const orderTypeEnum = pgEnum("order_type", ["pickup", "delivery"]);
  * ticket for the expo but never hold an order back from "ready".
  */
 export const kitchenStationEnum = pgEnum("kitchen_station", KITCHEN_STATIONS);
+
+/** How an operator says the order was paid at the counter or door. */
+export const paymentMethodEnum = pgEnum("payment_method", PAYMENT_METHODS);
+
+export const orderEventTypeEnum = pgEnum("order_event_type", ORDER_EVENT_TYPES);
 
 export const paymentStatusEnum = pgEnum("payment_status", [
   "pending", // awaiting payment integration (Stripe) — v1 default
@@ -108,6 +120,21 @@ export const storeSettings = pgTable("store_settings", {
   kdsLateMinutes: integer("kds_late_minutes").notNull().default(15),
   /** Kitchen display: oven bake countdown for a pie (minutes). */
   kdsOvenMinutes: integer("kds_oven_minutes").notNull().default(7),
+  /** IANA zone that defines the store's day for stats, history and times. */
+  timezone: text("timezone").notNull().default("America/Chicago"),
+  /** Payroll week start: 0 = Sunday … 6 = Saturday. */
+  weekStartsOn: integer("week_starts_on").notNull().default(DEFAULT_STAFF_RULES.weekStartsOn),
+  otWeeklyMinutes: integer("ot_weekly_minutes").notNull().default(DEFAULT_STAFF_RULES.otWeeklyMinutes),
+  /** Daily overtime threshold (California: 480); null = off. */
+  otDailyMinutes: integer("ot_daily_minutes"),
+  /** Daily double-time threshold (California: 720); null = off. */
+  dtDailyMinutes: integer("dt_daily_minutes"),
+  /** Flags a punch with no unpaid break past this many paid minutes; never deducts. Null = off. */
+  breakRequiredAfterMinutes: integer("break_required_after_minutes").default(DEFAULT_STAFF_RULES.breakRequiredAfterMinutes),
+  /** Late / early-out tolerance against the schedule. */
+  clockGraceMinutes: integer("clock_grace_minutes").notNull().default(DEFAULT_STAFF_RULES.clockGraceMinutes),
+  /** The kiosk refuses a clock-in more than this many minutes before today's shift; null = off. */
+  earlyClockInMinutes: integer("early_clock_in_minutes"),
   isPublished: boolean("is_published").notNull().default(false),
   isAcceptingOrders: boolean("is_accepting_orders").notNull().default(true),
   updatedAt: timestamp("updated_at", { withTimezone: true })
@@ -237,6 +264,15 @@ export const orders = pgTable("orders", {
   paymentStatus: paymentStatusEnum("payment_status")
     .notNull()
     .default("pending"),
+  paymentMethod: paymentMethodEnum("payment_method"),
+  /**
+   * The ready time quoted to the customer: placedAt + prep minutes at
+   * checkout, pushed later by operators. Null on orders from before it existed.
+   */
+  promisedAt: timestamp("promised_at", { withTimezone: true }),
+  completedAt: timestamp("completed_at", { withTimezone: true }),
+  canceledAt: timestamp("canceled_at", { withTimezone: true }),
+  cancelReason: text("cancel_reason"),
   placedAt: timestamp("placed_at", { withTimezone: true })
     .notNull()
     .defaultNow(),
@@ -281,6 +317,186 @@ export const orderItems = pgTable("order_items", {
   /** Set when the item is finished (pies: out of the oven, cut and boxed). */
   doneAt: timestamp("done_at", { withTimezone: true }),
 });
+
+/** Append-only audit trail: one row per thing that happened to an order. */
+export const orderEvents = pgTable(
+  "order_events",
+  {
+    id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+    orderId: uuid("order_id")
+      .notNull()
+      .references(() => orders.id, { onDelete: "cascade" }),
+    type: orderEventTypeEnum("type").notNull(),
+    fromStatus: orderStatusEnum("from_status"),
+    toStatus: orderStatusEnum("to_status"),
+    /** Display name at the time: operator name, "Customer", or "Kitchen display · <name>". */
+    actor: text("actor").notNull(),
+    operatorId: integer("operator_id").references(() => operators.id, {
+      onDelete: "set null",
+    }),
+    note: text("note"),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (t) => [index("order_events_order_id_created_at_idx").on(t.orderId, t.createdAt)],
+);
+
+// ---------------------------------------------------------------------------
+// Staff: employees, schedule, time clock
+//
+// Employees are not operators: they never sign in to the admin. They identify
+// at the shared time clock with a PIN.
+// ---------------------------------------------------------------------------
+
+export const jobRoleEnum = pgEnum("job_role", JOB_ROLES);
+
+export const staffSourceEnum = pgEnum("staff_source", ["kiosk", "manager"]);
+
+export const timeAuditActionEnum = pgEnum("time_audit_action", TIME_AUDIT_ACTIONS);
+
+export const timeOffStatusEnum = pgEnum("time_off_status", ["pending", "approved", "denied"]);
+
+export const employees = pgTable("employees", {
+  id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+  name: text("name").notNull(),
+  phone: text("phone"),
+  email: text("email"),
+  /** HMAC of the clock PIN; null = cannot use the time clock. */
+  pinDigest: text("pin_digest").unique(),
+  /** Archived employees leave the schedule and the clock; payroll history keeps them. */
+  isActive: boolean("is_active").notNull().default(true),
+  /** Null = available any time. */
+  availability: jsonb("availability").$type<StoredAvailability>(),
+  notes: text("notes"),
+  hiredOn: date("hired_on"),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+});
+
+export const employeeRoles = pgTable(
+  "employee_roles",
+  {
+    id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+    employeeId: integer("employee_id")
+      .notNull()
+      .references(() => employees.id, { onDelete: "cascade" }),
+    role: jobRoleEnum("role").notNull(),
+    hourlyRateCents: integer("hourly_rate_cents").notNull(),
+    isPrimary: boolean("is_primary").notNull().default(false),
+  },
+  (t) => [unique("employee_roles_employee_role").on(t.employeeId, t.role)],
+);
+
+/** The schedule. A null employee is an open shift. */
+export const shifts = pgTable(
+  "shifts",
+  {
+    id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+    employeeId: integer("employee_id").references(() => employees.id, { onDelete: "set null" }),
+    role: jobRoleEnum("role").notNull(),
+    startsAt: timestamp("starts_at", { withTimezone: true }).notNull(),
+    endsAt: timestamp("ends_at", { withTimezone: true }).notNull(),
+    unpaidBreakMinutes: integer("unpaid_break_minutes").notNull().default(0),
+    notes: text("notes"),
+    /** Null = draft. Staff never see drafts. */
+    publishedAt: timestamp("published_at", { withTimezone: true }),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    check("shifts_ends_after_starts", sql`${t.endsAt} > ${t.startsAt}`),
+    index("shifts_starts_at").on(t.startsAt),
+  ],
+);
+
+/** One clocked shift (a punch). */
+export const timeEntries = pgTable(
+  "time_entries",
+  {
+    id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+    employeeId: integer("employee_id")
+      .notNull()
+      .references(() => employees.id, { onDelete: "restrict" }),
+    shiftId: integer("shift_id").references(() => shifts.id, { onDelete: "set null" }),
+    role: jobRoleEnum("role").notNull(),
+    /** Rate snapshot at clock-in, so a raise never rewrites past pay. */
+    hourlyRateCents: integer("hourly_rate_cents").notNull(),
+    clockInAt: timestamp("clock_in_at", { withTimezone: true }).notNull(),
+    clockOutAt: timestamp("clock_out_at", { withTimezone: true }),
+    declaredTipsCents: integer("declared_tips_cents").notNull().default(0),
+    note: text("note"),
+    source: staffSourceEnum("source").notNull(),
+    approvedAt: timestamp("approved_at", { withTimezone: true }),
+    approvedBy: integer("approved_by").references(() => operators.id, { onDelete: "set null" }),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    // The database, not the app, guarantees one open punch per person:
+    // a double tap or a second tablet loses the race here.
+    uniqueIndex("time_entries_one_open").on(t.employeeId).where(sql`${t.clockOutAt} is null`),
+    check("time_entries_out_after_in", sql`${t.clockOutAt} is null or ${t.clockOutAt} > ${t.clockInAt}`),
+    index("time_entries_clock_in_at").on(t.clockInAt),
+  ],
+);
+
+export const timeBreaks = pgTable(
+  "time_breaks",
+  {
+    id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+    timeEntryId: integer("time_entry_id")
+      .notNull()
+      .references(() => timeEntries.id, { onDelete: "cascade" }),
+    startedAt: timestamp("started_at", { withTimezone: true }).notNull(),
+    endedAt: timestamp("ended_at", { withTimezone: true }),
+    paid: boolean("paid").notNull().default(false),
+  },
+  (t) => [
+    uniqueIndex("time_breaks_one_open").on(t.timeEntryId).where(sql`${t.endedAt} is null`),
+    check("time_breaks_end_after_start", sql`${t.endedAt} is null or ${t.endedAt} >= ${t.startedAt}`),
+  ],
+);
+
+/** Every manager change to time, with its reason. Survives the entry's deletion. */
+export const timeEntryAudit = pgTable("time_entry_audit", {
+  id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+  timeEntryId: integer("time_entry_id").references(() => timeEntries.id, { onDelete: "set null" }),
+  employeeId: integer("employee_id")
+    .notNull()
+    .references(() => employees.id, { onDelete: "cascade" }),
+  operatorId: integer("operator_id").references(() => operators.id, { onDelete: "set null" }),
+  action: timeAuditActionEnum("action").notNull(),
+  reason: text("reason"),
+  before: jsonb("before").$type<AuditSnapshot>(),
+  after: jsonb("after").$type<AuditSnapshot>(),
+  at: timestamp("at", { withTimezone: true }).notNull().defaultNow(),
+});
+
+export const timeOffRequests = pgTable(
+  "time_off_requests",
+  {
+    id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+    employeeId: integer("employee_id")
+      .notNull()
+      .references(() => employees.id, { onDelete: "cascade" }),
+    /** Store-local dates, both inclusive. */
+    startDate: date("start_date").notNull(),
+    endDate: date("end_date").notNull(),
+    reason: text("reason"),
+    status: timeOffStatusEnum("status").notNull().default("pending"),
+    source: staffSourceEnum("source").notNull(),
+    decidedBy: integer("decided_by").references(() => operators.id, { onDelete: "set null" }),
+    decidedAt: timestamp("decided_at", { withTimezone: true }),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    check("time_off_end_after_start", sql`${t.endDate} >= ${t.startDate}`),
+    // One live request per person and date range: a retried kiosk request
+    // or a double tap lands on the existing row instead of a second one.
+    uniqueIndex("time_off_one_live").on(t.employeeId, t.startDate, t.endDate).where(sql`${t.status} <> 'denied'`),
+  ],
+);
 
 // ---------------------------------------------------------------------------
 // Loyalty
@@ -457,6 +673,18 @@ export const itemModifierGroupsRelations = relations(
 
 export const ordersRelations = relations(orders, ({ many }) => ({
   items: many(orderItems),
+  events: many(orderEvents),
+}));
+
+export const orderEventsRelations = relations(orderEvents, ({ one }) => ({
+  order: one(orders, {
+    fields: [orderEvents.orderId],
+    references: [orders.id],
+  }),
+  operator: one(operators, {
+    fields: [orderEvents.operatorId],
+    references: [operators.id],
+  }),
 }));
 
 export const orderItemsRelations = relations(orderItems, ({ one }) => ({
@@ -464,4 +692,39 @@ export const orderItemsRelations = relations(orderItems, ({ one }) => ({
     fields: [orderItems.orderId],
     references: [orders.id],
   }),
+}));
+
+export const employeesRelations = relations(employees, ({ many }) => ({
+  roles: many(employeeRoles),
+  shifts: many(shifts),
+  timeEntries: many(timeEntries),
+  timeOff: many(timeOffRequests),
+}));
+
+export const employeeRolesRelations = relations(employeeRoles, ({ one }) => ({
+  employee: one(employees, { fields: [employeeRoles.employeeId], references: [employees.id] }),
+}));
+
+export const shiftsRelations = relations(shifts, ({ one }) => ({
+  employee: one(employees, { fields: [shifts.employeeId], references: [employees.id] }),
+}));
+
+export const timeEntriesRelations = relations(timeEntries, ({ one, many }) => ({
+  employee: one(employees, { fields: [timeEntries.employeeId], references: [employees.id] }),
+  shift: one(shifts, { fields: [timeEntries.shiftId], references: [shifts.id] }),
+  breaks: many(timeBreaks),
+  audit: many(timeEntryAudit),
+}));
+
+export const timeBreaksRelations = relations(timeBreaks, ({ one }) => ({
+  entry: one(timeEntries, { fields: [timeBreaks.timeEntryId], references: [timeEntries.id] }),
+}));
+
+export const timeEntryAuditRelations = relations(timeEntryAudit, ({ one }) => ({
+  entry: one(timeEntries, { fields: [timeEntryAudit.timeEntryId], references: [timeEntries.id] }),
+  operator: one(operators, { fields: [timeEntryAudit.operatorId], references: [operators.id] }),
+}));
+
+export const timeOffRequestsRelations = relations(timeOffRequests, ({ one }) => ({
+  employee: one(employees, { fields: [timeOffRequests.employeeId], references: [employees.id] }),
 }));

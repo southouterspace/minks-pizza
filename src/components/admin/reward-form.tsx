@@ -3,7 +3,7 @@
 import { useState } from "react";
 import { PRICE_PROTECTION_DAYS, type RewardEffect } from "@/lib/loyalty";
 import { saveReward } from "@/app/admin/loyalty/actions";
-import { centsToDollars } from "@/components/admin/ui";
+import { centsToDollars } from "@/lib/money";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Field, FieldLabel } from "@/components/ui/field";

@@ -2,7 +2,7 @@
 
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
-import { and, asc, desc, eq, inArray } from "drizzle-orm";
+import { asc, desc, eq, inArray } from "drizzle-orm";
 import { z } from "zod";
 import {
   categories,
@@ -12,7 +12,6 @@ import {
   modifierGroups,
   modifiers,
   operators,
-  orders,
   storeLogo,
   storeSettings,
   type DayHours,
@@ -25,59 +24,41 @@ import {
   requireOperator,
   verifyPassword,
 } from "@/lib/auth";
+import { STORE_TIMEZONES } from "@/lib/hours";
 import { KITCHEN_STATIONS, type KitchenStation } from "@/lib/kds";
+import { DEFAULT_STAFF_RULES, DEFAULT_TIMEZONE, parseStaffRules } from "@/lib/timeclock";
 import {
-  cancellationStatements,
-  completionStatements,
-  getLoyaltySettings,
-} from "@/lib/loyalty-server";
+  checkbox,
+  dollarsToCents,
+  idField,
+  intField,
+  textField,
+  textOrNull,
+} from "@/lib/form-data";
+import {
+  CANCEL_REASONS,
+  ORDER_STATUSES,
+  PAYMENT_METHODS,
+} from "@/lib/order-workflow";
+import {
+  addOrderNote,
+  adjustPromisedTime,
+  recordPayment,
+  transitionOrder,
+  type Actor,
+  type OrderActionResult,
+} from "@/lib/order-writes";
 
 export type AuthFormState = { error?: string };
-
-// ---------------------------------------------------------------------------
-// FormData helpers
-// ---------------------------------------------------------------------------
-
-function textField(fd: FormData, name: string): string {
-  const v = fd.get(name);
-  return typeof v === "string" ? v.trim() : "";
-}
-
-function textOrNull(fd: FormData, name: string): string | null {
-  const v = textField(fd, name);
-  return v === "" ? null : v;
-}
-
-function checkbox(fd: FormData, name: string): boolean {
-  return fd.get(name) === "on";
-}
-
-/** Required positive integer id (from a hidden input). Throws when tampered. */
-function idField(fd: FormData, name: string): number {
-  const n = Number.parseInt(textField(fd, name), 10);
-  if (!Number.isInteger(n) || n <= 0) throw new Error(`Invalid ${name}`);
-  return n;
-}
-
-/** Non-negative integer with a fallback for blank/invalid input. */
-function intField(fd: FormData, name: string, fallback: number): number {
-  const n = Number.parseInt(textField(fd, name), 10);
-  if (Number.isNaN(n)) return fallback;
-  return Math.max(0, n);
-}
-
-/** Dollars string ("12.50") → integer cents. Blank = 0. */
-function dollarsToCents(fd: FormData, name: string): number {
-  const raw = textField(fd, name);
-  if (raw === "") return 0;
-  const n = Number.parseFloat(raw);
-  if (Number.isNaN(n) || n < 0) throw new Error(`Invalid ${name}`);
-  return Math.round(n * 100);
-}
 
 /** Kitchen-display routing for a category; blank or unknown → "kitchen". */
 function stationField(fd: FormData): KitchenStation {
   return z.enum(KITCHEN_STATIONS).catch("kitchen").parse(textField(fd, "station"));
+}
+
+function timezoneField(fd: FormData): string {
+  const zones = STORE_TIMEZONES.map((tz) => tz.value);
+  return z.enum(zones).catch(DEFAULT_TIMEZONE).parse(textField(fd, "timezone"));
 }
 
 function directionField(fd: FormData): "up" | "down" {
@@ -271,51 +252,66 @@ export async function changeOwnPassword(
 // Orders
 // ---------------------------------------------------------------------------
 
-const STATUS_TRANSITIONS: Record<string, readonly string[]> = {
-  new: ["confirmed", "canceled"],
-  confirmed: ["preparing", "canceled"],
-  preparing: ["ready"],
-  ready: ["completed"],
-  completed: [],
-  canceled: [],
-};
+export type OrderActionState = { error?: string };
 
-const orderStatusSchema = z.enum([
-  "confirmed",
-  "preparing",
-  "ready",
-  "completed",
-  "canceled",
-]);
+async function operatorActor(): Promise<Actor> {
+  const operator = await requireOperator();
+  return { name: operator.name, operatorId: operator.id };
+}
 
-export async function updateOrderStatus(formData: FormData): Promise<void> {
-  await requireOperator();
-  const orderId = z.uuid().parse(textField(formData, "orderId"));
-  const status = orderStatusSchema.parse(textField(formData, "status"));
+function orderActionState(result: OrderActionResult): OrderActionState {
+  revalidatePath("/admin", "layout");
+  return result.ok ? {} : { error: result.reason };
+}
 
-  const [order] = await db
-    .select({ id: orders.id, status: orders.status, loyaltyMemberId: orders.loyaltyMemberId })
-    .from(orders)
-    .where(eq(orders.id, orderId));
-  if (!order) return;
-  if (!STATUS_TRANSITIONS[order.status]?.includes(status)) return;
+const orderIdField = (fd: FormData) => z.uuid().parse(textField(fd, "orderId"));
 
-  const now = new Date();
-  await db.batch([
-    db
-      .update(orders)
-      .set({
-        status,
-        updatedAt: now,
-        ...(status === "ready" ? { readyAt: now } : {}),
-      })
-      .where(and(eq(orders.id, orderId), eq(orders.status, order.status))),
-    ...(status === "completed"
-      ? completionStatements(order, await getLoyaltySettings())
-      : []),
-    ...(status === "canceled" ? cancellationStatements(orderId) : []),
-  ]);
-  revalidatePath("/admin");
+export async function moveOrder(formData: FormData): Promise<OrderActionState> {
+  const actor = await operatorActor();
+  const to = z.enum(ORDER_STATUSES).exclude(["canceled"]).parse(textField(formData, "to"));
+  return orderActionState(
+    await transitionOrder({ orderId: orderIdField(formData), to, actor }),
+  );
+}
+
+export async function cancelOrder(formData: FormData): Promise<OrderActionState> {
+  const actor = await operatorActor();
+  const reason = z.enum(CANCEL_REASONS).safeParse(textField(formData, "reason"));
+  if (!reason.success) return { error: "Pick a reason for canceling." };
+  const detail = textField(formData, "detail").slice(0, 300);
+  return orderActionState(
+    await transitionOrder({
+      orderId: orderIdField(formData),
+      to: "canceled",
+      actor,
+      cancelReason: detail ? `${reason.data}: ${detail}` : reason.data,
+    }),
+  );
+}
+
+export async function adjustPromisedTimeAction(formData: FormData): Promise<OrderActionState> {
+  const actor = await operatorActor();
+  const minutes = z.coerce.number().int().min(-60).max(120).parse(textField(formData, "minutes"));
+  return orderActionState(
+    await adjustPromisedTime({ orderId: orderIdField(formData), minutes, actor }),
+  );
+}
+
+export async function recordPaymentAction(formData: FormData): Promise<OrderActionState> {
+  const actor = await operatorActor();
+  const method = z.enum(PAYMENT_METHODS).parse(textField(formData, "method"));
+  return orderActionState(
+    await recordPayment({ orderId: orderIdField(formData), method, actor }),
+  );
+}
+
+export async function addOrderNoteAction(formData: FormData): Promise<OrderActionState> {
+  const actor = await operatorActor();
+  const note = textField(formData, "note").slice(0, 500);
+  if (!note) return { error: "Write a note first." };
+  return orderActionState(
+    await addOrderNote({ orderId: orderIdField(formData), note, actor }),
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -801,6 +797,9 @@ export async function saveSettings(formData: FormData): Promise<void> {
     deliveryFeeCents: dollarsToCents(formData, "deliveryFee"),
     deliveryMinimumCents: dollarsToCents(formData, "deliveryMinimum"),
     taxRateBps: Math.round(taxPercent * 100),
+    timezone: timezoneField(formData),
+    weekStartsOn: Math.min(6, intField(formData, "weekStartsOn", DEFAULT_STAFF_RULES.weekStartsOn)),
+    ...parseStaffRules((name) => textField(formData, name)),
     updatedAt: new Date(),
   };
 
@@ -811,6 +810,7 @@ export async function saveSettings(formData: FormData): Promise<void> {
 
   revalidatePath("/");
   revalidatePath("/admin/settings");
+  revalidatePath("/admin/staff", "layout");
   redirect("/admin/settings?saved=1");
 }
 

@@ -2,6 +2,8 @@ import "server-only";
 import { and, asc, desc, eq, gte, inArray, isNull, ne, sql } from "drizzle-orm";
 import { db, orderItems, orders, storeSettings } from "@/db";
 import { completionStatements, getLoyaltySettings } from "@/lib/loyalty-server";
+import { RECALLABLE } from "@/lib/order-workflow";
+import { transitionStatement, type Actor } from "@/lib/order-writes";
 import {
   bumpPlan,
   type ItemStage,
@@ -123,9 +125,9 @@ function stageColumns(stage: ItemStage, now: Date) {
  * starts it (the customer's tracker shows "preparing"), and finishing every
  * item that needs cooking bumps it to ready. Un-finishing an item on a ready
  * order is impossible from the line view, so there is no ready → preparing
- * edge here; that is what recall is for.
+ * edge here; that is what recall is for. Each move that happens is logged.
  */
-function syncStatus(orderId: string, now: Date) {
+function syncStatus(orderId: string, actor: Actor, now: Date) {
   const pending = db
     .select({ one: sql`1` })
     .from(orderItems)
@@ -146,32 +148,35 @@ function syncStatus(orderId: string, now: Date) {
       ),
     );
   return [
-    db
-      .update(orders)
-      .set({ status: "preparing", updatedAt: now })
-      .where(
-        and(
-          eq(orders.id, orderId),
-          inArray(orders.status, ["new", "confirmed"]),
-          sql`exists (${touched})`,
-        ),
-      ),
-    db
-      .update(orders)
-      .set({ status: "ready", readyAt: now, updatedAt: now })
-      .where(
-        and(
-          eq(orders.id, orderId),
-          inArray(orders.status, [...LINE_STATUSES]),
-          sql`not exists (${pending})`,
-        ),
-      ),
+    transitionStatement({
+      orderId,
+      from: ["new", "confirmed"],
+      to: "preparing",
+      actor,
+      now,
+      when: sql`exists (${touched})`,
+    }),
+    transitionStatement({
+      orderId,
+      from: LINE_STATUSES,
+      to: "ready",
+      actor,
+      now,
+      when: sql`not exists (${pending})`,
+    }),
   ] as const;
 }
 
-/** Applies one display action. Every action is idempotent: replays are harmless. */
-export async function applyKdsAction(action: KdsAction): Promise<void> {
+/**
+ * Applies one display action. Every action is idempotent: replays are
+ * harmless, and only status changes that actually happen are logged.
+ */
+export async function applyKdsAction(
+  action: KdsAction,
+  operator: { id: number; name: string },
+): Promise<void> {
   const now = new Date();
+  const actor: Actor = { name: `Kitchen display · ${operator.name}`, operatorId: operator.id };
 
   if (action.type === "item") {
     const [item] = await db
@@ -184,7 +189,7 @@ export async function applyKdsAction(action: KdsAction): Promise<void> {
     const stage = action.stage === "oven" && item.station !== "pizza" ? "done" : action.stage;
     await db.batch([
       db.update(orderItems).set(stageColumns(stage, now)).where(eq(orderItems.id, action.itemId)),
-      ...syncStatus(item.orderId, now),
+      ...syncStatus(item.orderId, actor, now),
     ]);
     return;
   }
@@ -204,7 +209,7 @@ export async function applyKdsAction(action: KdsAction): Promise<void> {
         db.update(orderItems).set(stageColumns(m.stage, now)).where(inArray(orderItems.id, m.ids)),
       );
     // syncStatus always contributes statements, so the batch is never empty.
-    const [first, ...rest] = [...moves, ...syncStatus(order.id, now)];
+    const [first, ...rest] = [...moves, ...syncStatus(order.id, actor, now)];
     await db.batch([first, ...rest]);
     return;
   }
@@ -214,13 +219,16 @@ export async function applyKdsAction(action: KdsAction): Promise<void> {
       .select({ status: orders.status })
       .from(orders)
       .where(eq(orders.id, action.orderId));
-    if (order?.status !== "ready" && order?.status !== "completed") return;
+    if (!order || !RECALLABLE.includes(order.status)) return;
     // Back on the line from scratch: a recalled ticket usually means a remake.
     await db.batch([
-      db
-        .update(orders)
-        .set({ status: "preparing", readyAt: null, updatedAt: now })
-        .where(eq(orders.id, action.orderId)),
+      transitionStatement({
+        orderId: action.orderId,
+        from: RECALLABLE,
+        to: "preparing",
+        actor,
+        now,
+      }),
       db
         .update(orderItems)
         .set({ ovenAt: null, doneAt: null })
@@ -235,10 +243,13 @@ export async function applyKdsAction(action: KdsAction): Promise<void> {
     .where(eq(orders.id, action.orderId));
   if (!order) return;
   await db.batch([
-    db
-      .update(orders)
-      .set({ status: "completed", updatedAt: now })
-      .where(and(eq(orders.id, action.orderId), eq(orders.status, "ready"))),
+    transitionStatement({
+      orderId: action.orderId,
+      from: ["ready"],
+      to: "completed",
+      actor,
+      now,
+    }),
     ...completionStatements(order, await getLoyaltySettings()),
   ]);
 }

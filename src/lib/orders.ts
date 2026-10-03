@@ -7,6 +7,7 @@ import {
   menuItems,
   modifierGroups,
   modifiers,
+  orderEvents,
   orderItems,
   orders,
   storeSettings,
@@ -317,6 +318,14 @@ export async function createOrder(
     );
   }
 
+  const placedAt = new Date();
+  const prepMinutes =
+    input.orderType === "delivery" ? settings.deliveryPrepMinutes : settings.pickupPrepMinutes;
+
+  // The id is minted here so the order, its lines, its "placed" event and
+  // the points it spends go in as one transaction: a failure can't leave an
+  // order with no items, and two orders racing for the same points can't
+  // both win.
   const orderId = randomUUID();
   const reward = quote.loyalty?.reward ?? null;
   const orderMember = quote.loyalty ? member : null;
@@ -326,6 +335,8 @@ export async function createOrder(
         .insert(orders)
         .values({
           id: orderId,
+          placedAt,
+          promisedAt: new Date(placedAt.getTime() + prepMinutes * 60_000),
           orderType: input.orderType,
           customerName: input.customerName,
           customerPhone: input.customerPhone,
@@ -348,6 +359,13 @@ export async function createOrder(
           loyaltyPointsEarned: quote.loyalty?.pointsEarned ?? 0,
         })
         .returning(),
+      db.insert(orderEvents).values({
+        orderId,
+        type: "placed",
+        toStatus: "new",
+        actor: "Customer",
+        createdAt: placedAt,
+      }),
       db.insert(orderItems).values(
         quote.lines.map((l) => ({
           orderId,
