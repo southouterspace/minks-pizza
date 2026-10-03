@@ -4,7 +4,7 @@ import { useState } from "react";
 import { ArrowLeft, Ban, Flame, Gift, HandPlatter, History, Percent, Plus, Printer, Scissors, Undo2, Wallet, XCircle } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { mutateOrderAction } from "@/app/pos/actions";
-import { channelLabel, dueCents, orderHistory, type LineView, type OrderMutation, type OrderView } from "@/lib/orders";
+import { channelLabel, dueCents, orderHistory, requiredRole, type LineView, type OrderMutation, type OrderView } from "@/lib/orders";
 import { lineSummary } from "@/lib/pos-client/draft";
 import { formatCents } from "@/lib/money";
 import { formatStoreTime } from "@/lib/store-time";
@@ -39,7 +39,7 @@ export function OrderDetail({
   onAddItems: (o: OrderView) => void;
   onReceipt: (o: OrderView) => void;
 }) {
-  const { act, store } = usePos();
+  const { act, menu, store } = usePos();
   const clock = (iso: string) => formatStoreTime(iso, store.timeZone);
   const [prompt, setPrompt] = useState<PromptSpec | null>(null);
   const [paying, setPaying] = useState(false);
@@ -51,6 +51,8 @@ export function OrderDetail({
   const due = dueCents(order.totals);
   const net = order.totals.paidCents - order.totals.refundedCents;
   const closed = order.status === "canceled" || order.status === "completed";
+
+  const needsManager = (m: OrderMutation) => requiredRole(m, { order, discountApprovalCents: menu.discountApprovalCents }) === "manager";
 
   const mutate = async (label: string, mutation: OrderMutation): Promise<OrderView | null> => {
     const r = await act(label, (approval) => mutateOrderAction({ orderId: order.id, mutation, approval }));
@@ -64,7 +66,7 @@ export function OrderDetail({
   const voidLine = (l: LineView) =>
     setPrompt({
       title: `Void ${l.quantity} × ${l.name}`,
-      description: l.firedAt ? "Already sent to the kitchen: a manager must approve." : "Not sent yet.",
+      description: needsManager({ kind: "void_line", lineId: l.lineId, reason: "" }) ? "Already sent to the kitchen: a manager must approve." : "Not sent yet.",
       confirm: "Void line",
       destructive: true,
       reasons: VOID_REASONS,
@@ -74,7 +76,7 @@ export function OrderDetail({
   const compLine = (l: LineView) =>
     setPrompt({
       title: `Comp ${l.quantity} × ${l.name} (${formatCents(l.lineTotalCents)})`,
-      description: "Comps need a manager.",
+      description: needsManager({ kind: "comp", id: "", lineId: l.lineId, reason: "" }) ? "Comps need a manager." : undefined,
       confirm: "Comp line",
       reasons: COMP_REASONS,
       onSubmit: ({ reason }) => void mutate(`Comp ${l.name}`, { kind: "comp", id: crypto.randomUUID(), lineId: l.lineId, reason }),
@@ -84,7 +86,7 @@ export function OrderDetail({
     const id = crypto.randomUUID();
     setPrompt({
       title: "Discount the check",
-      description: "Larger discounts need a manager.",
+      description: `Discounts over ${formatCents(menu.discountApprovalCents)} need a manager.`,
       confirm: "Apply discount",
       reasons: DISCOUNT_REASONS,
       amount: { max: order.totals.subtotalCents - order.totals.discountCents },
@@ -96,7 +98,7 @@ export function OrderDetail({
     const id = crypto.randomUUID();
     setPrompt({
       title: "Refund",
-      description: "Refunds need a manager and come out of this shift's drawer or card batch.",
+      description: `Refunds ${needsManager({ kind: "refund", id, method: "cash", amountCents: net, reason: "" }) ? "need a manager and " : ""}come out of this shift's drawer or card batch.`,
       confirm: "Refund",
       destructive: true,
       reasons: REFUND_REASONS,
@@ -109,7 +111,7 @@ export function OrderDetail({
   const cancel = () =>
     setPrompt({
       title: `Cancel order #${order.number}`,
-      description: live.some((l) => l.firedAt) ? "Food has been sent: a manager must approve. Refund any payment separately." : undefined,
+      description: needsManager({ kind: "cancel", reason: "" }) ? "Food has been sent: a manager must approve. Refund any payment separately." : undefined,
       confirm: "Cancel order",
       destructive: true,
       reasons: ["Customer canceled", "Duplicate order", "No-show", "Prank call"],

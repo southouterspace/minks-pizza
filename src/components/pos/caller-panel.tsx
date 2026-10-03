@@ -4,7 +4,7 @@ import { useEffect, useRef, useState, type Dispatch } from "react";
 import { notify } from "./notify";
 import { AlertTriangle, ArrowRight, History, MapPin, Phone, RotateCcw } from "lucide-react";
 import type { CustomerLookup } from "@/lib/orders";
-import { allItems, draftLine, lineSummary, MODES, type DraftAction, type NewOrderDraft } from "@/lib/pos-client/draft";
+import { allItems, lineSummary, MODES, type DraftAction, type NewOrderDraft } from "@/lib/pos-client/draft";
 import { formatCents } from "@/lib/money";
 import { reorderLines } from "@/lib/pricing";
 import { formatStoreDateTime } from "@/lib/store-time";
@@ -62,11 +62,7 @@ export function CallerPanel({ draft, dispatch, onContinue }: { draft: NewOrderDr
   const reorder = (order: CustomerLookup["recentOrders"][number]) => {
     const live = order.lines.filter((l) => !l.voided);
     const { lines, unavailable } = reorderLines(live, allItems(menu), menu.policy);
-    const items = new Map(allItems(menu).map((i) => [i.id, i]));
-    dispatch({
-      type: "add",
-      lines: lines.map((l) => draftLine(items.get(l.itemId)!, l.selections, l.quantity, l.notes, menu.policy)),
-    });
+    dispatch({ type: "add", lines: lines.map((l) => ({ ...l, lineId: crypto.randomUUID() })) });
     setUnavailable(unavailable);
     if (unavailable.length > 0) {
       notify.warning(`${unavailable.length} item${unavailable.length > 1 ? "s" : ""} couldn't be reordered`);

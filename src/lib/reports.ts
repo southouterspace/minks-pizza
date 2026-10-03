@@ -300,17 +300,22 @@ export function reconcileDrawer(
     if (e.kind === "paid_in") cash += e.cents;
     if (e.kind === "paid_out") cash -= e.cents;
   }
-  const overShort = (counted: number | null, expected: number) =>
-    counted === null ? null : counted - expected;
+  return withCounts({ expectedCashCents: cash, cardTotalCents: card, cardTipsCents: cardTips }, shift);
+}
+
+/** The drawer against what was counted; a count still null leaves its over/short null. */
+export function withCounts(
+  expected: Pick<DrawerReconciliation, "expectedCashCents" | "cardTotalCents" | "cardTipsCents">,
+  counts: Omit<ShiftCount, "startingBankCents">,
+): DrawerReconciliation {
+  const overShort = (counted: number | null, owed: number) => (counted === null ? null : counted - owed);
   return {
-    expectedCashCents: cash,
-    countedCashCents: shift.countedCashCents,
-    cashOverShortCents: overShort(shift.countedCashCents, cash),
-    cardTotalCents: card,
-    cardTipsCents: cardTips,
-    cardBatchCents: shift.cardBatchCents,
-    cardOverShortCents: overShort(shift.cardBatchCents, card),
-    declaredCashTipsCents: shift.declaredCashTipsCents,
+    ...expected,
+    countedCashCents: counts.countedCashCents,
+    cashOverShortCents: overShort(counts.countedCashCents, expected.expectedCashCents),
+    cardBatchCents: counts.cardBatchCents,
+    cardOverShortCents: overShort(counts.cardBatchCents, expected.cardTotalCents),
+    declaredCashTipsCents: counts.declaredCashTipsCents,
   };
 }
 

@@ -220,6 +220,7 @@ export type ReorderLine = {
   notes: string | null;
   selections: Selection[];
   unitPriceCents: number;
+  modifiers: LineModifier[];
 };
 
 /**
@@ -258,8 +259,8 @@ export function reorderLines(
       continue;
     }
     try {
-      const { unitPriceCents } = priceLine(item, selections, policy);
-      lines.push({ itemId: item.id, name: item.name, quantity: line.quantity, notes: line.notes, selections, unitPriceCents });
+      const { unitPriceCents, modifiers } = priceLine(item, selections, policy);
+      lines.push({ itemId: item.id, name: item.name, quantity: line.quantity, notes: line.notes, selections, unitPriceCents, modifiers });
     } catch (err) {
       if (!(err instanceof PricingError)) throw err;
       unavailable.push({ name: line.name, reason: err.message });

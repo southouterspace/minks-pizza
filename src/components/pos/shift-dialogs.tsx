@@ -6,8 +6,8 @@ import { notify } from "./notify";
 import { buttonVariants } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { closeShift, drawerEvent, openShift, previewShift } from "@/app/pos/actions";
-import type { DrawerEventKind } from "@/lib/orders";
-import type { ShiftReport } from "@/lib/reports";
+import { DRAWER_ROLE, type DrawerEventKind } from "@/lib/orders";
+import { withCounts, type ShiftReport } from "@/lib/reports";
 import { formatCents } from "@/lib/money";
 import { cn } from "@/lib/utils";
 import { failureText, usePos } from "./context";
@@ -81,7 +81,7 @@ export function DrawerDialog({ kind, onClose }: { kind: DrawerEventKind; onClose
       <DialogContent className="w-[min(440px,calc(100vw-2rem))] gap-4 sm:max-w-none!">
         <DialogHeader>
           <DialogTitle className="text-lg">{spec.title}</DialogTitle>
-          <DialogDescription>{kind === "paid_in" ? "Recorded against this shift's drawer." : "Needs a manager. Recorded against this shift's drawer."}</DialogDescription>
+          <DialogDescription>{DRAWER_ROLE[kind] === "manager" ? "Needs a manager. Recorded against this shift's drawer." : "Recorded against this shift's drawer."}</DialogDescription>
         </DialogHeader>
         {spec.amount && <input inputMode="decimal" autoFocus value={amount} onChange={(e) => setAmount(e.target.value)} placeholder="Amount" aria-label="Amount" className={field} />}
         <div className="flex flex-wrap gap-2">
@@ -201,14 +201,7 @@ export function CloseShiftDialog({ shiftId, names, onClose }: { shiftId: string;
   const batch = parseCents(counts.batch);
   const tips = parseCents(counts.tips);
   // The preview applies the counts locally; the server recomputes on close.
-  const preview: ShiftReport | null = running && {
-    ...running,
-    countedCashCents: cash,
-    cashOverShortCents: cash === null ? null : cash - running.expectedCashCents,
-    cardBatchCents: batch,
-    cardOverShortCents: batch === null ? null : batch - running.cardTotalCents,
-    declaredCashTipsCents: tips,
-  };
+  const preview: ShiftReport | null = running && { ...running, ...withCounts(running, { countedCashCents: cash, cardBatchCents: batch, declaredCashTipsCents: tips }) };
   const report = closed ?? preview;
 
   return (

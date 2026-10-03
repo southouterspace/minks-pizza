@@ -8,7 +8,8 @@
  */
 import { cyclePlacement, defaultSelections, tapTopping } from "../src/lib/pos-client/builder";
 import { draftLine, draftProblem, draftReducer, draftTotals, emptyDraft, firePlan, lineSummary, toSubmitRequest, type Draft, type NewOrderDraft } from "../src/lib/pos-client/draft";
-import type { MenuItem, PricingPolicy } from "../src/lib/pricing";
+import { reorderLines, type MenuItem, type PricingPolicy } from "../src/lib/pricing";
+import { withCounts } from "../src/lib/reports";
 import { formatStoreClock, formatStoreTime, nextStoreTime, storeHhmm } from "../src/lib/store-time";
 
 let failures = 0;
@@ -143,6 +144,22 @@ append = draftReducer(append, { type: "add", lines: [draftLine(soda, [], 1, null
 check("an added line needs nothing else and keeps the check's fee", [draftProblem(append), draftTotals(append, { taxRateBps: 825, deliveryFeeCents: 399 })], [null, { subtotalCents: 399, taxCents: 33, deliveryFeeCents: 0, totalCents: 432 }]);
 check("order details can't be set on an added-to check", "customer" in append, false);
 check("done adding goes back to a walk-in order", [draftReducer(append, { type: "next" }).kind, asNew(draftReducer(append, { type: "next" })).mode], ["new", "walk_in"]);
+
+check(
+  "the close preview fills over/short from the counts and leaves an uncounted batch blank",
+  withCounts({ expectedCashCents: 24640, cardTotalCents: 1500, cardTipsCents: 200 }, { countedCashCents: 24490, cardBatchCents: null, declaredCashTipsCents: 0 }),
+  { expectedCashCents: 24640, cardTotalCents: 1500, cardTipsCents: 200, countedCashCents: 24490, cashOverShortCents: -150, cardBatchCents: null, cardOverShortCents: null, declaredCashTipsCents: 0 },
+);
+const reordered = reorderLines(
+  [{ itemId: 1, name: "Cheese Pizza", quantity: 1, notes: null, modifiers: line.modifiers }, { itemId: 99, name: "Calzone", quantity: 1, notes: null, modifiers: [] }],
+  [cheese, soda],
+  policy,
+);
+check(
+  "reorder comes back priced, with its ticket text, ready to drop in the draft",
+  [reordered.lines.map((l) => [l.name, l.unitPriceCents, lineSummary(l.modifiers)]), reordered.unavailable],
+  [[["Cheese Pizza", 1862, 'Large 14" · Hand Tossed · L: Pepperoni · R: Mushrooms']], [{ name: "Calzone", reason: "No longer on the menu" }]],
+);
 
 console.log(failures === 0 ? "\nAll POS client checks passed." : `\n${failures} check(s) failed.`);
 process.exit(failures === 0 ? 0 : 1);
