@@ -16,7 +16,7 @@ import {
   type SQL,
 } from "drizzle-orm";
 import { z } from "zod";
-import { db, orderEvents, orderItems, orders, storeSettings } from "@/db";
+import { courierDeliveries, db, orderEvents, orderItems, orders, storeSettings } from "@/db";
 import { ACTIVE_STATUSES, isLate, ORDER_STATUSES } from "@/lib/order-workflow";
 import type { LocalDate } from "@/lib/zoned";
 
@@ -157,6 +157,7 @@ export async function getOrderDetail(id: string) {
     with: {
       items: { orderBy: (items, { asc }) => [asc(items.id)] },
       events: { orderBy: [asc(orderEvents.createdAt), asc(orderEvents.id)] },
+      courierDeliveries: { orderBy: [desc(courierDeliveries.createdAt)], limit: 1 },
     },
   });
 }

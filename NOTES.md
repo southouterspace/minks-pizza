@@ -475,6 +475,45 @@ clock.
   the only protection is that the tablet needs an operator session.
 - California seventh-consecutive-day overtime, and split-shift or
   meal-penalty pay. The no-meal-break flag only flags.
+## Session 7 — Delivery integrations foundation
+
+**Ask:** lay the groundwork for third-party delivery in both directions,
+sending couriers to our orders and taking in marketplace orders.
+
+**Decisions.**
+
+- **Courier dispatch first.** Uber Direct is the only path that is self-serve
+  end to end today (`docs/delivery-platforms-research.md`, B2), and it keeps
+  the customer on our site. Both adapters sit behind one `CourierProvider`
+  interface in `src/lib/delivery/types.ts`, and each maps its native statuses
+  through a lookup table onto one internal status enum.
+- **DoorDash Drive is sandbox-only.** DoorDash has restricted Drive production
+  access with no timeline (B1). The adapter is built and tested so it can go
+  live when access opens.
+- **No marketplace adapters.** DoorDash, Uber Eats and Grubhub order APIs are
+  partner programs for POS companies (Part A). The schema (`orders.source`,
+  `source_order_id`, `source_display_id`) and `ingestExternalOrder` are the
+  seam a future adapter or middleware plugs into.
+- **Our row id is the provider's external id.** The `courier_deliveries` row
+  exists before the provider call. If the quote fails the row is deleted. If
+  create fails the row is marked canceled, because the provider may have made
+  the delivery anyway and its webhooks need a row to land on.
+- **Statuses only move forward.** Webhooks arrive out of order and retry, so
+  `advanceStatus` never regresses and terminal states stick. The one
+  exception is canceled to returned: a canceled delivery whose food was already
+  picked up comes back to the store. A partial unique index stops an order
+  from having two live couriers.
+- **Webhook inbox.** Every authenticated event goes into `integration_events`
+  keyed on the provider's event id (Uber) or delivery id, event name and time
+  (DoorDash, which sends no event id). A duplicate insert is a no-op.
+- **The customer's tip stays with the store.** Couriers get no tip from us,
+  since the tip on our checkout is for the store staff.
+
+**Tested:** `npm test`, unit tests for status ordering, both adapters with a
+stubbed `fetch` (token caching, request bodies, JWT claims and signature,
+webhook auth and mapping), the delivery request builder and the marketplace
+row mapping. No database or provider credentials were available, so dispatch,
+the webhook route and the admin UI are untested against real services.
 
 ## Gotchas hit (for future sessions)
 

@@ -24,6 +24,9 @@ import {
   requireOperator,
   verifyPassword,
 } from "@/lib/auth";
+import { cancelCourier, dispatchCourier } from "@/lib/delivery/dispatch";
+import { COURIER_PROVIDERS, CourierError } from "@/lib/delivery/types";
+import { OrderError } from "@/lib/orders";
 import { STORE_TIMEZONES } from "@/lib/hours";
 import { KITCHEN_STATIONS, type KitchenStation } from "@/lib/kds";
 import { DEFAULT_STAFF_RULES, DEFAULT_TIMEZONE, parseStaffRules } from "@/lib/timeclock";
@@ -312,6 +315,45 @@ export async function addOrderNoteAction(formData: FormData): Promise<OrderActio
   return orderActionState(
     await addOrderNote({ orderId: orderIdField(formData), note, actor }),
   );
+}
+
+// ---------------------------------------------------------------------------
+// Couriers
+// ---------------------------------------------------------------------------
+
+export type CourierFormState = { error?: string };
+
+/** Runs a courier operation, turning its expected failures into a form error. */
+async function courierAction(run: () => Promise<void>): Promise<CourierFormState> {
+  await requireOperator();
+  try {
+    await run();
+    return {};
+  } catch (err) {
+    if (err instanceof CourierError || err instanceof OrderError) return { error: err.message };
+    throw err;
+  } finally {
+    revalidatePath("/admin");
+  }
+}
+
+export async function requestCourier(
+  _prev: CourierFormState,
+  formData: FormData,
+): Promise<CourierFormState> {
+  return courierAction(() =>
+    dispatchCourier(
+      z.uuid().parse(textField(formData, "orderId")),
+      z.enum(COURIER_PROVIDERS).parse(textField(formData, "provider")),
+    ),
+  );
+}
+
+export async function cancelCourierDelivery(
+  _prev: CourierFormState,
+  formData: FormData,
+): Promise<CourierFormState> {
+  return courierAction(() => cancelCourier(z.uuid().parse(textField(formData, "deliveryId"))));
 }
 
 // ---------------------------------------------------------------------------

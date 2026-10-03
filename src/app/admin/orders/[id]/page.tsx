@@ -4,6 +4,7 @@ import { notFound } from "next/navigation";
 import { ArrowLeft, Phone } from "lucide-react";
 import { addOrderNoteAction, recordPaymentAction } from "@/app/admin/actions";
 import { requireOperator } from "@/lib/auth";
+import { courierProviders } from "@/lib/delivery/providers";
 import { formatCents } from "@/lib/money";
 import {
   canTransition,
@@ -13,7 +14,7 @@ import {
   PAYMENT_METHOD_LABEL,
   PAYMENT_METHODS,
 } from "@/lib/order-workflow";
-import { getOrderDetail, getStoreTimezone } from "@/lib/order-queries";
+import { getOrderDetail, getStoreTimezone, type OrderDetail } from "@/lib/order-queries";
 import {
   ActionForm,
   AdvanceButton,
@@ -28,6 +29,7 @@ import {
   PromisedTime,
   StatusBadge,
 } from "@/components/admin/order-status";
+import { CourierCard } from "@/components/admin/courier-card";
 import { addressLine, PrintTicket, Totals } from "@/components/admin/order-ticket";
 import { OrderTimeline } from "@/components/admin/order-timeline";
 import { formatDateTime } from "@/components/admin/ui";
@@ -39,6 +41,13 @@ import { Textarea } from "@/components/ui/textarea";
 export const dynamic = "force-dynamic";
 
 export const metadata: Metadata = { title: "Order" };
+
+const SOURCE_LABEL: Record<OrderDetail["source"], string> = {
+  web: "Web",
+  doordash: "DoorDash",
+  ubereats: "Uber Eats",
+  grubhub: "Grubhub",
+};
 
 export default async function OrderDetailPage({ params }: PageProps<"/admin/orders/[id]">) {
   await requireOperator();
@@ -76,6 +85,12 @@ export default async function OrderDetailPage({ params }: PageProps<"/admin/orde
               </Badge>
               <PaymentBadge status={order.paymentStatus} method={order.paymentMethod} />
               {late ? <LateBadge /> : null}
+              {order.source !== "web" ? (
+                <Badge variant="outline">
+                  {SOURCE_LABEL[order.source]}
+                  {order.sourceDisplayId ? ` · ${order.sourceDisplayId}` : ""}
+                </Badge>
+              ) : null}
             </h1>
             <p className="mt-1 text-sm text-muted-foreground">
               Placed {formatDateTime(order.placedAt, timeZone)}
@@ -236,6 +251,15 @@ export default async function OrderDetailPage({ params }: PageProps<"/admin/orde
                 </ActionForm>
               </CardContent>
             </Card>
+
+            {order.orderType === "delivery" && order.source === "web" ? (
+              <CourierCard
+                orderId={order.id}
+                delivery={order.courierDeliveries[0]}
+                providers={courierProviders().map((p) => ({ id: p.id, label: p.label }))}
+                canRequest={isCooking(order.status) || order.status === "ready"}
+              />
+            ) : null}
           </div>
         </div>
       </div>
