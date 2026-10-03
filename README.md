@@ -182,18 +182,9 @@ size, flagged below the minimum margin in Settings. Each exports to CSV.
 
 ##### Deploying the inventory schema
 
-Additive: new enums and tables, nullable or defaulted columns on
-`modifier_groups`, `modifiers`, `order_items` and `store_settings`. Migrate
-before deploying the code, then mark the size and topping groups:
-
-```bash
-MINKS_DATABASE_URL=<production url> npm run db:push
-```
-
-```sql
-update modifier_groups set kind = 'size'     where name ilike 'size%';
-update modifier_groups set kind = 'toppings' where name ilike '%topping%';
-```
+Part of the front-of-house POS release: see [Deploying](#deploying). The
+migration file marks every group's role (size, crust, topping…) from its
+name, which is what the recipes and the inventory depletion key on.
 
 `npx tsx --env-file=<env file> scripts/seed-inventory.ts` adds a starter set of
 ingredients and per-size recipes for the seeded menu. It is idempotent and
@@ -524,15 +515,19 @@ HTTP driver (`scripts/run-migration.ts`), so it works where `psql` cannot
 reach the database; each file is one idempotent `DO` block and running it
 twice is a no-op.
 
-### This release: front-of-house POS
+### This release: front-of-house POS and topping inventory
 
 ```bash
 MINKS_DATABASE_URL=<production url> npm run db:migrate -- migrations/2026-10-03-pos.sql
-MINKS_DATABASE_URL=<production url> npm run db:push      # prints "No changes detected" once the file has run
+MINKS_DATABASE_URL=<production url> npm run db:push      # additive: inventory tables, topping and portion settings
 MINKS_DATABASE_URL=<production url> npm run db:seed      # optional: adds the demo POS staff on a store with none
+npx tsx --env-file=<env file> scripts/seed-inventory.ts  # optional: starter ingredients and recipes for the seeded menu
 ```
 
-What the file does to a database at the promotions schema:
+The file is one idempotent `DO` block: it takes a database at the promotions
+schema, at the earlier POS schema (the same file as shipped before PR #17),
+or at PR #17's schema, to this release's schema without losing a row, and a
+second run is a no-op. What it does:
 
 - `order_status` loses `confirmed` (existing rows and audit rows become
   `new`) and gains `held`; `order_type` gains `dine_in`; `order_source` gains
@@ -542,18 +537,33 @@ What the file does to a database at the promotions schema:
   by its "payment recorded" event, and `orders.paid_cents` is set to match.
   The file refuses to run while an order is `refunded`, because there is no
   refund amount on record to convert; record that refund as a tender first.
+- `modifier_groups.role` (size, crust, sauce, cheese, topping, option) is
+  set from each group's name, or from PR #17's `kind` where that column
+  exists (size → size, toppings → topping, choice → crust or option by
+  name), and `kind` is dropped: it was a projection of role.
 - New: `tenders`, `drawer_sessions`, `drawer_events`, `customers` (backfilled
   from every phone on an order), `customer_addresses`, `pin_attempts`;
   `employees.pos_access` (backfilled: manager or shift lead → manager,
   cashier → cashier, else none); `orders.tax_rate_bps` (backfilled from each
   order's own tax); `order_items.line_uid`, `fired_at` (backfilled to the
-  placed time) and the void columns; old modifier snapshots gain their kind,
-  role and id; `order_events` and `order_discounts` gain the POS actor
-  columns; the POS settings columns with their defaults.
+  placed time) and the void columns; old modifier snapshots (names only, or
+  PR #17's id + placement + portion) become `LineModifier`s with their kind,
+  role, id, placement and amount; `order_events` and `order_discounts` gain
+  the POS actor columns; the POS settings columns with their defaults.
 
-Rehearsed on a branch of production: orders, items, events, employees,
-loyalty, promotions and time-clock row counts are unchanged, order totals
-are unchanged, and a second run plus `db:push` report nothing to do.
+`db:push` then adds the inventory tables (`ingredients`, `ingredient_packs`,
+`recipe_lines`, `inventory_counts`, `inventory_moves`, `stock_outs`),
+`modifiers.extra_price_delta_cents`, `order_items.cost_cents` and the topping
+price, portion and margin settings, all nullable or defaulted. One known
+non-convergence: `recipe_lines_owner_size_ingredient` is an expression index
+(`coalesce(...)` over the nullable owner columns) that drizzle-kit 0.31 cannot
+read back, so every `db:push` drops and recreates it. That is the only
+statement a second push runs; it is harmless and prompts for nothing.
+
+Rehearsed on two branches of production shape (before and after the earlier
+POS file): orders, items, groups and modifier names are unchanged, order and
+line totals are unchanged, no snapshot is left unconverted, the push asks no
+question, and a second migration run changes nothing.
 
 ### Earlier releases, in order
 
@@ -608,6 +618,11 @@ npx tsx --env-file=.env.local scripts/e2e-promotions.ts
 npx tsx --env-file=.env.local scripts/e2e-timeclock.ts
 npm run e2e:loyalty
 npx tsx --env-file=.env.local scripts/e2e-operator.ts     # also e2e-customer, e2e-team, e2e-logo
+NODE_PATH=scripts/shims npx tsx --env-file=.env.local scripts/e2e-toppings.ts        # half-and-half toppings: dialog, cart, checkout, KDS
+NODE_PATH=scripts/shims npx tsx --env-file=.env.local scripts/e2e-recipes.ts         # ingredients, recipes, 86, settings
+NODE_PATH=scripts/shims npx tsx --env-file=.env.local scripts/e2e-inventory-ops.ts   # receive, count, waste
+NODE_PATH=scripts/shims npx tsx --env-file=.env.local scripts/e2e-reports.ts         # food cost, variance, topping mix, margins
+NODE_PATH=scripts/shims npx tsx --env-file=.env.local scripts/e2e-inventory-story.ts # the inventory day, end to end
 ```
 
 ## Known limits

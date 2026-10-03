@@ -71,10 +71,11 @@ run(async () => {
 
   check("Large Cheese, L Pepperoni / R Mushroom, average rule", priceLine(cheese, halfAndHalf, { halfToppingRule: "average", halfToppingPriceBps: 5000, extraToppingBps: 20_000 }).unitPriceCents, 1862);
   check("same pie, highest-half rule", priceLine(cheese, halfAndHalf, { halfToppingRule: "highest", halfToppingPriceBps: 5000, extraToppingBps: 20_000 }).unitPriceCents, 1874);
+  const pepperoni = cheese.groups.flatMap((g) => g.modifiers).find((m) => m.name === "Pepperoni")!;
   check(
-    "extra pepperoni whole costs 2x the topping",
+    "extra pepperoni whole costs the menu's extra price, else 2x the topping",
     priceLine(cheese, [sel('Large 14"'), sel("Hand Tossed"), sel("Pepperoni", "whole", "extra")], { halfToppingRule: "average", halfToppingPriceBps: 5000, extraToppingBps: 20_000 }).unitPriceCents,
-    2049,
+    1699 + (pepperoni.extraPriceDeltaCents ?? 350),
   );
   check(
     "half placement on Size is rejected",

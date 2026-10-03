@@ -44,10 +44,10 @@ export default async function ReportsPage({
   ];
 
   return (
-    <div>
+    <div className="mt-4">
       <div className="flex flex-wrap items-end justify-between gap-3">
         <div>
-          <h1 className="text-xl font-semibold tracking-tight">Reports</h1>
+          <h2 className="text-lg font-semibold tracking-tight">Day</h2>
           <p className="mt-1 text-sm text-muted-foreground">
             {formatLongDay(date)}
             {date === today ? " (today)" : ""}
