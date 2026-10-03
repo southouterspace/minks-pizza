@@ -10,7 +10,7 @@
  */
 import { randomUUID } from "node:crypto";
 import { count, eq } from "drizzle-orm";
-import { db, employees, operators, orderItems, orders, pinAttempts, tenders } from "../src/db";
+import { db, employees, operators, orderItems, orders, pinAttempts, storeSettings, tenders } from "../src/db";
 import {
   closeShift,
   fireDue,
@@ -209,6 +209,19 @@ async function main() {
   const refunded = view(await mutateOrder({ orderId: tab.id, mutation: refund, approval: { managerPin: "1234" } }, cashier));
   check("refund makes it refunded", [paymentState(refunded.totals), refunded.totals.refundedCents], ["refunded", 500]);
 
+  // --- Tax is snapshotted at submit ------------------------------------------
+  const before = view(await submitOrder(walkIn([line("Caesar Salad", [sel2("Caesar Salad", "Caesar")])]), { kind: "pos", staff: cashier }));
+  check("salad taxed at 8.25% when placed", [before.totals.taxCents, before.totals.totalCents], [70, 919]);
+  await db.update(storeSettings).set({ taxRateBps: 1000 }).where(eq(storeSettings.id, 1));
+  try {
+    const settledLater = view(await mutateOrder({ orderId: before.id, mutation: tender(919, "cash") }, cashier));
+    check("a rate change doesn't re-tax an order tendered later", [settledLater.totals.taxCents, settledLater.totals.totalCents, paymentState(settledLater.totals)], [70, 919, "paid"]);
+    const after = view(await submitOrder(walkIn([line("Caesar Salad", [sel2("Caesar Salad", "Caesar")])]), { kind: "pos", staff: cashier }));
+    check("an order placed after the change is taxed at 10%", [after.totals.taxCents, after.totals.totalCents], [85, 934]);
+  } finally {
+    await db.update(storeSettings).set({ taxRateBps: 825 }).where(eq(storeSettings.id, 1));
+  }
+
   // --- Split by item keeps the kitchen ticket -------------------------------
   const wings = line("Chicken Wings (8)", [sel2("Chicken Wings (8)", "BBQ")]);
   const table = view(
@@ -240,12 +253,12 @@ async function main() {
   check("paid-in is the cashier's call", await recordDrawerEvent({ id: randomUUID(), kind: "paid_in", cents: 200, reason: "change" }, cashier), { ok: true });
   check("paid-out with manager PIN", await recordDrawerEvent({ id: randomUUID(), kind: "paid_out", cents: 500, reason: "napkins", approval: { managerPin: "1234" } }, cashier), { ok: true });
 
-  const closeInput = { shiftId, countedCashCents: 14_822, cardBatchCents: 619, declaredCashTipsCents: 0, notes: null };
+  const closeInput = { shiftId, countedCashCents: 15_741, cardBatchCents: 619, declaredCashTipsCents: 0, notes: null };
   check("closing a shift needs a manager", await closeShift(closeInput, cashier), { ok: false, reason: "needs_manager" });
   const closed = await closeShift({ ...closeInput, approval: { managerPin: "1234" } }, cashier);
   if (!closed.ok) throw new Error(JSON.stringify(closed));
-  // bank 10000 + cash 4031 + 500 + 1691 − cash refund 500 + paid in 200 − paid out 500
-  check("expected cash vs counted", [closed.report.expectedCashCents, closed.report.cashOverShortCents], [15_422, -600]);
+  // bank 10000 + cash 4031 + 500 + 919 + 1691 − cash refund 500 + paid in 200 − paid out 500
+  check("expected cash vs counted", [closed.report.expectedCashCents, closed.report.cashOverShortCents], [16_341, -600]);
   check("card total includes tips and matches the batch", [closed.report.cardTotalCents, closed.report.cardTipsCents, closed.report.cardOverShortCents], [619, 200, 0]);
   check("voids tally under the employee who voided", closed.report.byEmployee.find((e) => e.employeeId === cashier.actor.employeeId)?.voidCents, 848);
   check("orders still owing are listed", closed.report.unpaidOrders.map((o) => o.id).includes(scheduled.id), true);

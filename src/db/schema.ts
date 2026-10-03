@@ -328,6 +328,12 @@ export const orders = pgTable(
     taxCents: integer("tax_cents").notNull().default(0),
     deliveryFeeCents: integer("delivery_fee_cents").notNull().default(0),
     tipCents: integer("tip_cents").notNull().default(0),
+    /**
+     * The store rate when the order was placed. The fold taxes with this, so
+     * changing the store rate never re-taxes an order paid or edited later.
+     * No default: an insert that forgets it should fail, not tax at 0%.
+     */
+    taxRateBps: integer("tax_rate_bps").notNull(),
     totalCents: integer("total_cents").notNull().default(0),
     paidCents: integer("paid_cents").notNull().default(0),
     refundedCents: integer("refunded_cents").notNull().default(0),

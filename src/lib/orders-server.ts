@@ -252,9 +252,9 @@ function recomputeTotals(orderId: string): Statement {
       updated_at = now()
     from (
       select x.subtotal, least(x.subtotal, x.adjusted) as discount,
-        round((x.subtotal - least(x.subtotal, x.adjusted)) * s.tax_rate_bps / 10000.0)::int as tax,
+        round((x.subtotal - least(x.subtotal, x.adjusted)) * r.tax_rate_bps / 10000.0)::int as tax,
         x.paid, x.refunded
-      from store_settings s, (
+      from orders r, (
         select
           coalesce((select sum(i.line_total_cents) from order_items i
                     where i.order_id = ${orderId} and i.voided_at is null), 0)::int as subtotal,
@@ -268,7 +268,7 @@ function recomputeTotals(orderId: string): Statement {
           coalesce((select sum(t.amount_cents) from tenders t
                     where t.order_id = ${orderId} and t.direction = 'refund'), 0)::int as refunded
       ) x
-      where s.id = 1
+      where r.id = ${orderId}
     ) f
     where o.id = ${orderId}`);
 }
@@ -749,6 +749,7 @@ export async function submitOrder(req: SubmitOrderRequest, by: Submitter): Promi
         fireAt,
         promisedAt,
         tipCents: req.tipCents,
+        taxRateBps: settings.taxRateBps,
       })
       .onConflictDoNothing({ target: orders.id }),
     ...insertLines(req.orderId, priced, firedAt),
@@ -939,10 +940,10 @@ async function plan(
           db.execute(sql`
             insert into orders (id, status, order_type, channel, table_label, customer_id, customer_name,
               customer_phone, customer_email, address_line1, address_line2, city, zip, order_notes,
-              created_by, fire_at, promised_at, ticket_order_id, placed_at)
+              created_by, fire_at, promised_at, ticket_order_id, placed_at, tax_rate_bps)
             select ${m.newOrderId}, status, order_type, channel, table_label, customer_id, customer_name,
               customer_phone, customer_email, address_line1, address_line2, city, zip, order_notes,
-              ${actor.employeeId}, fire_at, promised_at, coalesce(ticket_order_id, id), placed_at
+              ${actor.employeeId}, fire_at, promised_at, coalesce(ticket_order_id, id), placed_at, tax_rate_bps
             from orders where id = ${id}
             on conflict (id) do nothing`),
           db
