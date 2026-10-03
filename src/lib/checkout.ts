@@ -3,15 +3,13 @@
  * from it. The live preview and the order insert both come through
  * quoteCheckout, so what the customer sees is what is charged.
  */
-import { formatCents } from "@/lib/money";
 import { getSettings, insertOrder, OrderError, priceCart, type PricedLine, type StoreSettings } from "@/lib/orders";
 import { normalizeCode } from "@/lib/promo-code";
-import { lostDealCopy, refusalCopy, type TargetNames } from "@/lib/promotion-copy";
+import { dealChangedMessage, type TargetNames } from "@/lib/promotion-copy";
 import {
   customerKeyFromPhone,
   discountedTotals,
   evaluatePromotions,
-  type AppliedDiscount,
   type Evaluation,
 } from "@/lib/promotion-engine";
 import { loadCandidates } from "@/lib/promotion-queries";
@@ -85,23 +83,6 @@ function assertStoreTakes(settings: StoreSettings, orderType: CheckoutInput["ord
   }
 }
 
-/** "E2E-PIZZA: This offer has ended. Your total is now $38.91. …", in the customer's own spelling. */
-function totalChangedMessage(input: CheckoutInput, quote: CheckoutQuote, totalCents: number): string {
-  const rejected = quote.rejected[0];
-  const typed = rejected && (input.promoCodes ?? []).find((c) => normalizeCode(c) === rejected.code);
-  const why = rejected
-    ? `${(typed ?? rejected.code).toUpperCase()}: ${refusalCopy(rejected.refusal, { display: rejected.display, timezone: quote.timezone, names: quote.names })}. `
-    : "";
-  return `${why}Your total is now ${formatCents(totalCents)}. Check it and place your order again.`;
-}
-
-/** "PIZZA10 was just fully redeemed — your total is now $12.97.", from why a fresh quote refuses the deal. */
-function lostRaceMessage(input: CheckoutInput, lost: AppliedDiscount | undefined, fresh: CheckoutQuote): string {
-  const code = lost?.code && normalizeCode(lost.code);
-  const what = lost ? lostDealCopy(lost, fresh.rejected.find((r) => r.code === code)?.refusal) : "A deal on your order just changed";
-  return `${what} — your total is now ${formatCents(fresh.totalBeforeTipCents + input.tipCents)}.`;
-}
-
 /**
  * Creates an order (payment_status = 'pending').
  *
@@ -118,10 +99,11 @@ export async function createOrder(input: CheckoutInput) {
   if (!customerKey) throw new OrderError("Enter a valid phone number");
 
   let quote = await quoteCheckout(input, settings);
-  for (let attempt = 0; ; attempt++) {
+  for (let attempt = 1; attempt <= 2; attempt++) {
     const totalCents = quote.totalBeforeTipCents + input.tipCents;
     if (input.expectedTotalCents !== undefined && input.expectedTotalCents !== totalCents) {
-      throw new OrderError(totalChangedMessage(input, quote, totalCents));
+      const changed = quote.rejected.find((r) => r.refusal.kind !== "unknown");
+      throw new OrderError(dealChangedMessage(changed, totalCents, quote));
     }
     if (input.orderType === "delivery" && quote.subtotalCents < settings.deliveryMinimumCents) {
       throw new OrderError(
@@ -146,7 +128,13 @@ export async function createOrder(input: CheckoutInput) {
     // The guard failed: a deal's limit went to another order since the quote.
     const fresh = await quoteCheckout(input, settings);
     const lost = quote.applied.find((a) => !fresh.applied.some((f) => f.promotionId === a.promotionId));
-    if (lost || attempt > 0) throw new OrderError(lostRaceMessage(input, lost, fresh));
+    if (lost) {
+      const code = lost.code && normalizeCode(lost.code);
+      const refusal = fresh.rejected.find((r) => r.code === code)?.refusal;
+      const display = lost.code ?? `"${lost.label}"`;
+      throw new OrderError(dealChangedMessage({ display, refusal }, fresh.totalBeforeTipCents + input.tipCents, fresh));
+    }
     quote = fresh;
   }
+  throw new OrderError("A deal on your order just changed. Check your total and place your order again.");
 }

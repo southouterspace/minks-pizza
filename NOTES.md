@@ -398,9 +398,14 @@ complaints are in `docs/promotions-research.md`.
   broken at runtime only.
 - **Refusals are data.** The evaluator returns a typed `Refusal`
   (`{ kind: "short", shortCents }`, `{ kind: "soldOut" }`, …);
-  `promotion-copy.ts` owns every sentence, and the race message switches on
-  the kind. Reasons carry no closing period, so "We don't recognize that
-  code" and "This offer has ended" lost theirs.
+  `promotion-copy.ts` owns every sentence. Reasons carry no closing period,
+  so "We don't recognize that code" and "This offer has ended" lost theirs.
+- **One message when a deal changes mid-checkout.** Whether the quote no
+  longer matches the button's total or the guard lost a race,
+  `dealChangedMessage` names the deal with the refusal the cart would show
+  ("E2E-PIZZA: This offer has ended. Your total is now $38.91. Check it and
+  place your order again."). Sold out is the race case, so it keeps "was
+  just fully redeemed — your total is now …". `createOrder` tries twice.
 - **One table per reward type.** `REWARD_SPEC` in `promotion-schema.ts` holds
   the form label, the form fields and the scope (item, order, delivery). The
   engine's stage order, the discount target, the "orders $30+" wording, the

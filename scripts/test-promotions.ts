@@ -25,7 +25,7 @@ import {
   type PromotionReward,
   type Target,
 } from "../src/lib/promotion-schema";
-import { describeOffer, describePromotionShort, describeSchedule, lostDealCopy, nudgeCopy, refusalCopy } from "../src/lib/promotion-copy";
+import { dealChangedMessage, describeOffer, describePromotionShort, describeSchedule, nudgeCopy, refusalCopy } from "../src/lib/promotion-copy";
 
 let passed = 0;
 function test(name: string, fn: () => void) {
@@ -298,13 +298,24 @@ test("every rejection reason, word for word", () => {
   assert.equal(reasonFor(run([], { enteredCodes: ["NOPE"] }), "NOPE"), "We don't recognize that code");
 });
 
-test("a deal lost to a race says what took it", () => {
+test("a deal that changed mid-checkout is named with its reason", () => {
   const p = promo({ type: "order_amount", amountCents: 500 }, { totalLimit: 1, perCustomerLimit: 1 });
-  const lostTo = (e: ReturnType<typeof run>) => lostDealCopy({ code: "E2E-RACE", label: p.name }, e.rejected[0]?.refusal);
-  assert.equal(lostTo(run([coded(p, "E2E-RACE", { uses: 1 })])), "E2E-RACE was just fully redeemed");
-  assert.equal(lostTo(run([coded(p, "E2E-RACE", { customerUses: 1 })], { customerKey: "5552468135" })), "E2E-RACE was already used with this phone number");
-  assert.equal(lostTo(run([coded({ ...p, isActive: false }, "E2E-RACE")])), "E2E-RACE is no longer available");
-  assert.equal(lostDealCopy({ code: null, label: "Free knots" }, undefined), '"Free knots" just ran out');
+  const changed = (e: ReturnType<typeof run>) =>
+    dealChangedMessage({ display: "E2E-RACE", refusal: e.rejected[0]?.refusal }, 648, { timezone: TZ });
+  assert.equal(changed(run([coded(p, "E2E-RACE", { uses: 1 })])), "E2E-RACE was just fully redeemed — your total is now $6.48.");
+  assert.equal(
+    changed(run([coded(p, "E2E-RACE", { customerUses: 1 })], { customerKey: "5552468135" })),
+    "E2E-RACE: Already used with this phone number. Your total is now $6.48. Check it and place your order again.",
+  );
+  assert.equal(
+    changed(run([coded({ ...p, isActive: false }, "E2E-RACE")])),
+    "E2E-RACE: This offer has ended. Your total is now $6.48. Check it and place your order again.",
+  );
+  assert.equal(
+    dealChangedMessage({ display: '"Free knots"', refusal: undefined }, 648, { timezone: TZ }),
+    '"Free knots": This deal is no longer available. Your total is now $6.48. Check it and place your order again.',
+  );
+  assert.equal(dealChangedMessage(undefined, 648, { timezone: TZ }), "Your total is now $6.48. Check it and place your order again.");
 });
 
 test("hard stops win over fixable reasons", () => {

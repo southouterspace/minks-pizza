@@ -211,21 +211,21 @@ export function nudgeCopy(n: Nudge): string {
 }
 
 /**
- * "PIZZA10 was just fully redeemed": a deal that applied at quote time and
- * was gone once the order went in, from why a fresh quote turned it down.
+ * Why an order wasn't placed at the total the customer saw, naming the deal
+ * that changed. A sold-out deal went to another order moments ago, so it
+ * says "just"; anything else quotes the refusal the cart shows.
  */
-export function lostDealCopy(lost: { code: string | null; label: string }, refusal: Refusal | undefined): string {
-  if (!lost.code) return `"${lost.label}" just ran out`;
-  switch (refusal?.kind) {
-    case "perCustomer":
-      return `${lost.code} was already used with this phone number`;
-    case "newCustomers":
-      return `${lost.code} is for new customers only`;
-    case "soldOut":
-      return `${lost.code} was just fully redeemed`;
-    default:
-      return `${lost.code} is no longer available`;
-  }
+export function dealChangedMessage(
+  deal: { display: string; refusal: Refusal | undefined } | undefined,
+  totalCents: number,
+  ctx: { timezone: string; names?: TargetNames },
+): string {
+  const total = formatCents(totalCents);
+  if (deal?.refusal?.kind === "soldOut") return `${deal.display} was just fully redeemed — your total is now ${total}.`;
+  const why = deal
+    ? `${deal.display}: ${deal.refusal ? refusalCopy(deal.refusal, { ...ctx, display: deal.display }) : "This deal is no longer available"}. `
+    : "";
+  return `${why}Your total is now ${total}. Check it and place your order again.`;
 }
 
 export const PROMOTION_STATUS_LABEL: Record<PromotionStatus, string> = {
