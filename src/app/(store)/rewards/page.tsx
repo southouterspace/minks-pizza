@@ -9,6 +9,7 @@ import {
   formatPhone,
   formatPriceIncrease,
   localDate,
+  orderPointsStatus,
   SIGNUP_MIN_NET_CENTS,
 } from "@/lib/loyalty";
 import {
@@ -17,6 +18,7 @@ import {
   getMember,
   listRewards,
   memberLedger,
+  memberOrders,
   memberStatus,
   refreshMember,
   type LoyaltyMember,
@@ -28,6 +30,7 @@ import { saveBirthday, signOut } from "./actions";
 import { ComingSoon } from "@/components/store/coming-soon";
 import { CopyLink } from "@/components/store/copy-link";
 import { RewardsSignIn } from "@/components/store/rewards-sign-in";
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { NativeSelect, NativeSelectOption } from "@/components/ui/native-select";
@@ -205,7 +208,11 @@ async function MemberView({
 }) {
   await refreshMember(signedIn.id);
   const member = (await getMember(signedIn.id)) ?? signedIn;
-  const [status, ledger] = await Promise.all([memberStatus(member, loyalty), memberLedger(member.id)]);
+  const [status, ledger, recentOrders] = await Promise.all([
+    memberStatus(member, loyalty),
+    memberLedger(member.id),
+    memberOrders(member.id),
+  ]);
   const year = localDate(new Date(), loyalty.timezone).year;
 
   return (
@@ -339,6 +346,40 @@ async function MemberView({
           </CardContent>
         </Card>
       </div>
+
+      {recentOrders.length > 0 ? (
+        <section>
+          <h2 className="text-sm font-semibold">Your orders</h2>
+          <ul className="mt-3 divide-y divide-border rounded-xl border border-border" data-testid="member-orders">
+            {recentOrders.map((o) => {
+              const state = orderPointsStatus(o.status);
+              return (
+                <li key={o.id} className="flex items-center justify-between gap-4 px-4 py-3 text-sm" data-testid={`member-order-${o.orderNumber}`}>
+                  <span>
+                    <Link href={`/order/${o.id}`} className="underline underline-offset-4">
+                      Order #{o.orderNumber}
+                    </Link>
+                    <span className="block text-xs text-muted-foreground">
+                      {o.placedAt.toLocaleDateString("en-US", { month: "short", day: "numeric", timeZone: loyalty.timezone })}
+                    </span>
+                  </span>
+                  <span className="flex items-center gap-3">
+                    <span className="tabular-nums text-muted-foreground">
+                      {state === "Reversed" ? "No points" : `${o.pointsEarned.toLocaleString()} pts`}
+                    </span>
+                    <Badge variant={state === "Posted" ? "default" : "outline"} className="w-20">
+                      {state}
+                    </Badge>
+                  </span>
+                </li>
+              );
+            })}
+          </ul>
+          <p className="mt-2 text-xs text-muted-foreground">
+            Points post when an order is completed. Canceled orders don&apos;t earn, and any reward used comes back.
+          </p>
+        </section>
+      ) : null}
 
       <section>
         <h2 className="text-sm font-semibold">Activity</h2>

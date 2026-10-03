@@ -15,6 +15,7 @@ import { requireOperator } from "@/lib/auth";
 import { repriceReward, rewardEffectSchema, tiersSchema } from "@/lib/loyalty";
 import {
   getLoyaltySettings,
+  claimOrderByNumber,
   getReward,
   isInsufficientPoints,
   ledgerKey,
@@ -283,6 +284,24 @@ export async function adjustPoints(formData: FormData): Promise<void> {
   }
   revalidateLoyalty();
   redirect(`${memberPath}?saved=adjusted`);
+}
+
+const CLAIM_ERRORS = {
+  not_found: "No order has that number.",
+  not_completed: "That order isn't completed yet. Points post when it is.",
+  already_linked: "That order already belongs to a member.",
+} as const;
+
+export async function addMissingOrder(formData: FormData): Promise<void> {
+  await requireOperator();
+  const memberId = z.coerce.number().int().positive().parse(text(formData, "memberId"));
+  const memberPath = `/admin/loyalty/members/${memberId}`;
+  const orderNumber = z.coerce.number().int().positive().safeParse(text(formData, "orderNumber").replace(/^#/, ""));
+  if (!orderNumber.success) fail(memberPath, "Enter an order number, like 1042.");
+  const result = await claimOrderByNumber(memberId, orderNumber.data);
+  if (result !== "claimed") fail(memberPath, CLAIM_ERRORS[result]);
+  revalidateLoyalty();
+  redirect(`${memberPath}?saved=claimed`);
 }
 
 const birthdaySchema = z.object({

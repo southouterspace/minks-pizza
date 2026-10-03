@@ -6,6 +6,7 @@ import { and, count, desc, eq, gt, isNull, sql } from "drizzle-orm";
 import { db, loyaltyLoginCodes, loyaltyMembers } from "@/db";
 import { normalizePhone } from "@/lib/loyalty";
 import {
+  claimRecentOrders,
   findOrCreateMember,
   getLoyaltySettings,
   getMember,
@@ -114,6 +115,7 @@ export async function verifyLoginCode(
     .update(loyaltyMembers)
     .set({ verifiedAt: new Date(), ...(details.name && !member.name ? { name: details.name } : {}) })
     .where(eq(loyaltyMembers.id, member.id));
+  await claimRecentOrders(member);
   await refreshMember(member.id);
   await setMemberSession(member.id);
   return { ok: true, memberId: member.id };

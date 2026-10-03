@@ -80,6 +80,13 @@ export const rewardEffectSchema = z.discriminatedUnion("kind", [
 
 export type RewardEffect = z.infer<typeof rewardEffectSchema>;
 
+/** Where an order's points stand, as a member sees it. */
+export function orderPointsStatus(status: string): "Pending" | "Posted" | "Reversed" {
+  if (status === "completed") return "Posted";
+  if (status === "canceled") return "Reversed";
+  return "Pending";
+}
+
 // ---------------------------------------------------------------------------
 // Phone identity
 // ---------------------------------------------------------------------------

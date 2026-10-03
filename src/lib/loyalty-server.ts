@@ -5,7 +5,7 @@
  * that caused it. Not server-only: the order pipeline and scripts import it.
  */
 import { randomInt, randomUUID } from "node:crypto";
-import { and, asc, desc, eq, gte, max, sql, sum, type SQL } from "drizzle-orm";
+import { and, asc, desc, eq, gte, isNull, max, sql, sum, type SQL } from "drizzle-orm";
 import {
   categories,
   db,
@@ -22,6 +22,7 @@ import {
   SIGNUP_MIN_NET_CENTS,
   activePromotion,
   birthdayGrantDue,
+  earnPoints,
   expiryDue,
   localDate,
   rewardEffectSchema,
@@ -336,7 +337,7 @@ export function completionStatements(
                 from orders o where o.id = ${order.id} and o.status = 'completed'`,
     }),
     db.execute(sql`
-      update loyalty_members m set last_activity_at = now()
+      update loyalty_members m set last_activity_at = greatest(m.last_activity_at, o.updated_at)
       from orders o
       where o.id = ${order.id} and o.status = 'completed' and m.id = o.loyalty_member_id`),
     ...settlementStatements(order.loyaltyMemberId, settings),
@@ -398,6 +399,77 @@ export async function refreshMember(memberId: number, now = new Date()): Promise
   }
   const [first, ...rest] = statements;
   await db.batch([first, ...rest]);
+}
+
+// ---------------------------------------------------------------------------
+// Claiming orders placed before joining or signing in
+// ---------------------------------------------------------------------------
+
+export type ClaimResult = "claimed" | "not_found" | "not_completed" | "already_linked";
+
+/**
+ * Links completed guest orders to a member and posts their points at the base
+ * rate (no tier or promotion: those applied to the member at order time,
+ * which we can't know). The earn key is the order's, so a claim can't
+ * double-post with a completion.
+ */
+async function claimOrders(memberId: number, where: SQL): Promise<number> {
+  const settings = await getLoyaltySettings();
+  const { rows } = await db.execute<{ id: string; net: number }>(sql`
+    select id, subtotal_cents - discount_cents as net from orders
+    where status = 'completed' and loyalty_member_id is null and ${where}`);
+  for (const order of rows) {
+    const points = earnPoints({
+      netCents: order.net,
+      pointsPerDollar: settings.pointsPerDollar,
+      tierMultiplierBps: 10_000,
+      promoMultiplierBps: 10_000,
+    });
+    await db.batch([
+      db
+        .update(orders)
+        .set({ loyaltyMemberId: memberId, loyaltyPointsEarned: points })
+        .where(and(eq(orders.id, order.id), isNull(orders.loyaltyMemberId))),
+      ...completionStatements({ id: order.id, loyaltyMemberId: memberId }, settings),
+    ]);
+  }
+  return rows.length;
+}
+
+/** Completed orders from the last 30 days placed with the member's phone. */
+export function claimRecentOrders(member: { id: number; phone: string }): Promise<number> {
+  return claimOrders(
+    member.id,
+    sql`regexp_replace(customer_phone, '[^0-9]', '', 'g') in (${member.phone}, ${`1${member.phone}`})
+        and placed_at > now() - interval '30 days'`,
+  );
+}
+
+/** Operator override: any completed, unclaimed order, whatever its phone. */
+export async function claimOrderByNumber(memberId: number, orderNumber: number): Promise<ClaimResult> {
+  const [order] = await db
+    .select({ status: orders.status, memberId: orders.loyaltyMemberId })
+    .from(orders)
+    .where(eq(orders.orderNumber, orderNumber));
+  if (!order) return "not_found";
+  if (order.memberId !== null) return "already_linked";
+  if (order.status !== "completed") return "not_completed";
+  return (await claimOrders(memberId, sql`order_number = ${orderNumber}`)) > 0 ? "claimed" : "already_linked";
+}
+
+export function memberOrders(memberId: number, limit = 20) {
+  return db
+    .select({
+      id: orders.id,
+      orderNumber: orders.orderNumber,
+      status: orders.status,
+      placedAt: orders.placedAt,
+      pointsEarned: orders.loyaltyPointsEarned,
+    })
+    .from(orders)
+    .where(eq(orders.loyaltyMemberId, memberId))
+    .orderBy(desc(orders.placedAt))
+    .limit(limit);
 }
 
 export function memberLedger(memberId: number, limit = 50) {

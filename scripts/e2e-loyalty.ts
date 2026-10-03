@@ -37,6 +37,7 @@ const EMAIL = "loyalty-e2e@minks.example";
 const PASSWORD = "pizza-test-1234";
 const RITA = { name: "Rita Guest", phone: "(555) 010-3101", digits: "5550103101" };
 const BEN = { name: "Ben Friend", phone: "555.010.3102", digits: "5550103102" };
+const CARA = { name: "Cara Late", phone: "+1 (555) 010-3103", digits: "5550103103" };
 const TZ = "America/Chicago";
 
 let failures = 0;
@@ -80,6 +81,10 @@ async function resetLoyalty() {
   await db.execute(sql`delete from loyalty_rewards`);
   await db.execute(sql`delete from loyalty_promotions`);
   await db.execute(sql`delete from loyalty_settings`);
+  // Orders from earlier runs would be claimed by these phones on sign-in.
+  await db.execute(sql`
+    delete from orders where regexp_replace(customer_phone, '[^0-9]', '', 'g')
+      in ('5550103101', '5550103102', '5550103103', '15550103103', '5550109876')`);
   // Old tickets left on the line would crowd the admin inbox.
   await db.execute(sql`update orders set status = 'completed' where status in ('new','confirmed','preparing','ready')`);
   await db
@@ -479,6 +484,68 @@ async function main() {
   const expired = (await entries(benMember.id)).filter((e) => e.kind === "expire");
   check("13 months without an order expires the balance once", expired.length === 1 && expired[0].points === -699);
   check("expired member has 0 points", (await member(BEN.digits)).pointsBalance === 0);
+
+  // --- Missing points --------------------------------------------------------
+  const guest = (name: string, phone: string) =>
+    createOrder({ orderType: "pickup", customerName: name, customerPhone: phone, tipCents: 0, lines: orderLines });
+  const caraPast = await guest(CARA.name, "555-010-3103");
+  await completeViaAdmin(op, caraPast.orderNumber, caraPast.id);
+  check("a guest order without joining has no member", (await orderRow(caraPast.id)).loyaltyMemberId === null);
+  const caraCtx = await browser.newContext({ viewport: { width: 1280, height: 900 } });
+  const cara = await caraCtx.newPage();
+  await customerSignIn(cara, CARA.phone, CARA.name);
+  const caraMember = await member(CARA.digits);
+  check("signing in claims the recent completed order", (await orderRow(caraPast.id)).loyaltyMemberId === caraMember.id);
+  check(
+    "the claimed order earns at the base rate, plus the welcome bonus",
+    summary(await entries(caraMember.id)) === "earn:199,signup_bonus:200",
+    summary(await entries(caraMember.id)),
+  );
+  check(
+    "claimed order shows as Posted",
+    (await cara.getByTestId(`member-order-${caraPast.orderNumber}`).textContent())?.includes("Posted") === true,
+  );
+  const caraPending = await createOrder(
+    { orderType: "pickup", customerName: CARA.name, customerPhone: CARA.phone, tipCents: 0, lines: orderLines },
+    { memberId: caraMember.id },
+  );
+  const caraCanceled = await createOrder(
+    { orderType: "pickup", customerName: CARA.name, customerPhone: CARA.phone, tipCents: 0, lines: orderLines },
+    { memberId: caraMember.id },
+  );
+  await db.batch([
+    db.update(orders).set({ status: "canceled" }).where(eq(orders.id, caraCanceled.id)),
+    ...cancellationStatements(caraCanceled.id),
+  ]);
+  await cara.reload({ waitUntil: "networkidle" });
+  check(
+    "an open order shows as Pending",
+    (await cara.getByTestId(`member-order-${caraPending.orderNumber}`).textContent())?.includes("Pending") === true,
+  );
+  check(
+    "a canceled order shows as Reversed",
+    (await cara.getByTestId(`member-order-${caraCanceled.orderNumber}`).textContent())?.includes("Reversed") === true,
+  );
+  await db.update(orders).set({ status: "canceled" }).where(eq(orders.id, caraPending.id));
+
+  const otherPhone = await guest(CARA.name, "(555) 010-9876");
+  await completeViaAdmin(op, otherPhone.orderNumber, otherPhone.id);
+  await op.goto(`${BASE}/admin/loyalty/members/${caraMember.id}`, { waitUntil: "networkidle" });
+  await op.getByLabel("Order number").fill(String(otherPhone.orderNumber));
+  await op.getByRole("button", { name: "Add order" }).click();
+  await op.waitForURL(/saved=claimed/);
+  check(
+    "operator adds a missing order by number",
+    (await entries(caraMember.id)).filter((e) => e.kind === "earn").length === 2 &&
+      (await orderRow(otherPhone.id)).loyaltyMemberId === caraMember.id,
+  );
+  await op.getByLabel("Order number").fill(String(otherPhone.orderNumber));
+  await op.getByRole("button", { name: "Add order" }).click();
+  await op.getByTestId("form-error").waitFor();
+  check(
+    "adding it twice is refused",
+    (await op.getByTestId("form-error").textContent()) === "That order already belongs to a member.",
+  );
 
   // --- Price protection ----------------------------------------------------
   await op.goto(`${BASE}/admin/loyalty/rewards`, { waitUntil: "networkidle" });

@@ -4,7 +4,7 @@ import { ArrowLeft } from "lucide-react";
 import { requireOperator } from "@/lib/auth";
 import { LEDGER_KIND_RULES, formatMultiplier, formatPhone } from "@/lib/loyalty";
 import { getLoyaltySettings, getMember, memberLedger, memberStatus } from "@/lib/loyalty-server";
-import { adjustPoints, saveMemberBirthday } from "../../actions";
+import { addMissingOrder, adjustPoints, saveMemberBirthday } from "../../actions";
 import { FormNotice } from "@/components/admin/form-notice";
 import { formatDateTime } from "@/components/admin/ui";
 import { Button } from "@/components/ui/button";
@@ -17,6 +17,7 @@ export const dynamic = "force-dynamic";
 
 const SAVED: Record<string, string> = {
   adjusted: "Points adjusted.",
+  claimed: "Order added and its points posted.",
   birthday: "Birthday saved.",
 };
 
@@ -98,6 +99,25 @@ export default async function LoyaltyMemberPage({ params, searchParams }: PagePr
           </CardContent>
         </Card>
       </div>
+
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-sm">Add a missing order</CardTitle>
+        </CardHeader>
+        <CardContent>
+          <form action={addMissingOrder} className="flex flex-wrap items-end gap-3">
+            <input type="hidden" name="memberId" value={member.id} />
+            <Field className="w-40!">
+              <FieldLabel htmlFor="claim-order">Order number</FieldLabel>
+              <Input id="claim-order" name="orderNumber" inputMode="numeric" required placeholder="1042" />
+            </Field>
+            <Button type="submit" variant="outline" className="h-9!">Add order</Button>
+            <p className="basis-full text-xs text-muted-foreground">
+              For a completed order placed without their phone or before they joined. It earns at the base rate.
+            </p>
+          </form>
+        </CardContent>
+      </Card>
 
       <section>
         <h3 className="text-sm font-semibold">History</h3>
