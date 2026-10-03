@@ -6,7 +6,7 @@ import type { PricedLine } from "@/lib/menu-server";
 import type { Settings } from "@/lib/settings-server";
 import type { Statement } from "./folds";
 
-export function insertLines(orderId: string, lines: PricedLine[], firedAt: Date | null): Statement[] {
+export function insertLines(orderId: string, lines: PricedLine[], fire: boolean): Statement[] {
   if (lines.length === 0) return [];
   return [
     db
@@ -23,7 +23,7 @@ export function insertLines(orderId: string, lines: PricedLine[], firedAt: Date 
           modifiers: l.modifiers,
           notes: l.notes,
           station: l.station,
-          firedAt,
+          firedAt: fire ? sql`now()` : null,
         })),
       )
       .onConflictDoNothing({ target: orderItems.lineUid }),
@@ -108,15 +108,15 @@ export function tenderProblem(t: TenderInput): string | null {
 }
 
 /** When a fire plan sends lines to the kitchen, and when a held order fires itself. */
-export function firing(plan: FirePlan, now: Date): { firedAt: Date | null; fireAt: Date | null } {
+export function firing(plan: FirePlan, now: Date): { fireNow: boolean; fireAt: Date | null } {
   switch (plan.kind) {
     case "now":
-      return { firedAt: now, fireAt: null };
+      return { fireNow: true, fireAt: null };
     case "hold":
-      return { firedAt: null, fireAt: null };
+      return { fireNow: false, fireAt: null };
     case "at": {
       const at = new Date(plan.at);
-      return at <= now ? { firedAt: now, fireAt: null } : { firedAt: null, fireAt: at };
+      return at <= now ? { fireNow: true, fireAt: null } : { fireNow: false, fireAt: at };
     }
   }
 }

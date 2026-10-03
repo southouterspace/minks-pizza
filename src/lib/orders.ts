@@ -379,7 +379,7 @@ export function orderHistory(o: OrderView): HistoryEntry[] {
           : `Refunded ${amount} ${method} (${t.reason ?? "no reason"})`,
     });
   }
-  // Placed leads even when a line's fire stamp sorts a few ms earlier: lines
-  // are stamped with the app server's clock, placed_at with the database's.
+  // Placed leads even though lines fired with the order share its placed_at
+  // stamp (both are the database's now() for the submit batch).
   return [placed, ...entries.sort((a, b) => a.at.localeCompare(b.at))];
 }

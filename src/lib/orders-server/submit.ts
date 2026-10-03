@@ -67,7 +67,7 @@ export async function submitOrder(req: SubmitOrderRequest, by: Submitter): Promi
   }
 
   const now = new Date();
-  const { firedAt, fireAt } = firing(req.fire, now);
+  const { fireNow, fireAt } = firing(req.fire, now);
   const quote = await getQuote(settings);
   const quoted = req.fulfillment.kind === "delivery" ? quote.deliveryMinutes : quote.pickupMinutes;
   const promisedAt = req.promisedAt
@@ -98,7 +98,7 @@ export async function submitOrder(req: SubmitOrderRequest, by: Submitter): Promi
         taxRateBps: settings.taxRateBps,
       })
       .onConflictDoNothing({ target: orders.id }),
-    ...insertLines(req.orderId, priced, firedAt),
+    ...insertLines(req.orderId, priced, fireNow),
     ...(shiftId !== null && staffId !== null ? req.tenders.map((t) => tenderInsert(req.orderId, t, shiftId, staffId)) : []),
     ...folds(req.orderId),
   ]);

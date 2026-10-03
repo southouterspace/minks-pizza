@@ -45,12 +45,12 @@ async function plan(
     case "add_lines": {
       const priced = await priceLines(m.lines, policyOf(settings));
       if (!Array.isArray(priced)) return priced;
-      return { statements: insertLines(id, priced, m.fire ? now : null) };
+      return { statements: insertLines(id, priced, m.fire) };
     }
     case "fire":
       return {
         statements: [
-          fireStamp(and(eq(orderItems.orderId, id), m.lineIds === "all" ? undefined : inArray(orderItems.lineUid, m.lineIds)), now),
+          fireStamp(and(eq(orderItems.orderId, id), m.lineIds === "all" ? undefined : inArray(orderItems.lineUid, m.lineIds))),
         ],
       };
     case "void_line": {
@@ -142,12 +142,12 @@ async function plan(
       };
     case "set_schedule": {
       if (order.status !== "held") return rejected("This order is already in the kitchen.");
-      const { firedAt, fireAt } = firing(m.fire, now);
+      const { fireNow, fireAt } = firing(m.fire, now);
       const promisedAt = m.promisedAt ? new Date(m.promisedAt) : null;
       return {
         statements: [
           db.update(orders).set({ fireAt, promisedAt: promisedAt ?? sql`${orders.promisedAt}` }).where(eq(orders.id, id)),
-          ...(firedAt ? [fireStamp(eq(orderItems.orderId, id), firedAt)] : []),
+          ...(fireNow ? [fireStamp(eq(orderItems.orderId, id))] : []),
         ],
       };
     }

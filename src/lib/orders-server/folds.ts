@@ -53,7 +53,9 @@ function recomputeTotals(orderId: string): Statement {
  * new → preparing once one is touched; → ready once every fired live line
  * that needs cooking is done; ready/completed → new when lines are fired
  * onto the check after it was ready. Canceled is terminal and only `cancel`
- * sets it.
+ * sets it. Fire stamps and ready_at both come from the database clock
+ * (fireStamp, insertLines): an app server clock that lags it would make a
+ * course fired just after ready look older than the ready stamp.
  */
 export function syncStatus(orderId: string): Statement[] {
   const fired = sql`exists (select 1 from order_items i where i.order_id = ${orderId}
@@ -92,10 +94,10 @@ export function folds(orderId: string): Statement[] {
 }
 
 /** Sends the matching live lines to the kitchen; lines already fired keep their stamp. */
-export function fireStamp(where: SQL | undefined, now: Date): Statement {
+export function fireStamp(where: SQL | undefined): Statement {
   return db
     .update(orderItems)
-    .set({ firedAt: sql`coalesce(${orderItems.firedAt}, ${now})` })
+    .set({ firedAt: sql`coalesce(${orderItems.firedAt}, now())` })
     .where(and(where, isNull(orderItems.voidedAt)));
 }
 
@@ -110,6 +112,6 @@ export async function fireDue(now: Date): Promise<number> {
     .where(and(eq(orders.status, "held"), lte(orders.fireAt, now)));
   if (due.length === 0) return 0;
   const ids = due.map((d) => d.id);
-  await run([fireStamp(inArray(orderItems.orderId, ids), now), ...ids.flatMap(folds)]);
+  await run([fireStamp(inArray(orderItems.orderId, ids)), ...ids.flatMap(folds)]);
   return ids.length;
 }
