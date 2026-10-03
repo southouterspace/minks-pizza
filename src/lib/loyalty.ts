@@ -334,14 +334,28 @@ export function birthdayGrantDue(
   return localDate(now, timezone).month === birthMonth;
 }
 
-/** `lastActivityAt` is the member's last completed order (or enrollment). */
+/**
+ * When a balance expires without another completed order; null when it never
+ * will. `lastActivityAt` is the last completed order (or enrollment).
+ */
+export function pointsSafeUntil(
+  member: { pointsBalance: number; lastActivityAt: Date },
+  months: number | null,
+): Date | null {
+  if (months === null || member.pointsBalance <= 0) return null;
+  const until = new Date(member.lastActivityAt);
+  until.setUTCMonth(until.getUTCMonth() + months);
+  return until;
+}
+
 export function expiryDue(
   member: { pointsBalance: number; lastActivityAt: Date },
   now: Date,
   months: number | null,
 ): boolean {
-  if (months === null || member.pointsBalance <= 0) return false;
-  const cutoff = new Date(member.lastActivityAt);
-  cutoff.setUTCMonth(cutoff.getUTCMonth() + months);
-  return cutoff <= now;
+  const until = pointsSafeUntil(member, months);
+  return until !== null && until <= now;
 }
+
+/** Operators can undo an expiry for this long. */
+export const EXPIRY_RESTORE_DAYS = 30;

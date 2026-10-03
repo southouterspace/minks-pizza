@@ -9,6 +9,7 @@ import {
   formatMultiplier,
   formatPhone,
   normalizePhone,
+  pointsSafeUntil,
   rewardDiscount,
   tierFor,
   tierProgress,
@@ -199,6 +200,13 @@ describe("expiryDue", () => {
   });
   it("keeps a balance with recent activity", () => {
     assert.equal(expiryDue({ pointsBalance: 120, lastActivityAt: new Date("2025-10-16T00:00:00Z") }, now, 12), false);
+  });
+  it("tells the member the date their points are safe until", () => {
+    assert.deepEqual(
+      pointsSafeUntil({ pointsBalance: 120, lastActivityAt: new Date("2026-03-15T18:00:00Z") }, 12),
+      new Date("2027-03-15T18:00:00Z"),
+    );
+    assert.equal(pointsSafeUntil({ pointsBalance: 120, lastActivityAt: new Date("2026-03-15T18:00:00Z") }, null), null);
   });
   it("never expires when the program says never, or with nothing to expire", () => {
     assert.equal(expiryDue({ pointsBalance: 120, lastActivityAt: new Date("2020-01-01T00:00:00Z") }, now, null), false);

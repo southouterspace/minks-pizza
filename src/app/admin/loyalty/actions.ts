@@ -2,17 +2,18 @@
 
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
-import { eq, sql } from "drizzle-orm";
+import { and, eq, gt, sql } from "drizzle-orm";
 import { z } from "zod";
 import {
   db,
+  loyaltyLedger,
   loyaltyMembers,
   loyaltyPromotions,
   loyaltyRewards,
   loyaltySettings,
 } from "@/db";
 import { requireOperator } from "@/lib/auth";
-import { repriceReward, rewardEffectSchema, tiersSchema } from "@/lib/loyalty";
+import { EXPIRY_RESTORE_DAYS, repriceReward, rewardEffectSchema, tiersSchema } from "@/lib/loyalty";
 import {
   getLoyaltySettings,
   claimOrderByNumber,
@@ -284,6 +285,34 @@ export async function adjustPoints(formData: FormData): Promise<void> {
   }
   revalidateLoyalty();
   redirect(`${memberPath}?saved=adjusted`);
+}
+
+/** Gives back points that expired in the last 30 days; once per expiry. */
+export async function restoreExpired(formData: FormData): Promise<void> {
+  const operator = await requireOperator();
+  const entryId = z.coerce.number().int().positive().parse(text(formData, "entryId"));
+  const [entry] = await db
+    .select()
+    .from(loyaltyLedger)
+    .where(
+      and(
+        eq(loyaltyLedger.id, entryId),
+        eq(loyaltyLedger.kind, "expire"),
+        gt(loyaltyLedger.createdAt, new Date(Date.now() - EXPIRY_RESTORE_DAYS * 24 * 60 * 60 * 1000)),
+      ),
+    );
+  if (!entry) return;
+  await db.batch([
+    ledgerStatement({
+      kind: "adjust",
+      idemKey: ledgerKey.restore(entry.id),
+      from: { memberId: entry.memberId, points: -entry.points },
+      note: "Restored expired points",
+      operatorId: operator.id,
+    }),
+  ]);
+  revalidateLoyalty();
+  redirect(`/admin/loyalty/members/${entry.memberId}?saved=restored`);
 }
 
 const CLAIM_ERRORS = {

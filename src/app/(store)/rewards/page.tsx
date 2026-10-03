@@ -10,6 +10,7 @@ import {
   formatPriceIncrease,
   localDate,
   orderPointsStatus,
+  pointsSafeUntil,
   SIGNUP_MIN_NET_CENTS,
 } from "@/lib/loyalty";
 import {
@@ -214,6 +215,7 @@ async function MemberView({
     memberOrders(member.id),
   ]);
   const year = localDate(new Date(), loyalty.timezone).year;
+  const safeUntil = pointsSafeUntil(member, loyalty.expirationMonths);
 
   return (
     <div className="space-y-8">
@@ -225,6 +227,13 @@ async function MemberView({
           <h1 className="mt-1 text-4xl font-bold tracking-tight tabular-nums" data-testid="points-balance">
             {member.pointsBalance.toLocaleString()} <span className="text-lg font-medium text-muted-foreground">points</span>
           </h1>
+          {safeUntil ? (
+            <p className="mt-1 text-sm text-muted-foreground" data-testid="safe-until">
+              Your points are safe until{" "}
+              {safeUntil.toLocaleDateString("en-US", { month: "long", day: "numeric", year: "numeric", timeZone: loyalty.timezone })}.
+              Any order resets the clock.
+            </p>
+          ) : null}
         </div>
         <form action={signOut}>
           <Button type="submit" variant="ghost" size="sm" className="text-muted-foreground">

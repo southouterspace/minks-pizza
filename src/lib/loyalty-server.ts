@@ -54,6 +54,7 @@ export const ledgerKey = {
   expire: (memberId: number, lastActivityAt: Date) =>
     `expire:${memberId}:${lastActivityAt.getTime()}`,
   adjust: () => `adjust:${randomUUID()}`,
+  restore: (expireEntryId: number) => `restore:${expireEntryId}`,
 };
 
 /**
@@ -476,6 +477,7 @@ export function memberLedger(memberId: number, limit = 50) {
   return db
     .select({
       id: loyaltyLedger.id,
+      idemKey: loyaltyLedger.idemKey,
       kind: loyaltyLedger.kind,
       points: loyaltyLedger.points,
       note: loyaltyLedger.note,

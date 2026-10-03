@@ -484,6 +484,23 @@ async function main() {
   const expired = (await entries(benMember.id)).filter((e) => e.kind === "expire");
   check("13 months without an order expires the balance once", expired.length === 1 && expired[0].points === -699);
   check("expired member has 0 points", (await member(BEN.digits)).pointsBalance === 0);
+  await op.goto(`${BASE}/admin/loyalty/members/${benMember.id}`, { waitUntil: "networkidle" });
+  await op.getByRole("button", { name: "Restore" }).click();
+  await op.waitForURL(/saved=restored/);
+  check("operator restores expired points in one click", (await member(BEN.digits)).pointsBalance === 699);
+  check("restore button is replaced once used", (await op.getByRole("button", { name: "Restore" }).count()) === 0);
+  await refreshMember(benMember.id);
+  check(
+    "restored points don't expire again until new activity",
+    (await member(BEN.digits)).pointsBalance === 699 &&
+      (await entries(benMember.id)).filter((e) => e.kind === "expire").length === 1,
+  );
+  await rita.goto(`${BASE}/rewards`, { waitUntil: "networkidle" });
+  check(
+    "members see when their points are safe until",
+    /^Your points are safe until \w+ \d+, 2027\./.test((await rita.getByTestId("safe-until").textContent()) ?? ""),
+    (await rita.getByTestId("safe-until").textContent()) ?? "",
+  );
 
   // --- Missing points --------------------------------------------------------
   const guest = (name: string, phone: string) =>

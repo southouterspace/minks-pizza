@@ -2,9 +2,9 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import { ArrowLeft } from "lucide-react";
 import { requireOperator } from "@/lib/auth";
-import { LEDGER_KIND_RULES, formatMultiplier, formatPhone } from "@/lib/loyalty";
-import { getLoyaltySettings, getMember, memberLedger, memberStatus } from "@/lib/loyalty-server";
-import { addMissingOrder, adjustPoints, saveMemberBirthday } from "../../actions";
+import { EXPIRY_RESTORE_DAYS, LEDGER_KIND_RULES, formatMultiplier, formatPhone } from "@/lib/loyalty";
+import { getLoyaltySettings, getMember, ledgerKey, memberLedger, memberStatus } from "@/lib/loyalty-server";
+import { addMissingOrder, adjustPoints, restoreExpired, saveMemberBirthday } from "../../actions";
 import { FormNotice } from "@/components/admin/form-notice";
 import { formatDateTime } from "@/components/admin/ui";
 import { Button } from "@/components/ui/button";
@@ -18,6 +18,7 @@ export const dynamic = "force-dynamic";
 const SAVED: Record<string, string> = {
   adjusted: "Points adjusted.",
   claimed: "Order added and its points posted.",
+  restored: "Expired points restored.",
   birthday: "Birthday saved.",
 };
 
@@ -29,6 +30,8 @@ export default async function LoyaltyMemberPage({ params, searchParams }: PagePr
   const sp = await searchParams;
   const [settings, ledger] = await Promise.all([getLoyaltySettings(), memberLedger(member.id, 200)]);
   const status = await memberStatus(member, settings);
+  const restored = new Set(ledger.map((e) => e.idemKey));
+  const restoreSince = Date.now() - EXPIRY_RESTORE_DAYS * 24 * 60 * 60 * 1000;
 
   return (
     <div className="space-y-6">
@@ -140,9 +143,21 @@ export default async function LoyaltyMemberPage({ params, searchParams }: PagePr
                     {e.orderNumber ? ` · Order #${e.orderNumber}` : ""}
                   </span>
                 </span>
-                <span className={cn("shrink-0 font-medium tabular-nums", e.points > 0 ? "text-success" : "text-muted-foreground")}>
-                  {e.points > 0 ? "+" : "−"}
-                  {Math.abs(e.points).toLocaleString()}
+                <span className="flex shrink-0 items-center gap-3">
+                  {e.kind === "expire" && e.createdAt.getTime() > restoreSince ? (
+                    restored.has(ledgerKey.restore(e.id)) ? (
+                      <span className="text-xs text-muted-foreground">Restored</span>
+                    ) : (
+                      <form action={restoreExpired}>
+                        <input type="hidden" name="entryId" value={e.id} />
+                        <Button type="submit" variant="outline" size="xs">Restore</Button>
+                      </form>
+                    )
+                  ) : null}
+                  <span className={cn("font-medium tabular-nums", e.points > 0 ? "text-success" : "text-muted-foreground")}>
+                    {e.points > 0 ? "+" : "−"}
+                    {Math.abs(e.points).toLocaleString()}
+                  </span>
                 </span>
               </div>
             ))}
