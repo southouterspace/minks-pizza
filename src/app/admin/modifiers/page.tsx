@@ -13,7 +13,20 @@ import {
   updateModifier,
   updateModifierGroup,
 } from "@/app/admin/actions";
+import Link from "next/link";
 import { ConfirmButton } from "@/components/admin/confirm-button";
+import { RecipeEditor } from "@/components/admin/recipe-editor";
+import {
+  modifierRecipeLines,
+  recipeIngredients,
+  sizeModifiers,
+} from "@/components/admin/recipe-data";
+import { NativeSelect, NativeSelectOption } from "@/components/ui/native-select";
+import {
+  GROUP_KIND_LABEL,
+  MODIFIER_GROUP_KINDS,
+  type ModifierGroupKind,
+} from "@/lib/toppings";
 import { Button, buttonVariants } from "@/components/ui/button";
 import {
   Card,
@@ -46,10 +59,15 @@ function GroupFields({
   defaults,
 }: {
   idPrefix: string;
-  defaults?: { name: string; minSelect: number; maxSelect: number | null };
+  defaults?: {
+    name: string;
+    kind: ModifierGroupKind;
+    minSelect: number;
+    maxSelect: number | null;
+  };
 }) {
   return (
-    <div className="grid gap-3 sm:grid-cols-3">
+    <div className="grid gap-3 sm:grid-cols-2">
       <Field>
         <FieldLabel htmlFor={`${idPrefix}-name`}>Name</FieldLabel>
         <Input
@@ -61,6 +79,21 @@ function GroupFields({
           defaultValue={defaults?.name ?? ""}
           placeholder="e.g. Size"
         />
+      </Field>
+      <Field>
+        <FieldLabel htmlFor={`${idPrefix}-kind`}>Kind</FieldLabel>
+        <NativeSelect
+          id={`${idPrefix}-kind`}
+          name="kind"
+          defaultValue={defaults?.kind ?? "choice"}
+          className="w-full"
+        >
+          {MODIFIER_GROUP_KINDS.map((k) => (
+            <NativeSelectOption key={k} value={k}>
+              {GROUP_KIND_LABEL[k]}
+            </NativeSelectOption>
+          ))}
+        </NativeSelect>
       </Field>
       <Field>
         <FieldLabel htmlFor={`${idPrefix}-min`}>Min selections</FieldLabel>
@@ -95,6 +128,33 @@ function GroupFields({
   );
 }
 
+function ExtraPriceField({ id, cents }: { id: string; cents: number | null }) {
+  return (
+    <Field>
+      <FieldLabel htmlFor={id}>
+        Extra price ($){" "}
+        <span className="font-normal text-muted-foreground">(blank = no extra)</span>
+      </FieldLabel>
+      <Input
+        id={id}
+        name="extraPrice"
+        type="number"
+        step="0.01"
+        min="0"
+        defaultValue={cents === null ? "" : centsToDollars(cents)}
+        className="tabular-nums"
+      />
+    </Field>
+  );
+}
+
+function recipeSummary(lines: readonly { ingredientId: number; qtyMilli: number }[]): string {
+  if (lines.length === 0) return "none";
+  const ingredientCount = new Set(lines.map((l) => l.ingredientId)).size;
+  const removes = lines.some((l) => l.qtyMilli < 0);
+  return `${ingredientCount} ingredient${ingredientCount === 1 ? "" : "s"}${removes ? ", removes some" : ""}`;
+}
+
 export default async function ModifiersPage() {
   await requireOperator();
 
@@ -113,6 +173,11 @@ export default async function ModifiersPage() {
     })
     .from(itemModifierGroups)
     .innerJoin(menuItems, eq(itemModifierGroups.itemId, menuItems.id));
+  const [allIngredients, sizes, recipeRows] = await Promise.all([
+    recipeIngredients(),
+    sizeModifiers(),
+    modifierRecipeLines(),
+  ]);
 
   return (
     <div>
@@ -123,7 +188,15 @@ export default async function ModifiersPage() {
       </div>
       <p className="mt-1 text-sm text-muted-foreground">
         Reusable option sets — sizes, crusts, toppings — that you attach to
-        menu items.
+        menu items. A Size group picks which recipe amounts apply; Toppings
+        offer halves, light and extra. Recipes use{" "}
+        <Link
+          href="/admin/inventory/ingredients"
+          className="underline underline-offset-2 hover:text-foreground"
+        >
+          ingredients
+        </Link>
+        .
       </p>
 
       {/* New group */}
@@ -162,6 +235,9 @@ export default async function ModifiersPage() {
           const groupModifiers = allModifiers.filter(
             (m) => m.groupId === group.id,
           );
+          const isToppings = group.kind === "toppings";
+          // A size's own recipe can't vary by size.
+          const recipeSizes = group.kind === "size" ? [] : sizes;
           const usedBy = [
             ...new Set(
               usage.filter((u) => u.groupId === group.id).map((u) => u.itemName),
@@ -173,6 +249,12 @@ export default async function ModifiersPage() {
               <CardHeader className="border-b pt-3 pb-3!">
                 <CardTitle className="flex flex-wrap items-center gap-2">
                   <span className="text-sm font-semibold">{group.name}</span>
+                  <span
+                    className="rounded-md border border-border px-1.5 py-0.5 text-xs font-normal"
+                    data-testid={`group-kind-${group.id}`}
+                  >
+                    {GROUP_KIND_LABEL[group.kind]}
+                  </span>
                   <span className="text-xs font-normal text-muted-foreground">
                     {ruleSummary(group.minSelect, group.maxSelect)}
                   </span>
@@ -194,6 +276,7 @@ export default async function ModifiersPage() {
                           idPrefix={`group-${group.id}`}
                           defaults={{
                             name: group.name,
+                            kind: group.kind,
                             minSelect: group.minSelect,
                             maxSelect: group.maxSelect,
                           }}
@@ -260,6 +343,9 @@ export default async function ModifiersPage() {
                       </span>
                       <span className="text-sm tabular-nums text-muted-foreground">
                         {formatDelta(modifier.priceDeltaCents)}
+                        {isToppings && modifier.extraPriceDeltaCents !== null
+                          ? ` · extra ${formatDelta(modifier.extraPriceDeltaCents)}`
+                          : null}
                       </span>
                       <form action={toggleModifierAvailability}>
                         <input
@@ -330,6 +416,12 @@ export default async function ModifiersPage() {
                                   className="tabular-nums"
                                 />
                               </Field>
+                              {isToppings ? (
+                                <ExtraPriceField
+                                  id={`mod-extra-${modifier.id}`}
+                                  cents={modifier.extraPriceDeltaCents}
+                                />
+                              ) : null}
                               <Field orientation="horizontal">
                                 <Checkbox
                                   id={`mod-default-${modifier.id}`}
@@ -361,6 +453,26 @@ export default async function ModifiersPage() {
                           confirmLabel="Really delete?"
                         />
                       </form>
+                      <details
+                        className="w-full"
+                        data-testid={`recipe-toggle-${modifier.id}`}
+                      >
+                        <summary className="cursor-pointer list-none text-xs font-medium text-muted-foreground transition-colors hover:text-foreground [&::-webkit-details-marker]:hidden">
+                          Recipe ·{" "}
+                          {recipeSummary(
+                            recipeRows.filter((r) => r.modifierId === modifier.id),
+                          )}
+                        </summary>
+                        <div className="pt-3 pb-1">
+                          <RecipeEditor
+                            owner={{ kind: "modifier", id: modifier.id }}
+                            sizes={recipeSizes.map((s) => ({ id: s.id, name: s.name }))}
+                            ingredients={allIngredients}
+                            lines={recipeRows.filter((r) => r.modifierId === modifier.id)}
+                            allowRemoval
+                          />
+                        </div>
+                      </details>
                     </li>
                   ))}
                 </ul>
@@ -403,6 +515,11 @@ export default async function ModifiersPage() {
                       className="tabular-nums"
                     />
                   </Field>
+                  {isToppings ? (
+                    <div className="w-full sm:w-36">
+                      <ExtraPriceField id={`add-mod-extra-${group.id}`} cents={null} />
+                    </div>
+                  ) : null}
                   <Field
                     orientation="horizontal"
                     className="h-8 w-auto shrink-0"
