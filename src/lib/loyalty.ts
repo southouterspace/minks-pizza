@@ -1,0 +1,285 @@
+/**
+ * Loyalty program rules. Pure: no database, no server-only, so the
+ * storefront, the admin and the tests share one definition of every rule.
+ */
+import { z } from "zod";
+
+export const LEDGER_KINDS = [
+  "earn",
+  "redeem",
+  "redeem_refund",
+  "signup_bonus",
+  "birthday",
+  "referral",
+  "adjust",
+  "expire",
+] as const;
+
+export type LedgerKind = (typeof LEDGER_KINDS)[number];
+
+/**
+ * Per kind: whether positive points count toward lifetime earned, and how the
+ * entry reads in a member's history.
+ */
+export const LEDGER_KIND_RULES: Record<LedgerKind, { lifetime: boolean; label: string }> = {
+  earn: { lifetime: true, label: "Points earned" },
+  redeem: { lifetime: false, label: "Reward redeemed" },
+  redeem_refund: { lifetime: false, label: "Points returned" },
+  signup_bonus: { lifetime: true, label: "Welcome bonus" },
+  birthday: { lifetime: true, label: "Birthday bonus" },
+  referral: { lifetime: true, label: "Referral bonus" },
+  adjust: { lifetime: true, label: "Adjusted by the store" },
+  expire: { lifetime: false, label: "Points expired" },
+};
+
+/** The welcome bonus waits for a first completed order of at least this net. */
+export const SIGNUP_MIN_NET_CENTS = 1500;
+
+/** Referrer bonuses paid per member in any rolling 365 days. */
+export const REFERRER_BONUS_YEARLY_CAP = 10;
+
+export type LoyaltyTier = { name: string; minPoints: number; multiplierBps: number };
+
+export const DEFAULT_TIERS: LoyaltyTier[] = [
+  { name: "Regular", minPoints: 0, multiplierBps: 10_000 },
+  { name: "Gold Crust", minPoints: 4000, multiplierBps: 12_000 },
+];
+
+export const tiersSchema = z
+  .array(
+    z.object({
+      name: z.string().trim().min(1, "Every tier needs a name").max(40),
+      minPoints: z.number().int().min(0),
+      multiplierBps: z.number().int().min(10_000, "Multipliers start at 1x").max(100_000),
+    }),
+  )
+  .min(1, "Add at least one tier")
+  .max(8)
+  .refine((t) => t[0].minPoints === 0, "The first tier must start at 0 points")
+  .refine(
+    (t) => t.every((tier, i) => i === 0 || tier.minPoints > t[i - 1].minPoints),
+    "Each tier must need more points than the one before it",
+  );
+
+/**
+ * What a reward does at checkout. A free item names a set of categories
+ * because one menu concept (pizza) is often split across several
+ * (Specialty, Build Your Own).
+ */
+export const rewardEffectSchema = z.discriminatedUnion("kind", [
+  z.object({
+    kind: z.literal("amount_off"),
+    amountOffCents: z.number().int().positive().max(100_000),
+  }),
+  z.object({
+    kind: z.literal("free_item"),
+    categoryIds: z.array(z.number().int().positive()).min(1),
+    maxValueCents: z.number().int().positive().max(100_000),
+  }),
+]);
+
+export type RewardEffect = z.infer<typeof rewardEffectSchema>;
+
+// ---------------------------------------------------------------------------
+// Phone identity
+// ---------------------------------------------------------------------------
+
+/** US phone → 10 digits, or null when it can't be one. */
+export function normalizePhone(input: string): string | null {
+  const digits = input.replace(/\D/g, "");
+  if (digits.length === 10) return digits;
+  if (digits.length === 11 && digits.startsWith("1")) return digits.slice(1);
+  return null;
+}
+
+export function formatPhone(phone: string): string {
+  if (!/^\d{10}$/.test(phone)) return phone;
+  return `(${phone.slice(0, 3)}) ${phone.slice(3, 6)}-${phone.slice(6)}`;
+}
+
+// ---------------------------------------------------------------------------
+// Earning
+// ---------------------------------------------------------------------------
+
+/**
+ * Points for an order. `netCents` is the food subtotal after any reward
+ * discount: tax, tip and delivery fee never earn. Integer math throughout so
+ * the promise at checkout and the posting at completion always agree.
+ */
+export function earnPoints({
+  netCents,
+  pointsPerDollar,
+  tierMultiplierBps,
+  promoMultiplierBps,
+}: {
+  netCents: number;
+  pointsPerDollar: number;
+  tierMultiplierBps: number;
+  promoMultiplierBps: number;
+}): number {
+  if (netCents <= 0) return 0;
+  const raw =
+    (BigInt(netCents) *
+      BigInt(pointsPerDollar) *
+      BigInt(tierMultiplierBps) *
+      BigInt(promoMultiplierBps)) /
+    BigInt(100 * 10_000 * 10_000);
+  return Number(raw);
+}
+
+export function tierFor(qualifyingPoints: number, tiers: LoyaltyTier[]): LoyaltyTier {
+  const sorted = tiers.toSorted((a, b) => a.minPoints - b.minPoints);
+  return sorted.findLast((t) => t.minPoints <= qualifyingPoints) ?? sorted[0];
+}
+
+export type TierProgress = {
+  tier: LoyaltyTier;
+  next: LoyaltyTier | null;
+  pointsToNext: number | null;
+  /** 0–1 through the current tier toward the next; 1 at the top tier. */
+  fraction: number;
+};
+
+export function tierProgress(qualifyingPoints: number, tiers: LoyaltyTier[]): TierProgress {
+  const tier = tierFor(qualifyingPoints, tiers);
+  const next =
+    tiers
+      .toSorted((a, b) => a.minPoints - b.minPoints)
+      .find((t) => t.minPoints > tier.minPoints) ?? null;
+  if (!next) return { tier, next: null, pointsToNext: null, fraction: 1 };
+  const span = next.minPoints - tier.minPoints;
+  return {
+    tier,
+    next,
+    pointsToNext: next.minPoints - qualifyingPoints,
+    fraction: Math.min(1, Math.max(0, (qualifyingPoints - tier.minPoints) / span)),
+  };
+}
+
+/** "2x", "1.25x" */
+export function formatMultiplier(bps: number): string {
+  return `${Number((bps / 10_000).toFixed(2))}x`;
+}
+
+// ---------------------------------------------------------------------------
+// Store-local calendar
+// ---------------------------------------------------------------------------
+
+export type LocalDate = { iso: string; year: number; month: number; day: number; weekday: number };
+
+const WEEKDAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+
+export function localDate(at: Date, timezone: string): LocalDate {
+  const parts = Object.fromEntries(
+    new Intl.DateTimeFormat("en-US", {
+      timeZone: timezone,
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+      weekday: "short",
+    })
+      .formatToParts(at)
+      .map((p) => [p.type, p.value]),
+  );
+  return {
+    iso: `${parts.year}-${parts.month}-${parts.day}`,
+    year: Number(parts.year),
+    month: Number(parts.month),
+    day: Number(parts.day),
+    weekday: WEEKDAYS.indexOf(parts.weekday),
+  };
+}
+
+export type PromotionRule = {
+  name: string;
+  multiplierBps: number;
+  daysOfWeek: number[];
+  startsOn: string | null;
+  endsOn: string | null;
+  isActive: boolean;
+};
+
+/** The richest promotion running on the store-local date of `at`, if any. */
+export function activePromotion<P extends PromotionRule>(
+  promos: P[],
+  at: Date,
+  timezone: string,
+): P | null {
+  const today = localDate(at, timezone);
+  let best: P | null = null;
+  for (const p of promos) {
+    if (!p.isActive) continue;
+    if (p.daysOfWeek.length > 0 && !p.daysOfWeek.includes(today.weekday)) continue;
+    if (p.startsOn && today.iso < p.startsOn) continue;
+    if (p.endsOn && today.iso > p.endsOn) continue;
+    if (!best || p.multiplierBps > best.multiplierBps) best = p;
+  }
+  return best;
+}
+
+// ---------------------------------------------------------------------------
+// Redemption
+// ---------------------------------------------------------------------------
+
+export type DiscountLine = { categoryId: number; unitPriceCents: number; quantity: number };
+
+export type DiscountResult =
+  | { ok: true; discountCents: number }
+  | { ok: false; reason: "no_matching_item" };
+
+export function rewardDiscount(effect: RewardEffect, lines: DiscountLine[]): DiscountResult {
+  const subtotal = lines.reduce((sum, l) => sum + l.unitPriceCents * l.quantity, 0);
+  switch (effect.kind) {
+    case "amount_off":
+      return { ok: true, discountCents: Math.min(effect.amountOffCents, subtotal) };
+    case "free_item": {
+      const prices = lines
+        .filter((l) => effect.categoryIds.includes(l.categoryId))
+        .map((l) => l.unitPriceCents);
+      if (prices.length === 0) return { ok: false, reason: "no_matching_item" };
+      return {
+        ok: true,
+        discountCents: Math.min(Math.max(...prices), effect.maxValueCents, subtotal),
+      };
+    }
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Lazy grants
+// ---------------------------------------------------------------------------
+
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+/**
+ * True during the member's birthday month for a member who ordered in the
+ * last year, unless the birthday was set in the last 30 days (stops setting
+ * it to this month to collect the bonus).
+ */
+export function birthdayGrantDue(
+  member: {
+    birthMonth: number | null;
+    birthdaySetAt: Date | null;
+    lastCompletedOrderAt: Date | null;
+  },
+  now: Date,
+  timezone: string,
+): boolean {
+  const { birthMonth, birthdaySetAt, lastCompletedOrderAt } = member;
+  if (birthMonth === null || birthdaySetAt === null || lastCompletedOrderAt === null) return false;
+  if (now.getTime() - birthdaySetAt.getTime() < 30 * DAY_MS) return false;
+  if (now.getTime() - lastCompletedOrderAt.getTime() > 365 * DAY_MS) return false;
+  return localDate(now, timezone).month === birthMonth;
+}
+
+/** `lastActivityAt` is the member's last completed order (or enrollment). */
+export function expiryDue(
+  member: { pointsBalance: number; lastActivityAt: Date },
+  now: Date,
+  months: number | null,
+): boolean {
+  if (months === null || member.pointsBalance <= 0) return false;
+  const cutoff = new Date(member.lastActivityAt);
+  cutoff.setUTCMonth(cutoff.getUTCMonth() + months);
+  return cutoff <= now;
+}
