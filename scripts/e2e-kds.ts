@@ -1,6 +1,6 @@
 /**
  * Kitchen display e2e against a running dev server and its database:
- * orders placed through the real checkout path → make line → oven → kitchen
+ * orders placed through the storefront checkout action → make line → oven → kitchen
  * → ready shelf → handoff, plus recall, undo, cancel alerts, live arrival
  * and bump-bar keys. Asserts both what the screen shows and what the
  * database recorded (the customer tracker reads the same status).
@@ -14,40 +14,28 @@ import { randomUUID } from "node:crypto";
 import { db, employees, menuItems, modifierGroups, modifiers, operators, orderItems, orders, storeSettings } from "../src/db";
 import { submitOrder } from "../src/lib/orders-server/submit";
 import { mutateOrder } from "../src/lib/orders-server/mutate";
-import type { Fulfillment } from "../src/lib/orders";
+import { placeOrder } from "../src/app/(store)/actions";
 import { formatStoreTime } from "../src/lib/store-time";
 
-/** Places an online order through the same seam the storefront uses. */
+/** Places an online order through the storefront's checkout action. */
 async function createOrder(o: {
   customerName: string;
   customerPhone: string;
-  fulfillment: Fulfillment;
+  delivery?: { addressLine1: string; city: string; zip: string };
   notes?: string;
   lines: { itemId: number; quantity: number; modifierIds: number[]; notes?: string }[];
 }) {
-  const result = await submitOrder(
-    {
-      orderId: randomUUID(),
-      channel: "online",
-      fulfillment: o.fulfillment,
-      customer: { name: o.customerName, phone: o.customerPhone, email: null, saveAddress: false },
-      notes: o.notes ?? null,
-      fire: { kind: "now" },
-      promisedAt: null,
-      tipCents: 0,
-      lines: o.lines.map((l) => ({
-        lineId: randomUUID(),
-        itemId: l.itemId,
-        quantity: l.quantity,
-        notes: l.notes ?? null,
-        selections: l.modifierIds.map((modifierId) => ({ modifierId, placement: "whole" as const, amount: "regular" as const })),
-      })),
-      tenders: [],
-    },
-    { kind: "online" },
-  );
-  if (!result.ok) throw new Error(`order rejected: ${JSON.stringify(result)}`);
-  return { id: result.order.id, orderNumber: result.order.number };
+  const result = await placeOrder({
+    orderType: o.delivery ? "delivery" : "pickup",
+    customerName: o.customerName,
+    customerPhone: o.customerPhone,
+    ...o.delivery,
+    orderNotes: o.notes,
+    tipCents: 0,
+    lines: o.lines,
+  });
+  if (!result.ok) throw new Error(`order rejected: ${result.error}`);
+  return { id: result.orderId, orderNumber: (await orderRow(result.orderId)).orderNumber };
 }
 
 const BASE = process.env.E2E_BASE_URL ?? "http://localhost:3000";
@@ -90,7 +78,6 @@ async function placeOrders() {
   const base = { customerPhone: "(555) 010-2222" } as const;
   const a = await createOrder({
     ...base,
-    fulfillment: { kind: "pickup" },
     customerName: "Alice Pickup",
     lines: [
       {
@@ -105,10 +92,7 @@ async function placeOrders() {
   });
   const b = await createOrder({
     ...base,
-    fulfillment: {
-      kind: "delivery",
-      address: { line1: "1 Main St", line2: null, city: "The Woodlands", zip: "77354" },
-    },
+    delivery: { addressLine1: "1 Main St", city: "The Woodlands", zip: "77354" },
     customerName: "Bob Delivery",
     notes: "Peanut allergy",
     lines: [
@@ -264,7 +248,6 @@ async function main() {
 
   // --- Live arrival + cancel alert ----------------------------------------
   const c = await createOrder({
-    fulfillment: { kind: "pickup" },
     customerName: "Carol Late",
     customerPhone: "(555) 010-3333",
     lines: [{ itemId: item("Cheese Pizza"), quantity: 1, modifierIds: [pick("Size", 'Small 10"'), pick("Crust", "Hand Tossed")] }],
