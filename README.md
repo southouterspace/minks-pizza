@@ -62,15 +62,42 @@ npm run dev
    fee/minimum, tax rate — and the **Publish** switch that takes the storefront
    live (before that, customers see a coming-soon page). A separate
    **Accepting orders** switch pauses ordering without unpublishing.
+   **Point of sale** settings: the half-topping rule, the extra-topping
+   multiplier, the discount amount above which a manager must approve, oven
+   capacity and make time (they set the quoted wait), POS auto-lock, and the
+   store **timezone** (default `America/Chicago`), which decides where report
+   days start and end and how admin times print. Each is range-checked on the
+   server.
 5. **Orders** (`/admin`) — live inbox that auto-refreshes. Each card shows
    the kitchen status (driven by the KDS: `new → preparing → ready →
    completed`), a channel badge (Online, Phone, Walk-in, Dine-in) and the
-   payment state (Unpaid, Part paid, Paid, Refunded). Scheduled orders wait in
+   payment state (Unpaid, Part paid, Paid, Refunded). An order with a balance
+   due has a **Collect at POS** link to `/pos?order=<id>`, and **Activity**
+   opens the order's log: placed, sent, voids, comps, discounts, payments and
+   refunds, with who did each and who approved it. Scheduled orders wait in
    their own lane until they fire.
 6. **Kitchen display** (`/kitchen`) — the full-screen KDS for the line. See
    [Kitchen display](#kitchen-display-kds) below.
-7. **Team** (`/admin/team`) — add or remove operator accounts, and change your
-   own password. See [Operator accounts](#operator-accounts) below.
+7. **Reports** (`/admin/reports`) — pick a day (store-local) to see its
+   shifts with who opened and closed them and cash and card over/short, plus
+   the day's sales. Each shift opens a printable **Z report** (letter or 80mm
+   receipt): sales by channel, tenders by method with tips and refunds, the
+   drawer count (expected vs counted cash, card total vs the terminal batch
+   the closer entered, cash tips declared), every void, comp, discount,
+   refund, no-sale, paid-in and paid-out with employee, approver and reason,
+   unpaid orders, and canceled orders that still hold money. The day report
+   is the same document without the drawer. Order lines and tenders export as
+   CSV for a shift or a day (`/api/admin/reports/lines|tenders?shift=<id>` or
+   `?date=YYYY-MM-DD`, operator session required). All of it comes from the
+   same `shiftReport` fold the POS shift close uses.
+8. **Team** (`/admin/team`) — POS staff and operator accounts. Add staff with
+   a name, a role (cashier, manager, owner) and a 4-digit PIN, set a new PIN,
+   or deactivate them. A PIN is stored only as a keyed digest and never shown
+   again; it must be unique among active staff, because the POS finds who
+   typed it by that digest. The last active manager or owner can't be
+   deactivated, since nobody could then approve voids or close a shift. Also
+   add or remove operator accounts and change your own password. See
+   [Operator accounts](#operator-accounts) below.
 
 #### Operator accounts
 
@@ -84,8 +111,9 @@ Every subsequent account is created from **Team** by someone already signed in.
 The creator sets an initial password and passes it on out of band; the new
 operator can replace it from the same page. Two things to know:
 
-- **There are no roles.** Every operator has full access to the menu, orders and
-  settings.
+- **There are no operator roles.** Every operator has full access to the menu,
+  orders, staff, reports and settings. Roles (cashier, manager, owner) apply to
+  POS staff only.
 - **You cannot remove your own account.** That restriction is what guarantees at
   least one operator always exists — at zero accounts `/admin/setup` would
   unlock itself and the store could be claimed by anyone.
@@ -188,7 +216,9 @@ storefront and the KDS. The screens are not built yet; the server layer is.
   discounts and comps are rows. `orders.subtotal/discount/tax/total/paid/
   refunded_cents` are folds over them, written only by the fold statement
   that ends every write; payment state (`unpaid / partial / paid / refunded`)
-  is derived, never stored.
+  is derived, never stored. Tax uses `orders.tax_rate_bps`, the store rate
+  snapshotted when the order was placed, so changing the store rate never
+  re-taxes an older order that is paid or edited later.
 - **Halves.** Each topping on a line carries `placement` (whole, left,
   right) and `amount` (regular, extra, light, none). Placement is allowed
   only in sauce, cheese and topping groups (`modifier_groups.role`). The
@@ -221,8 +251,13 @@ MINKS_DATABASE_URL=<production url> npm run db:seed         # optional: demo sta
 It maps `confirmed` orders to `new`, refuses to run if any order has a
 `payment_status` other than `pending` (no code path ever wrote one), sets
 group roles from their names (Size, Crust, `*topping*`), marks existing lines
-as fired at their order's placed time, and backfills `customers` from every
-phone number already on an order.
+as fired at their order's placed time, backfills `customers` from every
+phone number already on an order, and adds `orders.tax_rate_bps`. The tax
+backfill uses the current store rate when it reproduces an order's stored
+`tax_cents` (every order, unless the rate changed since it was placed), and
+otherwise the rate that order's own tax implies. It does not simply divide tax
+by taxable for every row: tax was rounded to the cent, so $3.07 on $37.24 at
+8.25% reads back as 8.24%.
 
 ### Customer (`/`)
 
@@ -254,12 +289,14 @@ src/
   db/            schema.ts (Drizzle), seed.ts, index.ts (client)
   lib/           menu.ts, auth.ts, validation.ts (zod at the boundaries),
                  pricing.ts (line pricing + half rule, pure),
-                 orders.ts (order domain: payment state, role policy, shift report, pure),
+                 orders.ts (order domain: payment state, role policy, report folds, pure),
                  orders-server.ts (submitOrder / mutateOrder seam, folds, reads),
+                 reports-server.ts (shift list, day report, CSV exports),
+                 store-time.ts (store-local days and times),
                  staff.ts + pin.ts (staff cookie, PIN lookup and lockout),
                  kds.ts (kitchen display rules, pure), kds-server.ts (queries + actions)
   app/(store)/   customer storefront (menu, cart, checkout, order status)
-  app/admin/     operator dashboard (orders, menu, modifiers, settings, team)
+  app/admin/     operator dashboard (orders, menu, modifiers, reports, settings, team)
   app/kitchen/   kitchen display (KDS); data via app/api/kds
   app/pos/       POS server actions; data via app/api/pos/*
   components/    cart context, storefront + admin UI
