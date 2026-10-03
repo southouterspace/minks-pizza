@@ -4,6 +4,7 @@
  */
 import { z } from "zod";
 import { formatCents } from "@/lib/money";
+import type { OrderStatus } from "@/lib/order-workflow";
 import { dayOfWeek, localDateOf } from "@/lib/zoned";
 
 export const LEDGER_KINDS = [
@@ -88,7 +89,7 @@ export const rewardEffectSchema = z.discriminatedUnion("kind", [
 export type RewardEffect = z.infer<typeof rewardEffectSchema>;
 
 /** Where an order's points stand, as a member sees it. */
-export function orderPointsStatus(status: string): "Pending" | "Posted" | "Reversed" {
+export function orderPointsStatus(status: OrderStatus): "Pending" | "Posted" | "Reversed" {
   if (status === "completed") return "Posted";
   if (status === "canceled") return "Reversed";
   return "Pending";

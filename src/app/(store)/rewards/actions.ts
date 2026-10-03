@@ -1,7 +1,7 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
-import { and, eq, isNull } from "drizzle-orm";
+import { and, eq, isNull, sql } from "drizzle-orm";
 import { z } from "zod";
 import { db, loyaltyLoginCodes, loyaltyMembers } from "@/db";
 import {
@@ -50,11 +50,12 @@ export async function signOut(): Promise<void> {
 export async function deleteMyAccount(): Promise<void> {
   const memberId = await getCurrentMemberId();
   if (memberId === null) return;
-  const [deleted] = await db
-    .delete(loyaltyMembers)
-    .where(eq(loyaltyMembers.id, memberId))
-    .returning({ phone: loyaltyMembers.phone });
-  if (deleted) await db.delete(loyaltyLoginCodes).where(eq(loyaltyLoginCodes.phone, deleted.phone));
+  await db.batch([
+    db.delete(loyaltyLoginCodes).where(
+      eq(loyaltyLoginCodes.phone, sql`(select phone from loyalty_members where id = ${memberId})`),
+    ),
+    db.delete(loyaltyMembers).where(eq(loyaltyMembers.id, memberId)),
+  ]);
   await signOutMember();
   revalidatePath("/", "layout");
 }

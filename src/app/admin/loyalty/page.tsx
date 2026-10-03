@@ -7,7 +7,7 @@ import { programStats } from "./queries";
 import { formatCents } from "@/lib/money";
 import { smsConfigured } from "@/lib/sms";
 import { toggleLoyaltyEnabled } from "./actions";
-import { ToggleSwitchForm } from "@/components/admin/toggle-switch-form";
+import { ActionSwitch } from "@/components/admin/action-switch";
 import { Card } from "@/components/ui/card";
 
 export const dynamic = "force-dynamic";
@@ -47,7 +47,7 @@ export default async function LoyaltyOverviewPage() {
               )}
             </p>
           </div>
-          <ToggleSwitchForm
+          <ActionSwitch
             action={toggleLoyaltyEnabled}
             checked={settings.enabled}
             label={settings.enabled ? "Turn off rewards program" : "Turn on rewards program"}

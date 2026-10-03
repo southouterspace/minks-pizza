@@ -278,7 +278,7 @@ async function main() {
   await rita.getByRole("button", { name: /^Place pickup order/ }).click();
   await rita.waitForURL(/\/order\//);
   const order1 = await orderRow(rita.url().split("/order/")[1]);
-  await rita.getByText("You'll earn 199 points when your order is ready.").waitFor();
+  await rita.getByText("You'll earn 199 points once your order is complete.").waitFor();
   check("order page promises the points", true);
 
   const r0 = await member(RITA.digits);

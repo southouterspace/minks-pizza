@@ -5,6 +5,7 @@ import { eq } from "drizzle-orm";
 import { Gift } from "lucide-react";
 import { db, orderItems, orders } from "@/db";
 import { formatClock } from "@/lib/zoned";
+import { orderPointsStatus } from "@/lib/loyalty";
 import { formatCents } from "@/lib/money";
 import { isActive, isCooking } from "@/lib/order-workflow";
 import { getSettings } from "@/lib/orders";
@@ -111,15 +112,15 @@ export default async function OrderPage({
         </ol>
       ) : null}
 
-      {order.loyaltyMemberId !== null && order.loyaltyPointsEarned > 0 && order.status !== "canceled" ? (
+      {order.loyaltyMemberId !== null && order.loyaltyPointsEarned > 0 && orderPointsStatus(order.status) !== "Reversed" ? (
         <p
           data-testid="order-points"
           className="mt-6 flex items-center gap-2 rounded-lg bg-muted px-4 py-3 text-sm"
         >
           <Gift className="size-4 shrink-0" aria-hidden />
-          {order.status === "completed"
+          {orderPointsStatus(order.status) === "Posted"
             ? `You earned ${order.loyaltyPointsEarned.toLocaleString()} points.`
-            : `You'll earn ${order.loyaltyPointsEarned.toLocaleString()} points when your order is ready.`}
+            : `You'll earn ${order.loyaltyPointsEarned.toLocaleString()} points once your order is complete.`}
           <Link href="/rewards" className="ml-auto font-medium underline underline-offset-4">
             Rewards
           </Link>

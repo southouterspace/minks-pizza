@@ -12,7 +12,7 @@ import { Switch } from "@/components/ui/switch";
  * the DOM without React seeing a change. `label` becomes the switch's
  * accessible name and flips with the state.
  */
-export function ToggleSwitchForm({
+export function ActionSwitch({
   action,
   checked,
   label,

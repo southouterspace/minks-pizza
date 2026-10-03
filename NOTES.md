@@ -518,7 +518,7 @@ clock.
 
 - React 19 resets a `<form>` after its action finishes. A Base UI `Switch`
   inside one snaps its hidden checkbox back to the first-render value, so the
-  next click changes nothing React can see. `ToggleSwitchForm` now calls its
+  next click changes nothing React can see. `ToggleSwitchForm` (now `ActionSwitch`) calls its
   action in a transition instead of submitting a form.
 - Next's route announcer has `role="alert"`; target form errors by
   `data-testid`, not `getByRole("alert")`.
