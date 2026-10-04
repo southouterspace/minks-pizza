@@ -11,7 +11,7 @@ import { after, before, describe, it } from "node:test";
 import assert from "node:assert/strict";
 import type { Browser, BrowserContext, Page } from "playwright";
 import { and, eq, ilike, like } from "drizzle-orm";
-import { categories, db, loyaltyLedger, loyaltyMembers, loyaltyRewards, loyaltySettings, operators } from "../../src/db";
+import { categories, db, loyaltyLedger, loyaltyMembers, loyaltyRewards, loyaltySettings, operators, orders } from "../../src/db";
 import { DEFAULT_TIERS, INSUFFICIENT_POINTS, MONTHS, localYearMonth } from "../../src/lib/loyalty";
 import { auditBalances, getMember, refreshMember } from "../../src/lib/loyalty-server";
 import { createOrder } from "../../src/lib/checkout";
@@ -49,7 +49,7 @@ const PROGRAM = {
 };
 const DAY_MS = 24 * 60 * 60 * 1000;
 
-describe("loyalty", { timeout: 120_000 }, () => {
+describe("loyalty", { timeout: 240_000 }, () => {
   let browser: Browser;
   let op: Page;
   let fixture: Awaited<ReturnType<typeof menuFixture>>;
@@ -153,7 +153,10 @@ describe("loyalty", { timeout: 120_000 }, () => {
     await page.getByRole("button", { name: "No tip" }).click();
     await page.getByRole("button", { name: /^Place pickup order/ }).click();
     await page.waitForURL(/\/order\//);
-    await page.getByText("You'll earn 199 points once your order is complete.").waitFor();
+    // Joined at checkout but not signed in: the order page asks them to confirm the number.
+    const join = page.getByTestId("order-rewards-join");
+    await join.getByText("You're earning 199 points on this order").waitFor();
+    await join.getByRole("button", { name: "Confirm my number" }).waitFor();
 
     const placed = await orderRow(page.url().split("/order/")[1]);
     const member = await memberByPhone(phone.digits);
@@ -175,7 +178,82 @@ describe("loyalty", { timeout: 120_000 }, () => {
     assert.equal(ledgerSummary(await ledgerOf(member.id)), "earn:199,signup_bonus:200", "re-completing doesn't double-earn");
 
     await page.reload();
-    await page.getByText("You earned 199 points.").waitFor();
+    await join.getByText("You earned 199 points").waitFor();
+  });
+
+  it("a guest who skipped joining saves the order's points from the order page while it cooks", async () => {
+    const phone = uniquePhone();
+    const page = await customer();
+    await page.goto(`${BASE}/`);
+    await page.getByTestId("rewards-strip").getByText("200 bonus points on your first order.").waitFor();
+    await fillCart(page, fixture.cartLine);
+    await page.goto(`${BASE}/cart`);
+    await page.getByTestId("cart-join-hint").waitFor();
+
+    await page.goto(`${BASE}/checkout`);
+    const panel = page.getByTestId("loyalty-panel");
+    await panel.getByText("200 bonus points after your first order of $15.00 or more.").waitFor();
+    await panel.getByRole("checkbox").click();
+    await page.getByLabel("Name", { exact: true }).fill("Skip Joiner");
+    await page.getByLabel("Phone", { exact: true }).fill(phone.display);
+    await page.getByRole("button", { name: "No tip" }).click();
+    await page.getByRole("button", { name: /^Place pickup order/ }).click();
+    await page.waitForURL(/\/order\//);
+    const placed = await orderRow(page.url().split("/order/")[1]);
+    assert.equal(placed.loyaltyMemberId, null);
+    assert.equal(await memberByPhone(phone.digits), undefined);
+
+    const join = page.getByTestId("order-rewards-join");
+    await join.getByText("Keep the 199 points from this order").waitFor();
+    await join.getByText(`ending in ${phone.digits.slice(-4)}`).first().waitFor();
+    assert.equal(await page.getByText(phone.digits.slice(0, 6)).count(), 0, "the full number isn't on the page");
+    await join.getByRole("button", { name: "Save my points" }).click();
+    const code = (await join.getByTestId("dev-code").locator("span").textContent())!;
+    await join.getByLabel(/^Code texted/).fill(code);
+    await join.getByRole("button", { name: "Confirm" }).click();
+    await page.getByTestId("order-points").getByText("You'll earn 199 points once your order is complete.").waitFor();
+    assert.equal(await page.getByTestId("order-rewards-join").count(), 0);
+    await page.getByTestId("header-points").waitFor();
+
+    const member = await memberByPhone(phone.digits);
+    assert.equal(member?.name, "Skip Joiner");
+    assert.ok(member.verifiedAt, "joining from the order page verifies the phone");
+    assert.equal((await orderRow(placed.id)).loyaltyMemberId, member.id, "the order still cooking is linked");
+    assert.deepEqual(await ledgerOf(member.id), []);
+    await completeOnBoard(op, { id: placed.id, number: placed.orderNumber });
+    assert.equal(ledgerSummary(await ledgerOf(member.id)), "earn:199,signup_bonus:200");
+
+    await page.goto(`${BASE}/`);
+    assert.equal(await page.getByTestId("rewards-strip").count(), 0, "members don't see the pitch");
+  });
+
+  it("an existing member who checked out as a guest adds the order on the order page", async () => {
+    const m = await seedMember(0, "Rita Returning");
+    const placed = await createOrder(order(m.display, "Rita Returning"));
+    const page = await customer();
+    await page.goto(`${BASE}/order/${placed.id}`);
+    const join = page.getByTestId("order-rewards-join");
+    await join.getByText("Add 199 points to your Mink's Rewards account").waitFor();
+    await join.getByRole("button", { name: "Add my points" }).click();
+    const code = (await join.getByTestId("dev-code").locator("span").textContent())!;
+    await join.getByLabel(/^Code texted/).fill(code);
+    await join.getByRole("button", { name: "Confirm" }).click();
+    await page.getByTestId("order-points").waitFor();
+    assert.equal((await orderRow(placed.id)).loyaltyMemberId, m.id);
+    await cancelOrder(placed.id);
+  });
+
+  it("signing in mid-order leaves a phone-in order to price at completion", async () => {
+    const phone = uniquePhone();
+    const phoneIn = await createOrder(order(phone.display, "Pia Phonein"));
+    await db.update(orders).set({ loyaltyPointsEarned: 0 }).where(eq(orders.id, phoneIn.id));
+    const page = await customer();
+    await signInCustomer(page, phone.display, "Pia Phonein");
+    const m = await memberByPhone(phone.digits);
+    assert.equal((await orderRow(phoneIn.id)).loyaltyMemberId, null, "an order with no promise stays unlinked");
+    await moveOrder(phoneIn.id, "ready", "completed");
+    await signInCustomer(await customer(), phone.display, "Pia Phonein");
+    assert.equal(ledgerSummary(await ledgerOf(m.id)), "earn:199,signup_bonus:200");
   });
 
   it("a refused guest order enrolls nobody", async () => {
