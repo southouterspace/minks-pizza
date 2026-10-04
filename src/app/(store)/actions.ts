@@ -27,6 +27,8 @@ export type QuoteView = {
   taxCents: number;
   deliveryFeeCents: number;
   totalBeforeTipCents: number;
+  /** Alcohol in the cart makes the order pickup only. */
+  hasAlcohol: boolean;
   /** Null when the program is off. */
   loyalty: {
     pointsEarned: number;
@@ -55,6 +57,7 @@ export async function previewCheckout(input: unknown): Promise<PreviewResult> {
         taxCents: 0,
         deliveryFeeCents: 0,
         totalBeforeTipCents: 0,
+        hasAlcohol: false,
         loyalty: null,
       },
     };
@@ -101,6 +104,7 @@ export async function previewCheckout(input: unknown): Promise<PreviewResult> {
         taxCents: q.taxCents,
         deliveryFeeCents: q.deliveryFeeCents,
         totalBeforeTipCents: q.totalBeforeTipCents,
+        hasAlcohol: q.lines.some((l) => l.isAlcoholic),
         loyalty: q.loyalty && {
           pointsEarned: q.loyalty.pointsEarned,
           promoName: q.loyalty.promoName,

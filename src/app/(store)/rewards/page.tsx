@@ -52,7 +52,7 @@ function HowItWorks({ loyalty, className }: { loyalty: LoyaltySettings; classNam
       <h2 className="text-sm font-semibold">How it works</h2>
       <ul className="mt-3 list-disc space-y-1.5 pl-5 text-sm text-muted-foreground">
         <li>Earn {loyalty.pointsPerDollar} points for every $1 you spend.</li>
-        <li>Online orders here earn on food and drinks; tax, tip and the delivery fee don&apos;t.</li>
+        <li>Online orders here earn on food and drinks; alcohol, tax, tip and the delivery fee don&apos;t.</li>
         <li>
           {loyalty.expirationMonths === null
             ? "Points never expire."
@@ -120,8 +120,8 @@ function PitchView({
       <div>
         <h1 className="text-3xl font-bold tracking-tight">{loyalty.programName}</h1>
         <p className="mt-3 text-lg text-muted-foreground">
-          Earn {loyalty.pointsPerDollar} points for every $1 you spend on food and drinks, then trade them for
-          free food.
+          Earn {loyalty.pointsPerDollar} points for every $1 you spend on food and drinks (alcohol excluded), then
+          trade them for free food.
         </p>
         {referralCode ? (
           <p data-testid="referral-banner" className="mt-5 flex items-start gap-2 rounded-lg border border-border px-4 py-3 text-sm">

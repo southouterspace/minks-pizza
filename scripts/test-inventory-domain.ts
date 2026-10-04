@@ -47,6 +47,7 @@ const pie: MenuItem = {
   description: null,
   basePriceCents: 1000,
   isAvailable: true,
+  isAlcoholic: false,
   station: "pizza",
   groups: [
     {

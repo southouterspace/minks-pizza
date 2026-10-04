@@ -13,7 +13,7 @@ import {
 import { recipeLineFromRow } from "@/lib/recipes";
 import { DEFAULT_PORTIONS } from "@/lib/recipes";
 import { loadSizePrices } from "@/lib/menu-server";
-import { plateDefaults, withItemDefaults } from "@/lib/pricing";
+import { itemOptions, plateDefaults } from "@/lib/pricing";
 import type {
   PlateContext,
   RecipeIngredient,
@@ -44,6 +44,8 @@ export function sizeModifiers() {
       name: modifiers.name,
       groupId: modifiers.groupId,
       priceDeltaCents: modifiers.priceDeltaCents,
+      isDefault: modifiers.isDefault,
+      isAvailable: modifiers.isAvailable,
     })
     .from(modifiers)
     .innerJoin(modifierGroups, eq(modifierGroups.id, modifiers.groupId))
@@ -70,7 +72,13 @@ export async function itemRecipe(item: { id: number; basePriceCents: number }): 
 }> {
   const [attached, allSizes, lines, [settings]] = await Promise.all([
     db
-      .select({ groupId: modifierGroups.id, role: modifierGroups.role, defaultModifierIds: itemModifierGroups.defaultModifierIds })
+      .select({
+        groupId: modifierGroups.id,
+        role: modifierGroups.role,
+        defaultModifierIds: itemModifierGroups.defaultModifierIds,
+        hiddenModifierIds: itemModifierGroups.hiddenModifierIds,
+        soldOutModifierIds: itemModifierGroups.soldOutModifierIds,
+      })
       .from(itemModifierGroups)
       .innerJoin(modifierGroups, eq(modifierGroups.id, itemModifierGroups.groupId))
       .where(eq(itemModifierGroups.itemId, item.id))
@@ -79,8 +87,8 @@ export async function itemRecipe(item: { id: number; basePriceCents: number }): 
     db.select().from(recipeLines).where(eq(recipeLines.menuItemId, item.id)),
     db.select().from(storeSettings).where(eq(storeSettings.id, 1)),
   ]);
-  const sizeGroupId = attached.find((g) => g.role === "size")?.groupId;
-  const sizes = allSizes.filter((s) => s.groupId === sizeGroupId);
+  const sizeLink = attached.find((g) => g.role === "size");
+  const sizes = sizeLink ? itemOptions(allSizes.filter((s) => s.groupId === sizeLink.groupId), sizeLink) : [];
   const optionGroups = attached.filter((g) => g.role !== "size");
 
   const optionMods = optionGroups.length
@@ -91,6 +99,7 @@ export async function itemRecipe(item: { id: number; basePriceCents: number }): 
           priceDeltaCents: modifiers.priceDeltaCents,
           extraPriceDeltaCents: modifiers.extraPriceDeltaCents,
           isDefault: modifiers.isDefault,
+          isAvailable: modifiers.isAvailable,
         })
         .from(modifiers)
         .where(inArray(modifiers.groupId, optionGroups.map((g) => g.groupId)))
@@ -98,9 +107,9 @@ export async function itemRecipe(item: { id: number; basePriceCents: number }): 
   const sizePrices = await loadSizePrices(optionMods.map((m) => m.id));
   const plateGroups = optionGroups.map((g) => ({
     role: g.role,
-    modifiers: withItemDefaults(
+    modifiers: itemOptions(
       optionMods.filter((m) => m.groupId === g.groupId).map((m) => ({ ...m, sizePrices: sizePrices.get(m.id) ?? [] })),
-      g.defaultModifierIds,
+      g,
     ),
   }));
   const defaults = plateDefaults(plateGroups, null);

@@ -44,7 +44,7 @@ export type ExternalOrder = {
  */
 export function externalOrderRows(
   order: ExternalOrder,
-  stationByItemId: ReadonlyMap<number, KitchenStation>,
+  menuItemsById: ReadonlyMap<number, { station: KitchenStation; isAlcoholic: boolean }>,
 ): {
   order: typeof orders.$inferInsert;
   items: Omit<typeof orderItems.$inferInsert, "orderId">[];
@@ -73,12 +73,11 @@ export function externalOrderRows(
       paidCents: order.totalCents,
     },
     items: order.lines.map((line) => {
-      const station =
-        line.merchantItemId === null ? undefined : stationByItemId.get(line.merchantItemId);
+      const known = line.merchantItemId === null ? undefined : menuItemsById.get(line.merchantItemId);
       return {
         // An id the map doesn't know is a deleted or foreign item; linking it
         // would violate the menu item foreign key.
-        menuItemId: station === undefined ? null : line.merchantItemId,
+        menuItemId: known === undefined ? null : line.merchantItemId,
         itemName: line.name,
         quantity: line.quantity,
         unitPriceCents: line.unitPriceCents,
@@ -87,7 +86,8 @@ export function externalOrderRows(
           (m): LineModifier => ({ kind: "option", modifierId: null, role: "option", ...m }),
         ),
         notes: line.notes,
-        station: station ?? "kitchen",
+        station: known?.station ?? "kitchen",
+        isAlcoholic: known?.isAlcoholic ?? false,
       };
     }),
     tender: {

@@ -8,7 +8,7 @@
  */
 import { cyclePlacement, defaultSelections, tapTopping } from "../src/lib/pos-client/builder";
 import { draftLine, draftProblem, draftReducer, draftTotals, emptyDraft, firePlan, lineSummary, toSubmitRequest, type Draft, type NewOrderDraft } from "../src/lib/pos-client/draft";
-import { priceLine, reorderLines, withItemDefaults, type MenuItem, type PricingPolicy } from "../src/lib/pricing";
+import { itemOptions, priceLine, reorderLines, type MenuItem, type PricingPolicy } from "../src/lib/pricing";
 import { withCounts } from "../src/lib/reports";
 import { parseCents } from "../src/lib/money";
 import { chargeRows } from "../src/components/pos/totals";
@@ -31,6 +31,7 @@ const cheese: MenuItem = {
   description: null,
   basePriceCents: 1099,
   isAvailable: true,
+  isAlcoholic: false,
   station: "pizza",
   groups: [
     { id: 3, name: "Extra Toppings", role: "topping", minSelect: 0, maxSelect: null, modifiers: [mod(30, "Pepperoni", 175), mod(31, "Mushrooms", 150), mod(32, "Basil", 125, true)] },
@@ -38,7 +39,7 @@ const cheese: MenuItem = {
     { id: 2, name: "Crust", role: "crust", minSelect: 1, maxSelect: 1, modifiers: [mod(20, "Hand Tossed", 0, true)] },
   ],
 };
-const soda: MenuItem = { id: 2, name: "Soda", description: null, basePriceCents: 399, isAvailable: true, station: "counter", groups: [] };
+const soda: MenuItem = { id: 2, name: "Soda", description: null, basePriceCents: 399, isAvailable: true, isAlcoholic: false, station: "counter", groups: [] };
 const policy: PricingPolicy = { halfToppingRule: "average", halfToppingPriceBps: 5000, extraToppingBps: 20_000 };
 const [pep, , basil] = cheese.groups[0].modifiers;
 
@@ -66,12 +67,12 @@ run(async () => {
   );
   check(
     "an item's own defaults replace the group's",
-    withItemDefaults([mod(1, "Red", 0, true), mod(2, "BBQ", 0)], [2]).map((m) => [m.id, m.isDefault]),
+    itemOptions([mod(1, "Red", 0, true), mod(2, "BBQ", 0)], { defaultModifierIds: [2], hiddenModifierIds: [], soldOutModifierIds: [] }).map((m) => [m.id, m.isDefault]),
     [[1, false], [2, true]],
   );
   check(
     "with no defaults of its own, an item keeps the group's",
-    withItemDefaults([mod(1, "Red", 0, true), mod(2, "BBQ", 0)], []).map((m) => m.isDefault),
+    itemOptions([mod(1, "Red", 0, true), mod(2, "BBQ", 0)], { defaultModifierIds: [], hiddenModifierIds: [], soldOutModifierIds: [] }).map((m) => m.isDefault),
     [true, false],
   );
 

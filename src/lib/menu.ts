@@ -7,7 +7,7 @@ import {
   modifierGroups,
   modifiers,
 } from "@/db";
-import { withItemDefaults, type MenuGroup, type MenuModifier, type PricingPolicy } from "@/lib/pricing";
+import { itemOptions, type MenuGroup, type MenuModifier, type PricingPolicy } from "@/lib/pricing";
 import { loadSizePrices } from "@/lib/menu-server";
 import { getSettings, policyOf } from "@/lib/settings-server";
 
@@ -23,6 +23,7 @@ export type MenuItemView = {
   basePriceCents: number;
   imageUrl: string | null;
   isFeatured: boolean;
+  isAlcoholic: boolean;
   modifierGroups: ModifierGroupView[];
 };
 
@@ -129,11 +130,12 @@ export async function getPublicMenu(): Promise<CategoryView[]> {
           basePriceCents: i.basePriceCents,
           imageUrl: i.imageUrl,
           isFeatured: i.isFeatured,
+          isAlcoholic: i.isAlcoholic,
           modifierGroups: links
             .filter((l) => l.itemId === i.id)
             .flatMap((l) => {
               const g = groupView.get(l.groupId);
-              return g ? [{ ...g, modifiers: withItemDefaults(g.modifiers, l.defaultModifierIds) }] : [];
+              return g ? [{ ...g, modifiers: itemOptions(g.modifiers, l).filter((m) => m.isAvailable) }] : [];
             }),
         })),
     }))

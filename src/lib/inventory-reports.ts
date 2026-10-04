@@ -26,7 +26,7 @@ import {
   type RecipeContext,
 } from "@/lib/recipes";
 import { loadSizePrices } from "@/lib/menu-server";
-import { isPlaceable, plateDefaults, withItemDefaults, type GroupRole, type LineModifier } from "@/lib/pricing";
+import { isPlaceable, itemOptions, plateDefaults, type GroupRole, type LineModifier } from "@/lib/pricing";
 import { DEFAULT_PORTIONS } from "@/lib/recipes";
 import type { BaseUnit } from "@/lib/units";
 
@@ -417,6 +417,8 @@ export async function marginReport(): Promise<MarginReport> {
         groupId: itemModifierGroups.groupId,
         role: modifierGroups.role,
         defaultModifierIds: itemModifierGroups.defaultModifierIds,
+        hiddenModifierIds: itemModifierGroups.hiddenModifierIds,
+        soldOutModifierIds: itemModifierGroups.soldOutModifierIds,
       })
       .from(itemModifierGroups)
       .innerJoin(modifierGroups, eq(modifierGroups.id, itemModifierGroups.groupId))
@@ -447,14 +449,14 @@ export async function marginReport(): Promise<MarginReport> {
 
   const rows = items.flatMap((item) => {
     const groups = links.filter((l) => l.itemId === item.id);
-    const sizes = groups.filter((g) => g.role === "size").flatMap((g) => mods.filter((m) => m.groupId === g.groupId));
+    const sizes = groups.filter((g) => g.role === "size").flatMap((g) => itemOptions(mods.filter((m) => m.groupId === g.groupId), g));
     const plateGroups = groups
       .filter((g) => g.role !== "size")
       .map((g) => ({
         role: g.role,
-        modifiers: withItemDefaults(
+        modifiers: itemOptions(
           mods.filter((m) => m.groupId === g.groupId).map((m) => ({ ...m, sizePrices: sizePrices.get(m.id) ?? [] })),
-          g.defaultModifierIds,
+          g,
         ),
       }));
     const hasRecipe = book.has(ownerKey({ kind: "item", id: item.id }));

@@ -414,7 +414,8 @@ Research behind the defaults is in `docs/loyalty-research.md`, and the
 customer complaints it answers are in `docs/loyalty-complaints.md`.
 
 - **Earning.** 10 points per $1 of food and drink after any reward discount.
-  Tax, tip and the delivery fee don't earn. Points post when the order is
+  Alcohol, tax, tip and the delivery fee don't earn; a discount comes off the
+  part that earns (`earnableNetCents`). Points post when the order is
   completed and are shown as Pending until then. Guests join by phone with a
   checkbox at checkout, with no sign-in needed to earn.
 - **Spending.** Signed-in members pick a reward at checkout ($3 off at 300,
@@ -514,6 +515,18 @@ deploy the code. `npm run db:migrate -- <file>` runs one SQL file over Neon's
 HTTP driver (`scripts/run-migration.ts`), so it works where `psql` cannot
 reach the database; each file is one idempotent `DO` block and running it
 twice is a no-op.
+
+### Drinks and alcohol (2026-10-04)
+
+```bash
+MINKS_DATABASE_URL=<production url> npm run db:migrate -- migrations/2026-10-04-drinks.sql
+```
+
+Additive, and every new column defaults to what the code did before, so
+existing items and orders behave as they did: `item_modifier_groups` gains
+`hidden_modifier_ids` and `sold_out_modifier_ids` (empty: the item offers
+every option of the shared group), and `menu_items` and `order_items` gain
+`is_alcoholic` (false). A plain `npm run db:push` adds the same columns.
 
 ### This release: front-of-house POS and topping inventory
 
@@ -620,6 +633,7 @@ npm run e2e:loyalty
 npx tsx --env-file=.env.local scripts/e2e-operator.ts     # also e2e-customer, e2e-team, e2e-logo
 NODE_PATH=scripts/shims npx tsx --env-file=.env.local scripts/e2e-toppings.ts        # half-and-half toppings: dialog, cart, checkout, KDS
 NODE_PATH=scripts/shims npx tsx --env-file=.env.local scripts/e2e-size-prices.ts     # per-size modifier prices: admin, dialog, checkout
+NODE_PATH=scripts/shims npx tsx --env-file=.env.local scripts/e2e-alcohol.ts         # 21+ items: badge, pickup only, no points
 NODE_PATH=scripts/shims npx tsx --env-file=.env.local scripts/e2e-recipes.ts         # ingredients, recipes, 86, settings
 NODE_PATH=scripts/shims npx tsx --env-file=.env.local scripts/e2e-inventory-ops.ts   # receive, count, waste
 NODE_PATH=scripts/shims npx tsx --env-file=.env.local scripts/e2e-reports.ts         # food cost, variance, topping mix, margins

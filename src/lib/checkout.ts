@@ -12,6 +12,7 @@ import {
   activePromotion,
   applyReward,
   earnPoints,
+  earnableNetCents,
   normalizePhone,
   tierFor,
   type Redemption,
@@ -71,7 +72,8 @@ export type CheckoutQuote = Evaluation & {
 
 /**
  * Promotions apply first; a loyalty reward then comes off what is left of the
- * items. Tax is on the items after both, and points are earned on that too.
+ * items. Tax is on the items after both, and points are earned on that too,
+ * less any alcohol.
  * `member` earns, and spends when `rewardId` is set.
  */
 export async function quoteCheckout(
@@ -119,6 +121,7 @@ export async function quoteCheckout(
     itemsLeft,
   );
   const rewardCents = redemption.status === "applied" ? redemption.discountCents : 0;
+  const alcoholCents = priced.filter((l) => l.isAlcoholic).reduce((sum, l) => sum + l.unitPriceCents * l.quantity, 0);
   const totals = discountedTotals({
     subtotalCents,
     deliveryFeeCents,
@@ -144,7 +147,7 @@ export async function quoteCheckout(
           redemption,
           promoName: pointPromo?.name ?? null,
           pointsEarned: earnPoints({
-            netCents: itemsLeft - rewardCents,
+            netCents: earnableNetCents({ subtotalCents, alcoholCents, discountCents: subtotalCents - itemsLeft + rewardCents }),
             pointsPerDollar: program.pointsPerDollar,
             tierMultiplierBps: tierFor(qualifying, program.tiers).multiplierBps,
             promoMultiplierBps: pointPromo?.multiplierBps ?? 10_000,

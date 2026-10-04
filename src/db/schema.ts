@@ -241,6 +241,8 @@ export const menuItems = pgTable("menu_items", {
   imageUrl: text("image_url"),
   isAvailable: boolean("is_available").notNull().default(true), // false = 86'd
   isFeatured: boolean("is_featured").notNull().default(false),
+  /** 21+: pickup only, and earns no loyalty points. */
+  isAlcoholic: boolean("is_alcoholic").notNull().default(false),
   sortOrder: integer("sort_order").notNull().default(0),
   createdAt: timestamp("created_at", { withTimezone: true })
     .notNull()
@@ -307,6 +309,10 @@ export const itemModifierGroups = pgTable("item_modifier_groups", {
   sortOrder: integer("sort_order").notNull().default(0),
   /** What this item comes with from the group (a pie's toppings and sauce); empty keeps the group's defaults. */
   defaultModifierIds: integer("default_modifier_ids").array().notNull().default([]),
+  /** Options of the group this item doesn't offer (Gatorade has no 2 Liter). */
+  hiddenModifierIds: integer("hidden_modifier_ids").array().notNull().default([]),
+  /** Options sold out on this item only; `modifiers.is_available` 86's an option everywhere. */
+  soldOutModifierIds: integer("sold_out_modifier_ids").array().notNull().default([]),
 });
 
 // ---------------------------------------------------------------------------
@@ -482,6 +488,8 @@ export const orderItems = pgTable(
      * re-routing a category never reshuffles tickets already on the line.
      */
     station: kitchenStationEnum("station").notNull().default("kitchen"),
+    /** Snapshot of the item's 21+ flag, so loyalty can leave the line out of points. */
+    isAlcoholic: boolean("is_alcoholic").notNull().default(false),
     /** Null = held back from the kitchen. */
     firedAt: timestamp("fired_at", { withTimezone: true }),
     /** Pizza line: set when the pie goes into the oven (make line → oven). */

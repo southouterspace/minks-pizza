@@ -385,6 +385,9 @@ export type ActionFailure = Failure | Locked | { ok: false; reason: "signed_out"
 
 export const rejected = (message: string): Rejected => ({ ok: false, reason: "rejected", message });
 
+/** The store never delivers alcohol, so an online order with any is picked up. */
+export const ALCOHOL_PICKUP_ONLY = "Alcohol is pickup only. Remove it or switch to pickup.";
+
 export type MutationResult = { ok: true; order: OrderView } | Failure;
 
 export type ShiftResult = { ok: true; shiftId: string } | Failure;

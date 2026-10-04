@@ -24,6 +24,7 @@ export function insertLines(orderId: string, lines: PricedLine[], fire: boolean)
           modifiers: l.modifiers,
           notes: l.notes,
           station: l.station,
+          isAlcoholic: l.isAlcoholic,
           firedAt: fire ? sql`now()` : null,
         })),
       )

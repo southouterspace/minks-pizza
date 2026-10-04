@@ -2,7 +2,7 @@ import { sql, type SQL } from "drizzle-orm";
 import { db, orderDiscounts } from "@/db";
 import { isForeignKeyViolation } from "@/db/errors";
 import { CUSTOMER, type Actor } from "@/lib/order-writes";
-import { rejected, type MutationResult, type SubmitOrderRequest } from "@/lib/orders";
+import { ALCOHOL_PICKUP_ONLY, rejected, type MutationResult, type SubmitOrderRequest } from "@/lib/orders";
 import { priceLines } from "@/lib/menu-server";
 import type { RedemptionCheck } from "@/lib/promotion-usage";
 import { getSettings, policyOf, type Settings } from "@/lib/settings-server";
@@ -83,6 +83,9 @@ export async function submitOrder(req: SubmitOrderRequest, by: Submitter): Promi
   const subtotal = priced.reduce((sum, l) => sum + l.unitPriceCents * l.quantity, 0);
   if (by.kind === "online" && req.fulfillment.kind === "delivery" && subtotal < settings.deliveryMinimumCents) {
     return rejected(`Delivery orders have a minimum subtotal of $${(settings.deliveryMinimumCents / 100).toFixed(2)}.`);
+  }
+  if (by.kind === "online" && req.fulfillment.kind === "delivery" && priced.some((l) => l.isAlcoholic)) {
+    return rejected(ALCOHOL_PICKUP_ONLY);
   }
 
   if (req.tenders.length > 0) {
