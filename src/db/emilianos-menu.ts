@@ -428,11 +428,11 @@ const PIZZAS: Item[] = [
     sized: (size) => pieRecipe("standard", size),
   },
   {
-    name: "Texan Rattlesnake",
+    name: "Texas Rattlesnake",
     cents: 1799,
     groups: PIE_GROUPS,
     defaults: ["Red Sauce"],
-    // Toast has no description for the Texan Rattlesnake: a cheese pie until its toppings are known.
+    // Toast has no description for the Texas Rattlesnake: a cheese pie until its toppings are known.
     sized: (size) => pieRecipe("standard", size),
   },
   {
