@@ -8,6 +8,8 @@
  * applied to every pie), one shared Crust group in place of Toast's separate
  * 12in gluten-free item, and one shared placeable Toppings group in place of
  * Toast's nested Whole / Left / Right groups. Recipes are written per size.
+ * Toast's "20 oz bottles" and "2L" categories become one Drinks category,
+ * each soda one item with a Bottle Size group (2 Liter +$1).
  *
  * Toast has no portions or costs: recipe quantities and ingredient costs
  * below are estimates for the operator to correct in Inventory.
@@ -233,6 +235,17 @@ const GROUPS = {
       sized: (size) => [[ingredient, at(size, oz)]],
     })),
   },
+  bottleSize: {
+    name: "Bottle Size",
+    role: "size",
+    min: 1,
+    max: 1,
+    // Toast's 20 oz bottles are $2.99 and its 2-liters $3.99 across the board.
+    options: [
+      { name: "20 oz", isDefault: true },
+      { name: "2 Liter", cents: 100 },
+    ],
+  },
   cookTime: { name: "Cook Time", role: "option", min: 0, max: 1, options: opts(["Light", "Well Done"]) },
   dressing: {
     name: "Dressing",
@@ -294,6 +307,8 @@ type Item = {
   recipe?: Use[];
   /** Usage per size, one set of lines per option of the item's Size group. */
   sized?: (size: Size) => Use[];
+  /** Usage per option of the item's size group, by option name, for sizes that aren't pies. */
+  bySize?: Record<string, Use[]>;
 };
 type Category = { name: string; station: KitchenStation; items: Item[] };
 
@@ -421,6 +436,15 @@ const PIZZAS: Item[] = [
   },
 ];
 
+/** A soda Toast sells as separate 20 oz and 2L items, as one item with a Bottle Size. */
+const bottled = (name: string, bottle: string, twoLiter: string, description: string): Item => ({
+  name,
+  description,
+  cents: 299,
+  groups: ["bottleSize"],
+  bySize: { "20 oz": [[bottle, 1]], "2 Liter": [[twoLiter, 1]] },
+});
+
 const CATEGORIES: Category[] = [
   {
     name: "Appetizers",
@@ -509,22 +533,14 @@ const CATEGORIES: Category[] = [
     ],
   },
   {
-    name: "20 oz bottles",
+    name: "Drinks",
     station: "counter",
     items: [
-      { name: "Pepsi 20oz", cents: 299, recipe: [["Pepsi 20oz", 1]] },
-      { name: "Pepsi Zero Sugar 20oz", description: "Enjoy the great taste of Coca-Cola with zero sugar, zero calories", cents: 299, recipe: [["Pepsi Zero Sugar 20oz", 1]] },
-      { name: "Starry 20oz", description: "Classic, cool, crisp lemon-lime flavored taste that's caffeine free", cents: 299, recipe: [["Starry 20oz", 1]] },
+      bottled("Pepsi", "Pepsi 20oz", "Pepsi 2L", "Coca-Cola Original Taste — the crisp, refreshing taste you know and love"),
+      bottled("Pepsi Zero Sugar", "Pepsi Zero Sugar 20oz", "Pepsi Zero 2L", "Enjoy the great taste of Coca-Cola with zero sugar, zero calories"),
+      bottled("Starry", "Starry 20oz", "Starry 2L", "Classic, cool, crisp lemon-lime flavored taste that's caffeine free"),
+      // Toast has no 2-liter Gatorade, so it stays a single-size item.
       { name: "Gatorade 20oz", cents: 299, recipe: [["Gatorade 20oz", 1]] },
-    ],
-  },
-  {
-    name: "2L",
-    station: "counter",
-    items: [
-      { name: "Pepsi 2L", description: "Coca-Cola Original Taste — the crisp, refreshing taste you know and love", cents: 399, soldOut: true, recipe: [["Pepsi 2L", 1]] },
-      { name: "Pepsi Zero 2L", cents: 399, recipe: [["Pepsi Zero 2L", 1]] },
-      { name: "Starry 2L", description: "Classic, cool, crisp lemon-lime flavored taste that's caffeine free", cents: 399, recipe: [["Starry 2L", 1]] },
     ],
   },
   {
@@ -738,11 +754,19 @@ export async function importEmilianosMenu(db: Db): Promise<ImportSummary> {
   flat.forEach(({ item }, i) => {
     const owner = { menuItemId: itemRows[i].id, modifierId: null };
     addLines(owner, item.recipe);
-    const sized = item.sized;
-    if (!sized) return;
+    const { sized, bySize } = item;
+    if (!sized && !bySize) return;
     const sizeKey = item.groups?.find((key) => GROUPS[key].role === "size");
     if (!sizeKey) throw new Error(`"${item.name}" has a sized recipe but no Size group`);
-    for (const s of sizeOptions.filter((o) => o.key === sizeKey)) addLines(owner, sized(s.size), s.id);
+    if (sized) for (const s of sizeOptions.filter((o) => o.key === sizeKey)) addLines(owner, sized(s.size), s.id);
+    if (bySize) {
+      options.forEach(({ key, option }, j) => {
+        if (key !== sizeKey) return;
+        const uses = bySize[option.name];
+        if (!uses) throw new Error(`"${item.name}" has no recipe for its "${option.name}" size`);
+        addLines(owner, uses, modifierId[j]);
+      });
+    }
   });
 
   for (let i = 0; i < lines.length; i += 500) {
