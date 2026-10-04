@@ -13,6 +13,7 @@ import {
   menuItems,
   modifierGroups,
   modifiers,
+  modifierSizePrices,
   operators,
   recipeLines,
   storeLogo,
@@ -32,6 +33,7 @@ import { COURIER_PROVIDERS, CourierError } from "@/lib/delivery/types";
 import { OrderError } from "@/lib/checkout";
 import { STORE_TIMEZONES } from "@/lib/hours";
 import { GROUP_ROLES, isPlaceable, type GroupRole } from "@/lib/pricing";
+import { sizeModifiers } from "@/lib/recipe-data";
 import { unitFor } from "@/lib/unit-entry";
 import { KITCHEN_STATIONS, type KitchenStation } from "@/lib/kds";
 import { DEFAULT_STAFF_RULES, parseStaffRules } from "@/lib/timeclock";
@@ -719,6 +721,28 @@ function extraPriceField(fd: FormData, role: GroupRole): number | null {
   return dollarsToCents(fd, "extraPrice");
 }
 
+/** A row per size given a price; a size left blank keeps the modifier's own prices. */
+function sizePriceRows(fd: FormData, modifierId: number, role: GroupRole, sizes: readonly { id: number; name: string }[]) {
+  if (role === "size") return [];
+  return sizes.flatMap((size) => {
+    const price = `sizePrice-${size.id}`;
+    const extra = `sizeExtraPrice-${size.id}`;
+    const hasExtra = isPlaceable(role) && textField(fd, extra) !== "";
+    if (textField(fd, price) === "") {
+      if (hasExtra) throw new Error(`Set a ${size.name} price to give it an extra price`);
+      return [];
+    }
+    return [
+      {
+        modifierId,
+        sizeModifierId: size.id,
+        priceDeltaCents: dollarsToCents(fd, price),
+        extraPriceDeltaCents: hasExtra ? dollarsToCents(fd, extra) : null,
+      },
+    ];
+  });
+}
+
 /**
  * Default semantics: for single-select groups (maxSelect = 1) a default acts
  * like a radio — setting one clears the others in the group.
@@ -796,10 +820,15 @@ export async function updateModifier(formData: FormData): Promise<void> {
     .where(eq(modifiers.id, modifierId));
   if (!modifier) return;
 
-  await db
-    .update(modifiers)
-    .set({ name, priceDeltaCents, extraPriceDeltaCents: extraPriceField(formData, modifier.role) })
-    .where(eq(modifiers.id, modifierId));
+  const sizeRows = sizePriceRows(formData, modifierId, modifier.role, await sizeModifiers());
+  await db.batch([
+    db
+      .update(modifiers)
+      .set({ name, priceDeltaCents, extraPriceDeltaCents: extraPriceField(formData, modifier.role) })
+      .where(eq(modifiers.id, modifierId)),
+    db.delete(modifierSizePrices).where(eq(modifierSizePrices.modifierId, modifierId)),
+    ...(sizeRows.length ? [db.insert(modifierSizePrices).values(sizeRows)] : []),
+  ]);
   await applyDefault(modifier.groupId, modifierId, isDefault);
   revalidateModifiers();
 }

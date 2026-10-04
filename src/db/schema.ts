@@ -278,6 +278,23 @@ export const modifiers = pgTable("modifiers", {
   sortOrder: integer("sort_order").notNull().default(0),
 });
 
+/** A modifier's price on one size; a size without a row charges the modifier's own prices. */
+export const modifierSizePrices = pgTable(
+  "modifier_size_prices",
+  {
+    id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+    modifierId: integer("modifier_id")
+      .notNull()
+      .references(() => modifiers.id, { onDelete: "cascade" }),
+    sizeModifierId: integer("size_modifier_id")
+      .notNull()
+      .references(() => modifiers.id, { onDelete: "cascade" }),
+    priceDeltaCents: integer("price_delta_cents").notNull(),
+    extraPriceDeltaCents: integer("extra_price_delta_cents"),
+  },
+  (t) => [uniqueIndex("modifier_size_prices_modifier_size").on(t.modifierId, t.sizeModifierId)],
+);
+
 /** Junction: which modifier groups apply to which items, in what order. */
 export const itemModifierGroups = pgTable("item_modifier_groups", {
   id: integer("id").primaryKey().generatedAlwaysAsIdentity(),

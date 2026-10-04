@@ -1,9 +1,24 @@
 import { createHash } from "node:crypto";
 import { asc, eq, inArray } from "drizzle-orm";
-import { categories, db, itemModifierGroups, menuItems, modifierGroups, modifiers } from "@/db";
+import { categories, db, itemModifierGroups, menuItems, modifierGroups, modifiers, modifierSizePrices } from "@/db";
 import { rejected, type Failure, type PosMenu, type SubmitLine } from "@/lib/orders";
-import { PricingError, priceLine, withItemDefaults, type MenuItem, type PricingPolicy } from "@/lib/pricing";
+import { PricingError, priceLine, withItemDefaults, type MenuItem, type PricingPolicy, type SizePrice } from "@/lib/pricing";
 import { getSettings, policyOf } from "@/lib/settings-server";
+
+/** Each modifier's per-size prices, for the given modifiers or every one. */
+export async function loadSizePrices(modifierIds?: readonly number[]): Promise<Map<number, SizePrice[]>> {
+  if (modifierIds?.length === 0) return new Map();
+  const rows = await db
+    .select()
+    .from(modifierSizePrices)
+    .where(modifierIds ? inArray(modifierSizePrices.modifierId, [...modifierIds]) : undefined)
+    .orderBy(asc(modifierSizePrices.id));
+  const out = new Map<number, SizePrice[]>();
+  for (const { modifierId, sizeModifierId, priceDeltaCents, extraPriceDeltaCents } of rows) {
+    out.set(modifierId, [...(out.get(modifierId) ?? []), { sizeModifierId, priceDeltaCents, extraPriceDeltaCents }]);
+  }
+  return out;
+}
 
 async function loadMenuItems(itemIds?: number[]): Promise<(MenuItem & { categoryId: number })[]> {
   if (itemIds?.length === 0) return [];
@@ -33,6 +48,7 @@ async function loadMenuItems(itemIds?: number[]): Promise<(MenuItem & { category
       ])
     : [[], []];
   const groupById = new Map(groups.map((g) => [g.id, g]));
+  const sizePrices = await loadSizePrices(mods.map((m) => m.id));
 
   return rows.map(({ item, station }) => ({
     id: item.id,
@@ -64,6 +80,7 @@ async function loadMenuItems(itemIds?: number[]): Promise<(MenuItem & { category
                   extraPriceDeltaCents: m.extraPriceDeltaCents,
                   isDefault: m.isDefault,
                   isAvailable: m.isAvailable,
+                  sizePrices: sizePrices.get(m.id) ?? [],
                 })),
               l.defaultModifierIds,
             ),
