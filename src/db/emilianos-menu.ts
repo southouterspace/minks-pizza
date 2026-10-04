@@ -583,7 +583,6 @@ const CATEGORIES: Category[] = [
       bottled("Pepsi", "Pepsi 20oz", "Pepsi 2L", "Coca-Cola Original Taste — the crisp, refreshing taste you know and love"),
       bottled("Pepsi Zero Sugar", "Pepsi Zero Sugar 20oz", "Pepsi Zero 2L", "Enjoy the great taste of Coca-Cola with zero sugar, zero calories"),
       bottled("Starry", "Starry 20oz", "Starry 2L", "Classic, cool, crisp lemon-lime flavored taste that's caffeine free"),
-      // Toast has no 2-liter Gatorade.
       { name: "Gatorade", cents: 299, groups: ["bottleSize"], hidden: ["2 Liter"], bySize: { "20 oz": [["Gatorade 20oz", 1]] } },
     ],
   },
