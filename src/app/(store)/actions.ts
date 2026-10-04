@@ -1,7 +1,11 @@
 "use server";
 
-import { checkoutSchema, previewSchema } from "@/lib/validation";
-import { createOrder, quoteCheckout } from "@/lib/checkout";
+import { randomUUID } from "node:crypto";
+import { z } from "zod";
+import { cartLineSchema, checkoutSchema, previewSchema } from "@/lib/validation";
+import { priceLines } from "@/lib/menu-server";
+import { getSettings, policyOf } from "@/lib/settings-server";
+import { createOrder, pricedCaps, quoteCheckout } from "@/lib/checkout";
 import { getCurrentMember } from "@/lib/member-auth";
 import { rewardOptions, type RewardOption } from "@/lib/loyalty-server";
 import { OrderError } from "@/lib/checkout";
@@ -10,6 +14,8 @@ import type { DiscountTarget } from "@/lib/promotion-schema";
 
 export type QuoteView = {
   subtotalCents: number;
+  /** Per cart line, the most the stock allows alongside the rest; null where nothing tracked limits it. */
+  caps: (number | null)[];
   discounts: {
     key: string;
     kind: "promotion" | "loyalty";
@@ -48,6 +54,7 @@ export async function previewCheckout(input: unknown): Promise<PreviewResult> {
       ok: true,
       quote: {
         subtotalCents: 0,
+        caps: [],
         discounts: [],
         rejected: [],
         nudges: [],
@@ -68,6 +75,7 @@ export async function previewCheckout(input: unknown): Promise<PreviewResult> {
       ok: true,
       quote: {
         subtotalCents: q.subtotalCents,
+        caps: q.caps,
         discounts: [
           ...q.applied.map((a) => ({
             key: `promotion:${a.promotionId}`,
@@ -114,6 +122,26 @@ export async function previewCheckout(input: unknown): Promise<PreviewResult> {
     console.error("previewCheckout failed:", err);
     return { ok: false, error: "Couldn't price your cart. Please try again." };
   }
+}
+
+const addableSchema = z.object({ cart: z.array(cartLineSchema).max(50), line: cartLineSchema });
+
+/**
+ * How many of `line` the stock lets the customer add to `cart`, or null when
+ * nothing tracked limits it. Matches what checkout will accept.
+ */
+export async function addableQuantity(input: unknown): Promise<number | null> {
+  const parsed = addableSchema.safeParse(input);
+  if (!parsed.success) return null;
+  const { cart, line } = parsed.data;
+  const store = policyOf(await getSettings());
+  const priced = await priceLines(
+    [...cart, { ...line, quantity: 1 }].map((l) => ({ ...l, lineId: randomUUID() })),
+    store,
+  );
+  // An unpriceable cart is refused at checkout with its own message.
+  if (!Array.isArray(priced)) return null;
+  return (await pricedCaps(priced)).at(-1) ?? null;
 }
 
 export type PlaceOrderResult =
