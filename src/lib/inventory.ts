@@ -33,6 +33,8 @@ import {
   type UsageLine,
 } from "@/lib/recipes";
 import { DEFAULT_PORTIONS } from "@/lib/recipes";
+import { lineCaps, type Stock } from "@/lib/stock";
+import { ACTIVE_STATUSES } from "@/lib/order-workflow";
 
 function intRows(rows: readonly (readonly (number | null)[])[]): SQL {
   return sql`(values ${sql.join(
@@ -63,20 +65,8 @@ export type OrderUsagePlan = {
   lineCosts: readonly (readonly [number, number])[];
 };
 
-export async function planOrderUsage(orderId: string): Promise<OrderUsagePlan> {
-  const [lines, settings] = await Promise.all([
-    db
-      .select({
-        id: orderItems.id,
-        menuItemId: orderItems.menuItemId,
-        quantity: orderItems.quantity,
-        modifiers: orderItems.modifiers,
-      })
-      .from(orderItems)
-      .where(and(eq(orderItems.orderId, orderId), isNull(orderItems.voidedAt))),
-    portionSettings(),
-  ]);
-
+/** The recipes, size modifiers and portion rules that turn these lines into ingredient usage. */
+async function recipeContextFor(lines: readonly UsageLine[]): Promise<RecipeContext> {
   const itemIds = [...new Set(lines.flatMap((l) => (l.menuItemId === null ? [] : [l.menuItemId])))];
   const modifierIds = [
     ...new Set(
@@ -90,7 +80,7 @@ export async function planOrderUsage(orderId: string): Promise<OrderUsagePlan> {
     modifierIds.length ? inArray(recipeLines.modifierId, modifierIds) : undefined,
   ].filter((c) => c !== undefined);
 
-  const [recipeRows, sizeRows] = await Promise.all([
+  const [recipeRows, sizeRows, settings] = await Promise.all([
     owners.length ? db.select().from(recipeLines).where(or(...owners)) : [],
     modifierIds.length
       ? db
@@ -99,13 +89,64 @@ export async function planOrderUsage(orderId: string): Promise<OrderUsagePlan> {
           .innerJoin(modifierGroups, eq(modifierGroups.id, modifiers.groupId))
           .where(and(eq(modifierGroups.role, "size"), inArray(modifiers.id, modifierIds)))
       : [],
+    portionSettings(),
   ]);
 
-  const ctx: RecipeContext = {
+  return {
     book: buildRecipeBook(recipeRows.map(recipeLineFromRow)),
     sizeModifierIds: new Set(sizeRows.map((r) => r.id)),
     settings,
   };
+}
+
+/**
+ * What each tracked ingredient can still give, down to its 86 threshold.
+ * Like syncStockOuts, only an active ingredient that has been received or
+ * counted is tracked; the rest are left out and never limit an order.
+ */
+async function loadStock(ingredientIds: readonly number[]): Promise<Stock> {
+  if (ingredientIds.length === 0) return new Map();
+  const { rows } = await db.execute<{ id: number; available: string }>(sql`
+    select i.id, (coalesce(sum(m.qty_milli), 0) - coalesce(i.out_at_milli, 0))::text as available
+    from ${ingredients} i
+    join ${inventoryMoves} m on m.ingredient_id = i.id
+    where i.is_active and i.id in (${sql.join(ingredientIds.map((id) => sql`${id}`), sql`, `)})
+    group by i.id
+    having bool_or(m.kind in ('receive', 'count'))
+  `);
+  return new Map(rows.map((r) => [Number(r.id), Number(r.available)]));
+}
+
+/**
+ * How many of each line the shelves allow alongside the others; null where
+ * nothing tracked limits it. Open orders only write their sale moves when
+ * they complete, so their usage is held back here first.
+ */
+export async function stockCaps(lines: readonly UsageLine[]): Promise<(number | null)[]> {
+  const open = await db
+    .select({ menuItemId: orderItems.menuItemId, quantity: orderItems.quantity, modifiers: orderItems.modifiers })
+    .from(orderItems)
+    .innerJoin(orders, eq(orders.id, orderItems.orderId))
+    .where(and(inArray(orders.status, ACTIVE_STATUSES), isNull(orderItems.voidedAt)));
+  const ctx = await recipeContextFor([...lines, ...open]);
+  const ingredientIds = [...new Set([...ctx.book.values()].flatMap((ls) => ls.map((l) => l.ingredientId)))];
+  const onShelf = await loadStock(ingredientIds);
+  const held = orderUsage(open, ctx);
+  const stock = new Map([...onShelf].map(([id, qty]) => [id, qty - (held.get(id) ?? 0)]));
+  return lineCaps(lines, ctx, stock);
+}
+
+export async function planOrderUsage(orderId: string): Promise<OrderUsagePlan> {
+  const lines = await db
+    .select({
+      id: orderItems.id,
+      menuItemId: orderItems.menuItemId,
+      quantity: orderItems.quantity,
+      modifiers: orderItems.modifiers,
+    })
+    .from(orderItems)
+    .where(and(eq(orderItems.orderId, orderId), isNull(orderItems.voidedAt)));
+  const ctx = await recipeContextFor(lines);
   const usageLines: UsageLine[] = lines;
   const usage = orderUsage(usageLines, ctx);
   const costRows = usage.size

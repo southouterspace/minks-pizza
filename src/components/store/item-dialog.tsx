@@ -1,11 +1,12 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Minus, Plus } from "lucide-react";
 import { toast } from "sonner";
 import type { MenuItemView, ModifierGroupView, ModifierView } from "@/lib/menu";
 import { formatCents } from "@/lib/money";
-import { useCart, type CartModifier } from "@/components/cart-context";
+import { addableQuantity } from "@/app/(store)/actions";
+import { toCartLineInput, useCart, type CartModifier } from "@/components/cart-context";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import {
@@ -191,7 +192,7 @@ export function ItemDialog({
   orderingEnabled: boolean;
   onClose: () => void;
 }) {
-  const { addLine } = useCart();
+  const { lines, addLine } = useCart();
   const [selected, setSelected] = useState<Map<number, ToppingChoice>>(() => {
     const initial = new Map<number, ToppingChoice>();
     for (const group of item.modifierGroups) {
@@ -264,6 +265,24 @@ export function ItemDialog({
   const chosen = priced.modifiers;
   const unitPrice = priced.unitPriceCents;
 
+  // undefined until the server answers; null means nothing tracked limits this item.
+  const [limit, setLimit] = useState<{ key: string; max: number | null }>();
+  const limitKey = JSON.stringify({ cart: lines.map(toCartLineInput), line: { itemId: item.id, quantity: 1, selections } });
+  useEffect(() => {
+    let stale = false;
+    const timer = setTimeout(async () => {
+      const max = await addableQuantity(JSON.parse(limitKey)).catch(() => null);
+      if (!stale) setLimit({ key: limitKey, max });
+    }, 200);
+    return () => {
+      stale = true;
+      clearTimeout(timer);
+    };
+  }, [limitKey]);
+  const max = limit?.max ?? null;
+  const checking = limit?.key !== limitKey;
+  const count = max === null ? quantity : Math.min(quantity, max);
+
   const sizeId = chosenSize(item.modifierGroups, selections);
 
   const violations = item.modifierGroups.filter((g) => {
@@ -276,13 +295,13 @@ export function ItemDialog({
       itemId: item.id,
       itemName: item.name,
       unitPriceCents: unitPrice,
-      quantity,
+      quantity: count,
       selections,
       modifiers: chosen,
       notes: notes.trim() || undefined,
     });
     setAdded(true);
-    toast.success(`${quantity} × ${item.name} added to cart`);
+    toast.success(`${count} × ${item.name} added to cart`);
     setTimeout(onClose, 400);
   };
 
@@ -408,30 +427,36 @@ export function ItemDialog({
           </div>
         </div>
 
-        <DialogFooter className="flex-row items-center gap-3 sm:justify-start">
+        <DialogFooter className="flex-row flex-wrap items-center gap-3 sm:justify-start">
+          {max !== null && max > 0 && count >= max ? (
+            <p role="status" className="w-full text-xs text-muted-foreground">
+              Only {max} more can be made right now.
+            </p>
+          ) : null}
           <div className="flex shrink-0 items-center rounded-lg border border-border bg-background">
             <Button
               variant="ghost"
               size="icon"
-              onClick={() => setQuantity((q) => Math.max(1, q - 1))}
+              onClick={() => setQuantity(Math.max(1, count - 1))}
               aria-label="Decrease quantity"
             >
               <Minus />
             </Button>
             <span className="w-8 text-center text-sm font-medium tabular-nums">
-              {quantity}
+              {count}
             </span>
             <Button
               variant="ghost"
               size="icon"
-              onClick={() => setQuantity((q) => Math.min(50, q + 1))}
+              onClick={() => setQuantity(Math.min(50, count + 1))}
+              disabled={max !== null && count >= max}
               aria-label="Increase quantity"
             >
               <Plus />
             </Button>
           </div>
           <Button
-            disabled={violations.length > 0 || !orderingEnabled || added}
+            disabled={violations.length > 0 || !orderingEnabled || added || checking || max === 0}
             onClick={add}
             className="h-10! flex-1"
           >
@@ -439,9 +464,13 @@ export function ItemDialog({
               ? "Added ✓"
               : !orderingEnabled
                 ? "Ordering paused"
-                : violations.length > 0
-                  ? `Choose ${violations[0].name}`
-                  : `Add ${quantity} to cart · ${formatCents(unitPrice * quantity)}`}
+                : max === 0
+                  ? lines.some((l) => l.itemId === item.id)
+                    ? "No more available"
+                    : "Sold out"
+                  : violations.length > 0
+                    ? `Choose ${violations[0].name}`
+                    : `Add ${count} to cart · ${formatCents(unitPrice * count)}`}
           </Button>
         </DialogFooter>
       </DialogContent>

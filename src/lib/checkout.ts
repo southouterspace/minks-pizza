@@ -30,6 +30,7 @@ import {
   type LoyaltyMember,
   type LoyaltyReward,
 } from "@/lib/loyalty-server";
+import { stockCaps } from "@/lib/inventory";
 import { priceLines, type PricedLine } from "@/lib/menu-server";
 import type { Fulfillment, OrderView, SubmitOrderRequest } from "@/lib/orders";
 import { DealChangedError, submitOrder } from "@/lib/orders-server/submit";
@@ -51,6 +52,8 @@ export class OrderError extends Error {}
 
 export type CheckoutQuote = Evaluation & {
   lines: PricedLine[];
+  /** Per line, the most the stock allows alongside the rest of the cart; null where nothing tracked limits it. */
+  caps: (number | null)[];
   subtotalCents: number;
   deliveryFeeCents: number;
   taxCents: number;
@@ -100,6 +103,7 @@ export async function quoteCheckout(
   if (!Array.isArray(priced)) {
     throw new OrderError(priced.reason === "rejected" ? priced.message : "Couldn't price your cart.");
   }
+  const caps = await pricedCaps(priced);
   const subtotalCents = priced.reduce((sum, l) => sum + l.unitPriceCents * l.quantity, 0);
   const deliveryFeeCents = input.orderType === "delivery" ? store.deliveryFeeCents : 0;
   const evaluation = evaluatePromotions({
@@ -134,6 +138,7 @@ export async function quoteCheckout(
     ...evaluation,
     discountCents: totals.discountCents,
     lines: priced,
+    caps,
     subtotalCents,
     deliveryFeeCents,
     taxCents: totals.taxCents,
@@ -162,6 +167,20 @@ function capRedemption(r: Redemption<LoyaltyReward>, itemsLeftCents: number): Re
   if (r.status !== "applied" || r.discountCents <= itemsLeftCents) return r;
   if (itemsLeftCents <= 0) return { status: "rejected", error: `Your deals already cover these items, so "${r.reward.name}" can't be used.` };
   return { ...r, discountCents: itemsLeftCents };
+}
+
+export function pricedCaps(lines: readonly PricedLine[]): Promise<(number | null)[]> {
+  return stockCaps(lines.map((l) => ({ menuItemId: l.itemId, quantity: l.quantity, modifiers: l.modifiers })));
+}
+
+/** The refusal for the first line the stock can't cover, if any. */
+function overStock({ lines, caps }: Pick<CheckoutQuote, "lines" | "caps">): string | null {
+  const i = lines.findIndex((l, i) => caps[i] !== null && l.quantity > caps[i]);
+  if (i < 0) return null;
+  const cap = caps[i];
+  return cap === 0
+    ? `${lines[i].name} just sold out. Remove it from your cart to continue.`
+    : `Only ${cap} of ${lines[i].name} can be made right now. Lower the quantity to continue.`;
 }
 
 function fulfillmentOf(input: CheckoutInput): Fulfillment {
@@ -206,6 +225,8 @@ export async function createOrder(input: CheckoutInput, signedIn: LoyaltyMember 
 
   let quote = await quoteCheckout(input, member, settings);
   for (let attempt = 1; attempt <= 2; attempt++) {
+    const short = overStock(quote);
+    if (short) throw new OrderError(short);
     const redemption = quote.loyalty?.redemption ?? { status: "none" };
     if (redemption.status === "rejected") throw new OrderError(redemption.error);
     const totalCents = quote.totalBeforeTipCents + input.tipCents;

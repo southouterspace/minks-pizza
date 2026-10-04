@@ -18,6 +18,7 @@ import {
 import { describeChoice, priceLine, type LineModifier, type MenuItem, type PricingPolicy } from "../src/lib/pricing";
 import { selectionFactorBps } from "../src/lib/recipes";
 import { formatQty } from "../src/lib/units";
+import { lineCaps } from "../src/lib/stock";
 
 let passed = 0;
 function test(name: string, fn: () => void) {
@@ -215,6 +216,34 @@ test("costs: millicents per base unit, rounded once", () => {
   assert.equal(costCents(usage, unitCosts), 382);
   assert.equal(plateCost(CHEESE_PIZZA, LARGE, [], ctx, unitCosts), 230);
   assert.equal(plateCost(CHEESE_PIZZA, MEDIUM, [PEPPERONI], ctx, unitCosts), 249);
+});
+
+test("lineCaps: an item using no tracked ingredient is unlimited", () => {
+  const medium = { menuItemId: CHEESE_PIZZA, quantity: 1, modifiers: [opt(MEDIUM)] };
+  assert.deepEqual(lineCaps([medium], ctx, new Map([[PEP, 0]])), [null]);
+});
+
+test("lineCaps: each line gets what the others leave of a shared ingredient", () => {
+  const medium = { menuItemId: CHEESE_PIZZA, quantity: 1, modifiers: [opt(MEDIUM)] };
+  const large = { menuItemId: CHEESE_PIZZA, quantity: 1, modifiers: [opt(LARGE)] };
+  const mozz = new Map([[MOZZ, 20 * OZ]]);
+  assert.deepEqual(lineCaps([medium], ctx, mozz), [3]);
+  assert.deepEqual(lineCaps([medium, large], ctx, mozz), [2, 1]);
+  assert.deepEqual(lineCaps([{ ...medium, quantity: 3 }, large], ctx, mozz), [2, 0]);
+});
+
+test("lineCaps: the tightest tracked ingredient wins, and half portions use half", () => {
+  const stock = new Map([[MOZZ, 100 * OZ], [PEP, 4 * OZ]]);
+  const whole = { menuItemId: CHEESE_PIZZA, quantity: 1, modifiers: [opt(LARGE), top(PEPPERONI, "whole", "regular")] };
+  const halfPep = { menuItemId: CHEESE_PIZZA, quantity: 1, modifiers: [opt(LARGE), top(PEPPERONI, "left", "regular")] };
+  assert.deepEqual(lineCaps([whole], ctx, stock), [1]);
+  assert.deepEqual(lineCaps([halfPep], ctx, stock), [2]);
+});
+
+test("lineCaps: stock at or below nothing allows none", () => {
+  const medium = { menuItemId: CHEESE_PIZZA, quantity: 1, modifiers: [opt(MEDIUM)] };
+  assert.deepEqual(lineCaps([medium], ctx, new Map([[MOZZ, 5 * OZ]])), [0]);
+  assert.deepEqual(lineCaps([medium], ctx, new Map([[MOZZ, -2 * OZ]])), [0]);
 });
 
 console.log(`\n${passed} passed`);
