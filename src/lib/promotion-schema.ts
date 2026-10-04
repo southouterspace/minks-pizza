@@ -55,6 +55,16 @@ export const promotionRewardSchema = z.discriminatedUnion("type", [
     get: z.object({ target: targetSchema, quantity: z.number().int().min(1).max(20), percentBps }),
     maxApplications: units,
   }),
+  z.object({
+    type: z.literal("bundle"),
+    target: targetSchema,
+    quantity: z.number().int().min(2, "A bundle needs at least 2 items").max(20),
+    /** Each item's deal price, covering its options and the first `includedToppings` toppings. */
+    priceCents: z.number().int().min(0).max(1_000_000),
+    /** Null = every topping included. */
+    includedToppings: z.number().int().min(0).max(20).nullable(),
+    maxApplications: units,
+  }),
   z.object({ type: z.literal("free_delivery") }),
 ]);
 export type PromotionReward = z.infer<typeof promotionRewardSchema>;
@@ -140,6 +150,7 @@ export const REWARD_SCOPE = {
   item_amount: "item",
   item_price: "item",
   bogo: "item",
+  bundle: "item",
   free_delivery: "delivery",
 } as const satisfies Record<RewardType, RewardScope>;
 

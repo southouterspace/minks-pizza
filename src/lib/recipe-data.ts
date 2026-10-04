@@ -1,5 +1,5 @@
 import "server-only";
-import { and, asc, eq, inArray, isNotNull } from "drizzle-orm";
+import { asc, eq, inArray, isNotNull } from "drizzle-orm";
 import {
   db,
   ingredientPacks,
@@ -12,6 +12,7 @@ import {
 } from "@/db";
 import { recipeLineFromRow } from "@/lib/recipes";
 import { DEFAULT_PORTIONS } from "@/lib/recipes";
+import { plateDefaults, withItemDefaults } from "@/lib/pricing";
 import type {
   PlateContext,
   RecipeIngredient,
@@ -68,7 +69,7 @@ export async function itemRecipe(item: { id: number; basePriceCents: number }): 
 }> {
   const [attached, allSizes, lines, [settings]] = await Promise.all([
     db
-      .select({ groupId: modifierGroups.id, role: modifierGroups.role })
+      .select({ groupId: modifierGroups.id, role: modifierGroups.role, defaultModifierIds: itemModifierGroups.defaultModifierIds })
       .from(itemModifierGroups)
       .innerJoin(modifierGroups, eq(modifierGroups.id, itemModifierGroups.groupId))
       .where(eq(itemModifierGroups.itemId, item.id))
@@ -79,20 +80,26 @@ export async function itemRecipe(item: { id: number; basePriceCents: number }): 
   ]);
   const sizeGroupId = attached.find((g) => g.role === "size")?.groupId;
   const sizes = allSizes.filter((s) => s.groupId === sizeGroupId);
-  const optionGroupIds = attached.filter((g) => g.role !== "size").map((g) => g.groupId);
+  const optionGroups = attached.filter((g) => g.role !== "size");
 
-  const defaults = optionGroupIds.length
+  const optionMods = optionGroups.length
     ? await db
-        .select({ id: modifiers.id, priceDeltaCents: modifiers.priceDeltaCents })
+        .select({ id: modifiers.id, groupId: modifiers.groupId, priceDeltaCents: modifiers.priceDeltaCents, isDefault: modifiers.isDefault })
         .from(modifiers)
-        .where(and(inArray(modifiers.groupId, optionGroupIds), eq(modifiers.isDefault, true)))
+        .where(inArray(modifiers.groupId, optionGroups.map((g) => g.groupId)))
     : [];
-  const defaultIds = defaults.map((d) => d.id);
+  const defaults = plateDefaults(
+    optionGroups.map((g) => ({
+      role: g.role,
+      modifiers: withItemDefaults(optionMods.filter((m) => m.groupId === g.groupId), g.defaultModifierIds),
+    })),
+  );
+  const defaultIds = defaults.ids;
   const defaultLines = defaultIds.length
     ? await db.select().from(recipeLines).where(inArray(recipeLines.modifierId, defaultIds))
     : [];
 
-  const withDefaults = item.basePriceCents + defaults.reduce((sum, d) => sum + d.priceDeltaCents, 0);
+  const withDefaults = item.basePriceCents + defaults.priceCents;
   return {
     sizes: sizes.map((s) => ({ id: s.id, name: s.name })),
     lines,

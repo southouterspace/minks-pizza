@@ -288,6 +288,8 @@ export const itemModifierGroups = pgTable("item_modifier_groups", {
     .notNull()
     .references(() => modifierGroups.id, { onDelete: "cascade" }),
   sortOrder: integer("sort_order").notNull().default(0),
+  /** What this item comes with from the group (a pie's toppings and sauce); empty keeps the group's defaults. */
+  defaultModifierIds: integer("default_modifier_ids").array().notNull().default([]),
 });
 
 // ---------------------------------------------------------------------------

@@ -36,6 +36,9 @@ export type PromotionDraft = {
   getTarget: Target;
   getPercent: string;
   maxApplications: string;
+  bundleQty: string;
+  /** Blank = every topping included. */
+  includedToppings: string;
   minSubtotal: string;
   pickup: boolean;
   delivery: boolean;
@@ -68,6 +71,8 @@ export const EMPTY_DRAFT: PromotionDraft = {
   getTarget: ANY_ITEM,
   getPercent: "100",
   maxApplications: "",
+  bundleQty: "2",
+  includedToppings: "1",
   minSubtotal: "",
   pickup: true,
   delivery: true,
@@ -85,7 +90,19 @@ export const EMPTY_DRAFT: PromotionDraft = {
 /** The form's inputs for a reward, in the order the form shows them. */
 export type RewardField = Extract<
   keyof PromotionDraft,
-  "percent" | "maxDiscount" | "amount" | "price" | "maxUnits" | "buyQty" | "getQty" | "getPercent" | "maxApplications" | "target" | "getTarget"
+  | "percent"
+  | "maxDiscount"
+  | "amount"
+  | "price"
+  | "maxUnits"
+  | "buyQty"
+  | "getQty"
+  | "getPercent"
+  | "maxApplications"
+  | "bundleQty"
+  | "includedToppings"
+  | "target"
+  | "getTarget"
 >;
 
 /** The form for each reward type; rewardDraft and rewardOf must read and write exactly these fields. */
@@ -96,6 +113,7 @@ export const REWARD_FORM = {
   item_amount: { label: "Dollars off items", fields: ["amount", "maxUnits", "target"] },
   item_price: { label: "Deal price on items", fields: ["price", "maxUnits", "target"] },
   bogo: { label: "Buy X, get Y", fields: ["buyQty", "getQty", "getPercent", "maxApplications", "target", "getTarget"] },
+  bundle: { label: "Bundle: N items for a price each", fields: ["bundleQty", "price", "includedToppings", "maxApplications", "target"] },
   free_delivery: { label: "Free delivery", fields: [] },
 } as const satisfies Record<RewardType, { label: string; fields: readonly RewardField[] }>;
 
@@ -131,6 +149,15 @@ function rewardDraft(r: PromotionReward): Partial<PromotionDraft> {
         getPercent: String(r.get.percentBps / 100),
         maxApplications: fromOptional(r.maxApplications),
       };
+    case "bundle":
+      return {
+        rewardType: r.type,
+        target: r.target,
+        bundleQty: String(r.quantity),
+        price: fromHundredths(r.priceCents),
+        includedToppings: fromOptional(r.includedToppings),
+        maxApplications: fromOptional(r.maxApplications),
+      };
     case "free_delivery":
       return { rewardType: r.type };
   }
@@ -157,6 +184,15 @@ function rewardOf(d: PromotionDraft): PromotionReward {
           quantity: toIntOrNull(d.getQty) ?? 0,
           percentBps: toHundredths(d.getPercent),
         },
+        maxApplications: toIntOrNull(d.maxApplications),
+      };
+    case "bundle":
+      return {
+        type: "bundle",
+        target: d.target,
+        quantity: toIntOrNull(d.bundleQty) ?? 0,
+        priceCents: toHundredths(d.price),
+        includedToppings: toIntOrNull(d.includedToppings),
         maxApplications: toIntOrNull(d.maxApplications),
       };
     case "free_delivery":
@@ -228,6 +264,11 @@ export function promotionTemplates(catalog: MenuCatalog): PromotionTemplate[] {
       { name: "Buy one large, get one free", trigger: "automatic" },
     ),
     template("Item deal price", { type: "item_price", target: larges, priceCents: 1200, maxUnits: null }, { name: "Any large pizza $12", trigger: "automatic" }),
+    template(
+      "Bundle",
+      { type: "bundle", target: larges, quantity: 2, priceCents: 1500, includedToppings: 1, maxApplications: null },
+      { name: "2 large 1-topping pizzas, $15 each", trigger: "automatic" },
+    ),
     template("Free delivery", { type: "free_delivery" }, { name: "Free delivery on $30+", trigger: "automatic", minSubtotal: "30", pickup: false, delivery: true }),
     template("Happy hour", { type: "order_percent", percentBps: 2000, maxDiscountCents: null }, {
       name: "Happy hour: 20% off",

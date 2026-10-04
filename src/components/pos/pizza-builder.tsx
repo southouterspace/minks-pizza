@@ -233,7 +233,7 @@ function ToppingGroup({
             >
               <span className="line-clamp-1">{m.name}</span>
               <span className="text-xs opacity-75">
-                {amountTag ?? (m.priceDeltaCents > 0 ? `+${formatCents(m.priceDeltaCents)}` : m.isDefault ? "on pizza" : " ")}
+                {amountTag ?? (m.isDefault ? "on pizza" : m.priceDeltaCents > 0 ? `+${formatCents(m.priceDeltaCents)}` : " ")}
               </span>
               {halfTag && (
                 <span className="absolute top-1 right-1 flex size-6 items-center justify-center rounded-full bg-background text-xs font-bold text-foreground">

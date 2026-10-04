@@ -34,6 +34,9 @@ import { PizzaGlyph } from "@/components/pizza-glyph";
 
 type ToppingChoice = { placement: Placement; amount: Amount };
 const DEFAULT_CHOICE: ToppingChoice = { placement: "whole", amount: "regular" };
+/** An unchecked topping the pie comes with, so the kitchen reads "No Ham" rather than nothing. */
+const REMOVED: ToppingChoice = { placement: "whole", amount: "none" };
+const isOn = (choice: ToppingChoice | undefined): choice is ToppingChoice => choice !== undefined && choice.amount !== "none";
 const AMOUNT_OPTIONS: Amount[] = ["light", "regular", "extra"];
 
 /** The dialog prices with the same function checkout does, over the live menu. */
@@ -208,6 +211,7 @@ export function ItemDialog({
   const toggle = (groupId: number, modId: number) => {
     const group = item.modifierGroups.find((g) => g.id === groupId);
     if (!group) return;
+    const mod = group.modifiers.find((m) => m.id === modId);
     setSelected((prev) => {
       const next = new Map(prev);
       const groupModIds = group.modifiers.map((m) => m.id);
@@ -215,10 +219,11 @@ export function ItemDialog({
         // radio behavior
         for (const id of groupModIds) next.delete(id);
         next.set(modId, DEFAULT_CHOICE);
-      } else if (next.has(modId)) {
-        next.delete(modId);
+      } else if (isOn(next.get(modId))) {
+        if (mod?.isDefault && isPlaceable(group.role)) next.set(modId, REMOVED);
+        else next.delete(modId);
       } else {
-        const count = groupModIds.filter((id) => next.has(id)).length;
+        const count = groupModIds.filter((id) => isOn(next.get(id))).length;
         if (group.maxSelect !== null && count >= group.maxSelect) return prev;
         next.set(modId, DEFAULT_CHOICE);
       }
@@ -256,7 +261,7 @@ export function ItemDialog({
   const unitPrice = priced.unitPriceCents;
 
   const violations = item.modifierGroups.filter((g) => {
-    const count = g.modifiers.filter((m) => selected.has(m.id)).length;
+    const count = g.modifiers.filter((m) => isOn(selected.get(m.id))).length;
     return count < g.minSelect;
   });
 
@@ -304,13 +309,14 @@ export function ItemDialog({
                 <div className="mt-3 grid gap-2">
                   {group.modifiers.map((mod) => {
                     const choice = selected.get(mod.id);
+                    const shown = isOn(choice) ? choice : DEFAULT_CHOICE;
                     return (
                       <ToppingOption
                         key={mod.id}
                         mod={mod}
-                        checked={choice !== undefined}
-                        choice={choice ?? DEFAULT_CHOICE}
-                        priceCents={selectionPrice(item, mod, choice ?? DEFAULT_CHOICE)}
+                        checked={isOn(choice)}
+                        choice={shown}
+                        priceCents={selectionPrice(item, mod, shown)}
                         onToggle={() => toggle(group.id, mod.id)}
                         onChoice={(patch) => setChoice(mod.id, patch)}
                       />
