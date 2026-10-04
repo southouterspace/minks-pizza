@@ -1,7 +1,7 @@
 "use client";
 
 import { POS_ACCESS_LABEL } from "@/lib/pos-access";
-import { Lock, Menu as MenuIcon, Moon, WifiOff } from "lucide-react";
+import { Lock, Menu as MenuIcon, Moon, TriangleAlert, WifiOff } from "lucide-react";
 import {
   DropdownMenu,
   DropdownMenuCheckboxItem,
@@ -14,6 +14,7 @@ import {
 } from "@/components/ui/dropdown-menu";
 import type { DrawerEventKind } from "@/lib/orders";
 import type { OutboxEntry } from "@/lib/pos-outbox";
+import { SYNC_STALE_MS } from "@/lib/use-server-snapshot";
 import { formatClock } from "@/lib/zoned";
 import { cn } from "@/lib/utils";
 import { usePos } from "./context";
@@ -55,6 +56,7 @@ export function TerminalHeader({
   const pending = queue.filter((e) => e.state === "pending").length;
   const rejected = queue.length - pending;
   const shift = board.shift;
+  const stale = now - lastSync > SYNC_STALE_MS;
 
   return (
     <header className="flex h-16 shrink-0 items-center gap-3 border-b px-3">
@@ -74,12 +76,19 @@ export function TerminalHeader({
         data-testid="health"
         className={cn(
           "ml-auto flex h-11 items-center gap-2 rounded-xl px-3 text-sm",
-          queue.length > 0 ? "bg-destructive text-white" : online ? "text-muted-foreground hover:bg-muted" : "bg-destructive/10 text-destructive",
+          queue.length > 0
+            ? "bg-destructive text-white"
+            : !online
+              ? "bg-destructive/10 text-destructive"
+              : stale
+                ? "bg-warning/10 text-warning"
+                : "text-muted-foreground hover:bg-muted",
         )}
       >
-        {online ? <span className="size-2.5 rounded-full bg-success" /> : <WifiOff className="size-4" />}
-        <span>
-          {online ? "Online" : "Offline"} · synced {ago(now - lastSync)}
+        {!online ? <WifiOff className="size-4" /> : stale ? <TriangleAlert className="size-4" /> : <span className="size-2.5 rounded-full bg-success" />}
+        <span data-testid="sync-status">
+          {online ? (stale ? "Sync delayed" : "Online") : "Offline"}
+          {stale && ` · last synced ${ago(now - lastSync)}`}
         </span>
         {queue.length > 0 && (
           <b data-testid="not-sent-count">

@@ -7,6 +7,9 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 
+/** No snapshot taken in for this long, about three missed polls, and a screen warns that it is behind. */
+export const SYNC_STALE_MS = 15_000;
+
 export type MutateOptions<T, R> = {
   /** Shown at once, before the server answers. */
   optimistic?: (current: T) => T;
