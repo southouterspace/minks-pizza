@@ -6,13 +6,16 @@ import { Gift } from "lucide-react";
 import { courierDeliveries, db, orderDiscounts, orderItems, orders } from "@/db";
 import { COURIER_STATUS_LABEL, TERMINAL_COURIER_STATUSES } from "@/lib/delivery/types";
 import { formatClock } from "@/lib/zoned";
-import { orderPointsStatus } from "@/lib/loyalty";
+import { SIGNUP_MIN_NET_CENTS, normalizePhone, orderPointsStatus } from "@/lib/loyalty";
+import { getLoyaltySettings, memberByPhone } from "@/lib/loyalty-server";
+import { getCurrentMember } from "@/lib/member-auth";
 import { formatCents } from "@/lib/money";
 import { dueCents, paymentState } from "@/lib/orders";
 import { describeChoice } from "@/lib/pricing";
 import { isActive, isCooking } from "@/lib/order-workflow";
 import { getSettings } from "@/lib/settings-server";
 import { OrderAutoRefresh } from "@/components/store/order-auto-refresh";
+import { OrderRewardsJoin } from "@/components/store/order-rewards-join";
 import { orderTotals, TotalsList } from "@/components/totals-list";
 import { buttonVariants } from "@/components/ui/button";
 import {
@@ -27,6 +30,7 @@ import { cn } from "@/lib/utils";
 export const metadata: Metadata = { title: "Order status" };
 export const dynamic = "force-dynamic";
 
+const DAY_MS = 24 * 60 * 60 * 1000;
 const STATUS_STEPS = ["new", "preparing", "ready", "completed"] as const;
 
 const STATUS_LABELS: Record<string, { title: string; blurb: string }> = {
@@ -68,7 +72,7 @@ export default async function OrderPage({
   const [order] = await db.select().from(orders).where(eq(orders.id, id));
   if (!order) notFound();
 
-  const [items, discounts, settings, [courier]] = await Promise.all([
+  const [items, discounts, settings, [courier], loyalty, viewer] = await Promise.all([
     db.select().from(orderItems).where(eq(orderItems.orderId, order.id)),
     db
       .select()
@@ -87,6 +91,8 @@ export default async function OrderPage({
       )
       .orderBy(desc(courierDeliveries.createdAt))
       .limit(1),
+    getLoyaltySettings(),
+    getCurrentMember(),
   ]);
 
   const stepIndex = STATUS_STEPS.indexOf(
@@ -94,6 +100,14 @@ export default async function OrderPage({
   );
   const active = isActive(order.status);
   const label = STATUS_LABELS[order.status] ?? STATUS_LABELS.new;
+  const phone = normalizePhone(order.customerPhone);
+  const rewardsPrompt =
+    loyalty.enabled && viewer === null && phone && claimable(order)
+      ? joinPrompt(order, loyalty, {
+          phoneLast4: phone.slice(-4),
+          isMember: order.loyaltyMemberId !== null || (await memberByPhone(phone)) !== null,
+        })
+      : null;
 
   return (
     <div className="mx-auto max-w-2xl px-4 py-10 sm:px-6">
@@ -156,7 +170,9 @@ export default async function OrderPage({
         </Card>
       ) : null}
 
-      {order.loyaltyMemberId !== null && order.loyaltyPointsEarned > 0 && orderPointsStatus(order.status) !== "Reversed" ? (
+      {rewardsPrompt ? (
+        <OrderRewardsJoin orderId={order.id} {...rewardsPrompt} />
+      ) : order.loyaltyMemberId !== null && order.loyaltyPointsEarned > 0 && orderPointsStatus(order.status) !== "Reversed" ? (
         <p
           data-testid="order-points"
           className="mt-6 flex items-center gap-2 rounded-lg bg-muted px-4 py-3 text-sm"
@@ -251,4 +267,54 @@ export default async function OrderPage({
       </Link>
     </div>
   );
+}
+
+/** Signing in links only the last 30 days of uncanceled orders (claimRecentOrders). */
+function claimable(order: typeof orders.$inferSelect): boolean {
+  return order.status !== "canceled" && Date.now() - order.placedAt.getTime() < 30 * DAY_MS;
+}
+
+/**
+ * What the order page asks a signed-out customer: to join and keep this
+ * order's points, or, when they joined at checkout, to verify the phone so
+ * they can see and spend them.
+ */
+function joinPrompt(
+  order: typeof orders.$inferSelect,
+  loyalty: { programName: string; signupBonus: number },
+  { phoneLast4, isMember }: { phoneLast4: string; isMember: boolean },
+) {
+  const points = order.loyaltyPointsEarned;
+  const pointsText = `${points.toLocaleString()} points`;
+  if (order.loyaltyMemberId !== null) {
+    return {
+      phoneLast4,
+      title:
+        points === 0
+          ? `You're in ${loyalty.programName}`
+          : order.status === "completed"
+            ? `You earned ${pointsText}`
+            : `You're earning ${pointsText} on this order`,
+      body: "Confirm your number to see your balance, track rewards, and spend points next time.",
+      action: "Confirm my number",
+    };
+  }
+  if (isMember) {
+    return {
+      phoneLast4,
+      title: points > 0 ? `Add ${pointsText} to your ${loyalty.programName} account` : `Sign in to ${loyalty.programName}`,
+      body: "This number is already a member. Sign in and this order counts toward your rewards.",
+      action: points > 0 ? "Add my points" : "Sign in",
+    };
+  }
+  const bonus =
+    loyalty.signupBonus > 0 && order.subtotalCents - order.discountCents >= SIGNUP_MIN_NET_CENTS
+      ? ` Join now and get ${loyalty.signupBonus.toLocaleString()} bonus points too.`
+      : "";
+  return {
+    phoneLast4,
+    title: points > 0 ? `Keep the ${pointsText} from this order` : `Join ${loyalty.programName}`,
+    body: `${loyalty.programName} is free. Points turn into free food.${bonus}`,
+    action: points > 0 ? "Save my points" : "Join free",
+  };
 }

@@ -44,6 +44,8 @@ export type CheckoutConfig = {
   deliveryMinimumCents: number;
   loyalty: {
     programName: string;
+    /** Welcome bonus a new member gets after a first order of SIGNUP_MIN_NET_CENTS; 0 when off. */
+    signupBonus: number;
     member: { name: string | null; phone: string; pointsBalance: number } | null;
   } | null;
 };
@@ -312,6 +314,7 @@ export function CheckoutForm({ config }: { config: CheckoutConfig }) {
           {config.loyalty ? (
             <LoyaltyPanel
               programName={config.loyalty.programName}
+              signupBonus={config.loyalty.signupBonus}
               member={member}
               quote={quote}
               rewardId={rewardId}

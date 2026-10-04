@@ -20,6 +20,11 @@ export function CartPoints({ earn, loyalty }: { earn: number | null; loyalty: Ca
         <Gift className="size-4" aria-hidden />
         This order earns ~{earn.toLocaleString()} points
       </p>
+      {balance === null ? (
+        <p className="mt-1.5 text-xs text-muted-foreground" data-testid="cart-join-hint">
+          Join free at checkout with your phone number to keep them.
+        </p>
+      ) : null}
       {after !== null && nextReward ? (
         <div className="mt-3 space-y-1.5">
           <ProgressBar fraction={after / nextReward.cost} label={`Progress to ${nextReward.name}`} />

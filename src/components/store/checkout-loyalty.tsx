@@ -6,11 +6,14 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { RewardSummary } from "@/components/store/reward-row";
 import type { QuoteView } from "@/app/(store)/actions";
+import { SIGNUP_MIN_NET_CENTS } from "@/lib/loyalty";
+import { formatCents } from "@/lib/money";
 import { cn } from "@/lib/utils";
 
 /** Checkout's rewards section: join by phone as a guest, or pick a reward as a member. */
 export function LoyaltyPanel({
   programName,
+  signupBonus,
   member,
   quote,
   rewardId,
@@ -19,6 +22,7 @@ export function LoyaltyPanel({
   onJoinChange,
 }: {
   programName: string;
+  signupBonus: number;
   member: { pointsBalance: number } | null;
   /** The latest quote, possibly for the previous cart: rewards and points are hints here. */
   quote: QuoteView | null;
@@ -43,7 +47,15 @@ export function LoyaltyPanel({
             aria-label={`Join ${programName} with my phone number`}
             className="mt-0.5"
           />
-          <span>Join {programName} with my phone number</span>
+          <span>
+            Join {programName} with my phone number
+            <span className="mt-0.5 block text-xs text-muted-foreground">
+              Free.{" "}
+              {signupBonus > 0
+                ? `${signupBonus.toLocaleString()} bonus points after your first order of ${formatCents(SIGNUP_MIN_NET_CENTS)} or more.`
+                : "Points turn into free food."}
+            </span>
+          </span>
         </label>
         <Link
           href="/rewards?next=/checkout"

@@ -18,6 +18,7 @@ import {
   orders,
   storeSettings,
 } from "@/db";
+import { ACTIVE_STATUSES } from "@/lib/order-workflow";
 import {
   EXPIRY_RESTORE_DAYS,
   LEDGER_KINDS,
@@ -488,13 +489,19 @@ async function claimOrders(memberId: number, where: SQL): Promise<number> {
   return rows.length;
 }
 
-/** Completed orders from the last 30 days placed with the member's phone. */
-export function claimRecentOrders(member: { id: number; phone: string }): Promise<number> {
-  return claimOrders(
-    member.id,
-    sql`regexp_replace(customer_phone, '[^0-9]', '', 'g') in (${member.phone}, ${`1${member.phone}`})
-        and placed_at > now() - interval '30 days'`,
-  );
+/**
+ * Orders from the last 30 days placed with the member's phone. Completed ones
+ * post their points now; ones still cooking are linked and post on completion
+ * at the points promised at checkout, so joining mid-order counts that order.
+ */
+export async function claimRecentOrders(member: { id: number; phone: string }): Promise<number> {
+  const fromPhone = sql`regexp_replace(customer_phone, '[^0-9]', '', 'g') in (${member.phone}, ${`1${member.phone}`})
+        and placed_at > now() - interval '30 days'`;
+  await db
+    .update(orders)
+    .set({ loyaltyMemberId: member.id })
+    .where(and(isNull(orders.loyaltyMemberId), inArray(orders.status, [...ACTIVE_STATUSES]), fromPhone));
+  return claimOrders(member.id, fromPhone);
 }
 
 /** Operator override: any completed, unclaimed order, whatever its phone. */
