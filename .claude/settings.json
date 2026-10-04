@@ -1,5 +1,40 @@
 {
   "permissions": {
-    "allow": ["Bash(npx tsx scripts/run-migration.ts:*)"]
+    "allow": [
+      "Bash(npx tsx scripts/run-migration.ts:*)",
+      "Bash(npm run db:migrate *)",
+      "Bash(npm run db:push)",
+      "mcp__Neon__run_sql",
+      "mcp__Neon__run_sql_transaction"
+    ],
+    "ask": [
+      "Bash(npm run db:push *--force*)",
+      "Bash(npx drizzle-kit push *--force*)",
+      "mcp__Neon__delete_*",
+      "mcp__Neon__reset_from_parent",
+      "mcp__Neon__restore_snapshot",
+      "mcp__Neon__finalize_branch_restore"
+    ]
+  },
+  "env": {
+    "NODE_USE_ENV_PROXY": "1"
+  },
+  "sandbox": {
+    "network": {
+      "allowedDomains": ["*.c-14.us-east-1.aws.neon.tech"]
+    }
+  },
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash|mcp__Neon__run_sql|mcp__Neon__run_sql_transaction",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"$CLAUDE_PROJECT_DIR/.claude/hooks/guard-destructive-sql.mjs\""
+          }
+        ]
+      }
+    ]
   }
 }
