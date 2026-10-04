@@ -11,7 +11,7 @@ import {
 } from "@/db";
 import { requireOperator } from "@/lib/auth";
 import Link from "next/link";
-import { ItemForm } from "@/components/admin/item-form";
+import { ItemForm, type OptionState } from "@/components/admin/item-form";
 import { RecipeEditor } from "@/components/admin/recipe-editor";
 import { itemRecipe, recipeIngredients } from "@/lib/recipe-data";
 
@@ -46,13 +46,17 @@ export default async function EditItemPage({
     .from(modifierGroups)
     .orderBy(asc(modifierGroups.sortOrder), asc(modifierGroups.id));
   const allModifiers = await db
-    .select({ id: modifiers.id, groupId: modifiers.groupId })
-    .from(modifiers);
+    .select({ id: modifiers.id, groupId: modifiers.groupId, name: modifiers.name })
+    .from(modifiers)
+    .orderBy(asc(modifiers.sortOrder), asc(modifiers.id));
   const [recipe, allIngredients] = await Promise.all([itemRecipe(item), recipeIngredients()]);
   const links = await db
-    .select({ groupId: itemModifierGroups.groupId })
+    .select()
     .from(itemModifierGroups)
-    .where(eq(itemModifierGroups.itemId, itemId));
+    .where(eq(itemModifierGroups.itemId, itemId))
+    .orderBy(asc(itemModifierGroups.sortOrder), asc(itemModifierGroups.id));
+  const stateOf = (link: (typeof links)[number], modifierId: number): OptionState =>
+    link.hiddenModifierIds.includes(modifierId) ? "hidden" : link.soldOutModifierIds.includes(modifierId) ? "soldOut" : "offered";
 
   return (
     <div>
@@ -79,6 +83,19 @@ export default async function EditItemPage({
               .length,
           }))}
           selectedGroupIds={links.map((l) => l.groupId)}
+          options={links.flatMap((l) => {
+            const group = groups.find((g) => g.id === l.groupId);
+            if (!group) return [];
+            return [
+              {
+                groupId: group.id,
+                groupName: group.name,
+                modifiers: allModifiers
+                  .filter((m) => m.groupId === group.id)
+                  .map((m) => ({ id: m.id, name: m.name, state: stateOf(l, m.id) })),
+              },
+            ];
+          })}
         />
       </div>
 

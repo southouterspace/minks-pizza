@@ -11,7 +11,7 @@ import {
   FieldSet,
 } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
-import { NativeSelect } from "@/components/ui/native-select";
+import { NativeSelect, NativeSelectOption } from "@/components/ui/native-select";
 import { Textarea } from "@/components/ui/textarea";
 import { centsToDollars } from "@/lib/money";
 import { ruleSummary } from "./ui";
@@ -28,6 +28,16 @@ export type ItemFormItem = {
 
 export type ItemFormCategory = { id: number; name: string };
 
+export const OPTION_STATES = { offered: "Offered", hidden: "Not offered", soldOut: "Sold out" } as const;
+export type OptionState = keyof typeof OPTION_STATES;
+
+/** An attached group's options and how this item offers each. */
+export type ItemFormOptions = {
+  groupId: number;
+  groupName: string;
+  modifiers: { id: number; name: string; state: OptionState }[];
+};
+
 export type ItemFormGroup = {
   id: number;
   name: string;
@@ -41,11 +51,13 @@ export function ItemForm({
   allCategories,
   allGroups,
   selectedGroupIds,
+  options = [],
 }: {
   item?: ItemFormItem;
   allCategories: ItemFormCategory[];
   allGroups: ItemFormGroup[];
   selectedGroupIds: number[];
+  options?: ItemFormOptions[];
 }) {
   const selected = new Set(selectedGroupIds);
 
@@ -174,6 +186,44 @@ export function ItemForm({
             </div>
           )}
         </FieldSet>
+
+        {options.length > 0 ? (
+          <FieldSet>
+            <FieldLegend variant="label">Options on this item</FieldLegend>
+            <FieldDescription>
+              Hide an option this item doesn&apos;t come in, or sell it out
+              here only. Other items sharing the group keep it.
+            </FieldDescription>
+            <div className="space-y-2">
+              {options.map((group) => (
+                <details key={group.groupId} open={group.modifiers.some((m) => m.state !== "offered")}>
+                  <summary className="cursor-pointer text-sm">{group.groupName}</summary>
+                  <ul className="mt-1.5 divide-y divide-border rounded-lg border border-border">
+                    {group.modifiers.map((m) => (
+                      <li key={m.id} className="flex items-center justify-between gap-3 px-3.5 py-2">
+                        <label htmlFor={`option-${m.id}`} className="text-sm">
+                          {m.name}
+                        </label>
+                        <NativeSelect
+                          id={`option-${m.id}`}
+                          name={`option-${m.id}`}
+                          size="sm"
+                          defaultValue={m.state}
+                        >
+                          {Object.entries(OPTION_STATES).map(([value, label]) => (
+                            <NativeSelectOption key={value} value={value}>
+                              {label}
+                            </NativeSelectOption>
+                          ))}
+                        </NativeSelect>
+                      </li>
+                    ))}
+                  </ul>
+                </details>
+              ))}
+            </div>
+          </FieldSet>
+        ) : null}
 
         <div className="flex items-center gap-3 border-t border-border pt-5">
           <Button type="submit">{item ? "Save changes" : "Create item"}</Button>

@@ -32,7 +32,7 @@ import { cancelCourier, dispatchCourier } from "@/lib/delivery/dispatch";
 import { COURIER_PROVIDERS, CourierError } from "@/lib/delivery/types";
 import { OrderError } from "@/lib/checkout";
 import { STORE_TIMEZONES } from "@/lib/hours";
-import { GROUP_ROLES, isPlaceable, type GroupRole } from "@/lib/pricing";
+import { GROUP_ROLES, isPlaceable, overridesProblem, type GroupRole } from "@/lib/pricing";
 import { sizeModifiers } from "@/lib/recipe-data";
 import { unitFor } from "@/lib/unit-entry";
 import { KITCHEN_STATIONS, type KitchenStation } from "@/lib/kds";
@@ -602,8 +602,38 @@ export async function saveItem(formData: FormData): Promise<void> {
     isFeatured: data.isFeatured,
   };
 
+  // Overrides are validated before anything is written: there is no transaction to roll back.
+  const [kept, groups, groupMods] = await Promise.all([
+    itemId
+      ? db
+          .select({ groupId: itemModifierGroups.groupId, defaultModifierIds: itemModifierGroups.defaultModifierIds })
+          .from(itemModifierGroups)
+          .where(eq(itemModifierGroups.itemId, itemId))
+      : [],
+    groupIds.length
+      ? db.select().from(modifierGroups).where(inArray(modifierGroups.id, groupIds))
+      : [],
+    groupIds.length
+      ? db.select({ id: modifiers.id, groupId: modifiers.groupId }).from(modifiers).where(inArray(modifiers.groupId, groupIds))
+      : [],
+  ]);
+  const keptDefaults = new Map(kept.map((l) => [l.groupId, l.defaultModifierIds]));
+  const links = groups.map((g) => {
+    const mods = groupMods.filter((m) => m.groupId === g.id);
+    const marked = (state: string) => mods.filter((m) => textField(formData, `option-${m.id}`) === state).map((m) => m.id);
+    const link = {
+      groupId: g.id,
+      sortOrder: g.sortOrder,
+      defaultModifierIds: keptDefaults.get(g.id) ?? [],
+      hiddenModifierIds: marked("hidden"),
+      soldOutModifierIds: marked("soldOut"),
+    };
+    const problem = overridesProblem({ ...g, modifiers: mods }, link);
+    if (problem) throw new Error(problem);
+    return link;
+  });
+
   let savedId: number;
-  let keptDefaults = new Map<number, number[]>();
   if (itemId) {
     const [existing] = await db
       .select({ id: menuItems.id })
@@ -614,11 +644,7 @@ export async function saveItem(formData: FormData): Promise<void> {
       .update(menuItems)
       .set({ ...values, updatedAt: new Date() })
       .where(eq(menuItems.id, itemId));
-    const removed = await db
-      .delete(itemModifierGroups)
-      .where(eq(itemModifierGroups.itemId, itemId))
-      .returning({ groupId: itemModifierGroups.groupId, defaultModifierIds: itemModifierGroups.defaultModifierIds });
-    keptDefaults = new Map(removed.map((l) => [l.groupId, l.defaultModifierIds]));
+    await db.delete(itemModifierGroups).where(eq(itemModifierGroups.itemId, itemId));
     savedId = itemId;
   } else {
     const [last] = await db
@@ -634,21 +660,8 @@ export async function saveItem(formData: FormData): Promise<void> {
     savedId = created.id;
   }
 
-  if (groupIds.length > 0) {
-    const groups = await db
-      .select({ id: modifierGroups.id, sortOrder: modifierGroups.sortOrder })
-      .from(modifierGroups)
-      .where(inArray(modifierGroups.id, groupIds));
-    if (groups.length > 0) {
-      await db.insert(itemModifierGroups).values(
-        groups.map((g) => ({
-          itemId: savedId,
-          groupId: g.id,
-          sortOrder: g.sortOrder,
-          defaultModifierIds: keptDefaults.get(g.id) ?? [],
-        })),
-      );
-    }
+  if (links.length > 0) {
+    await db.insert(itemModifierGroups).values(links.map((l) => ({ ...l, itemId: savedId })));
   }
 
   revalidateMenu();
