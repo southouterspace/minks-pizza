@@ -66,6 +66,9 @@ export async function dispatchCourier(orderId: string, providerId: CourierProvid
   if (order.status === "completed" || order.status === "canceled") {
     throw new CourierError("This order is already closed.");
   }
+  if (order.items.some((i) => i.isAlcoholic && !i.voidedAt)) {
+    throw new CourierError("A courier can't carry alcohol. Void it or make this a pickup.");
+  }
   const base = deliveryRequestFor(order, await getSettings());
 
   // The row id is the external id the provider stores, so it exists first.

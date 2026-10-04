@@ -31,6 +31,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { cn } from "@/lib/utils";
 import { LoyaltyPanel } from "@/components/store/checkout-loyalty";
 import { describeChoice } from "@/lib/pricing";
+import { ALCOHOL_PICKUP_ONLY } from "@/lib/orders";
 
 export type CheckoutConfig = {
   storeName: string;
@@ -98,6 +99,8 @@ export function CheckoutForm({ config }: { config: CheckoutConfig }) {
 
   const belowMinimum =
     orderType === "delivery" && subtotalCents < config.deliveryMinimumCents;
+  const hasAlcohol = quote?.hasAlcohol ?? false;
+  const alcoholBlocked = orderType === "delivery" && hasAlcohol;
 
   if (!ready) {
     return <div className="mx-auto max-w-2xl px-4 py-16 sm:px-6" />;
@@ -192,7 +195,7 @@ export function CheckoutForm({ config }: { config: CheckoutConfig }) {
                   key={value}
                   type="button"
                   variant="outline"
-                  disabled={!enabled}
+                  disabled={!enabled || (value === "delivery" && hasAlcohol && orderType !== "delivery")}
                   aria-pressed={orderType === value}
                   onClick={() => setOrderType(value)}
                   className={cn(
@@ -202,7 +205,7 @@ export function CheckoutForm({ config }: { config: CheckoutConfig }) {
                 >
                   {label}
                   <span className="text-xs font-normal text-muted-foreground">
-                    {enabled ? `Ready in ~${minutes} min` : "Unavailable"}
+                    {!enabled ? "Unavailable" : value === "delivery" && hasAlcohol ? "Not for alcohol" : `Ready in ~${minutes} min`}
                   </span>
                 </Button>
               ))}
@@ -450,6 +453,11 @@ export function CheckoutForm({ config }: { config: CheckoutConfig }) {
                 to your cart.
               </p>
             ) : null}
+            {alcoholBlocked ? (
+              <p className="mt-4 text-sm text-warning" data-testid="alcohol-pickup-only">
+                {ALCOHOL_PICKUP_ONLY}
+              </p>
+            ) : null}
             {rewardError ? (
               <p className="mt-4 text-sm text-destructive">{rewardError}</p>
             ) : null}
@@ -462,7 +470,13 @@ export function CheckoutForm({ config }: { config: CheckoutConfig }) {
             <Button
               type="submit"
               disabled={
-                pending || quotePending || totalCents === null || belowMinimum || !config.acceptingOrders || rewardError !== null
+                pending ||
+                quotePending ||
+                totalCents === null ||
+                belowMinimum ||
+                alcoholBlocked ||
+                !config.acceptingOrders ||
+                rewardError !== null
               }
               className="mt-5 h-11! w-full"
               data-testid="place-order"
