@@ -96,6 +96,17 @@ export function describeChoice(m: LineModifier): string {
   return parts.length ? `${m.modifierName} (${parts.join(", ")})` : m.modifierName;
 }
 
+/** The options a plain plate comes with and what they add to its price; a default topping adds nothing. */
+export function plateDefaults(
+  groups: readonly { role: GroupRole; modifiers: readonly { id: number; priceDeltaCents: number; isDefault: boolean }[] }[],
+): { ids: number[]; priceCents: number } {
+  const picked = groups.flatMap((g) => g.modifiers.filter((m) => m.isDefault).map((m) => ({ m, placeable: isPlaceable(g.role) })));
+  return {
+    ids: picked.map(({ m }) => m.id),
+    priceCents: picked.reduce((sum, { m, placeable }) => sum + (placeable ? 0 : m.priceDeltaCents), 0),
+  };
+}
+
 export type MenuGroup = {
   id: number;
   name: string;
@@ -137,7 +148,7 @@ export function applyBps(cents: number, bps: number): number {
   return roundHalfUp((cents * bps) / 10_000);
 }
 
-function amountWeight(mod: MenuModifier, amount: Amount, policy: PricingPolicy): number {
+function portionWeight(mod: MenuModifier, amount: Amount, policy: PricingPolicy): number {
   switch (amount) {
     case "none":
       return 0;
@@ -149,10 +160,23 @@ function amountWeight(mod: MenuModifier, amount: Amount, policy: PricingPolicy):
   }
 }
 
+/** A default topping comes with the pie, so only what an extra portion adds over a regular one is charged. */
+function amountWeight(mod: MenuModifier, amount: Amount, policy: PricingPolicy): number {
+  const w = portionWeight(mod, amount, policy);
+  return mod.isDefault ? Math.max(0, w - mod.priceDeltaCents) : w;
+}
+
+/** An item's own defaults in a group replace the group's. */
+export function withItemDefaults<M extends { id: number; isDefault: boolean }>(mods: readonly M[], itemDefaultIds: readonly number[]): M[] {
+  if (itemDefaultIds.length === 0) return [...mods];
+  return mods.map((m) => ({ ...m, isDefault: itemDefaultIds.includes(m.id) }));
+}
+
 /**
  * unit = base + Σ modifier.priceDeltaCents, where each snapshot carries what
  * it was charged: an option its delta; a placed topping its weight w (its
- * delta, its extra price, or 0 for "none") when whole, and for a half
+ * delta, its extra price, or 0 for "none", less its delta when the item
+ * comes with it) when whole, and for a half
  * `applyBps(w, halfToppingPriceBps)` under `average`, or under `highest` w
  * on the dearer side (ties to the left) and 0 on the other.
  */

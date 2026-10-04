@@ -25,7 +25,7 @@ import {
   recipeLineFromRow,
   type RecipeContext,
 } from "@/lib/recipes";
-import { isPlaceable, type GroupRole, type LineModifier } from "@/lib/pricing";
+import { isPlaceable, plateDefaults, withItemDefaults, type GroupRole, type LineModifier } from "@/lib/pricing";
 import { DEFAULT_PORTIONS } from "@/lib/recipes";
 import type { BaseUnit } from "@/lib/units";
 
@@ -411,7 +411,12 @@ export async function marginReport(): Promise<MarginReport> {
       .innerJoin(categories, eq(categories.id, menuItems.categoryId))
       .orderBy(asc(categories.sortOrder), asc(categories.id), asc(menuItems.sortOrder), asc(menuItems.id)),
     db
-      .select({ itemId: itemModifierGroups.itemId, groupId: itemModifierGroups.groupId, role: modifierGroups.role })
+      .select({
+        itemId: itemModifierGroups.itemId,
+        groupId: itemModifierGroups.groupId,
+        role: modifierGroups.role,
+        defaultModifierIds: itemModifierGroups.defaultModifierIds,
+      })
       .from(itemModifierGroups)
       .innerJoin(modifierGroups, eq(modifierGroups.id, itemModifierGroups.groupId))
       .orderBy(asc(itemModifierGroups.sortOrder), asc(itemModifierGroups.id)),
@@ -440,18 +445,18 @@ export async function marginReport(): Promise<MarginReport> {
 
   const rows = items.flatMap((item) => {
     const groups = links.filter((l) => l.itemId === item.id);
-    const inGroups = (kind: "size" | "other") =>
+    const sizes = groups.filter((g) => g.role === "size").flatMap((g) => mods.filter((m) => m.groupId === g.groupId));
+    const defaults = plateDefaults(
       groups
-        .filter((g) => (g.role === "size") === (kind === "size"))
-        .flatMap((g) => mods.filter((m) => m.groupId === g.groupId));
-    const defaults = inGroups("other").filter((m) => m.isDefault);
-    const sizes = inGroups("size");
+        .filter((g) => g.role !== "size")
+        .map((g) => ({ role: g.role, modifiers: withItemDefaults(mods.filter((m) => m.groupId === g.groupId), g.defaultModifierIds) })),
+    );
     const hasRecipe = book.has(ownerKey({ kind: "item", id: item.id }));
-    const priceBase = item.basePriceCents + defaults.reduce((s, m) => s + m.priceDeltaCents, 0);
+    const priceBase = item.basePriceCents + defaults.priceCents;
     return (sizes.length ? sizes : [null]).map((size): MarginRow => {
       const priceCents = priceBase + (size?.priceDeltaCents ?? 0);
       const plateCostCents = hasRecipe
-        ? plateCost(item.id, size?.id ?? null, defaults.map((m) => m.id), ctx, unitCosts)
+        ? plateCost(item.id, size?.id ?? null, defaults.ids, ctx, unitCosts)
         : null;
       const marginCents = plateCostCents === null ? null : priceCents - plateCostCents;
       const marginBps = marginCents === null ? null : ratioBps(marginCents, priceCents);

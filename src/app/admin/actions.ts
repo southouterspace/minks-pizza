@@ -601,6 +601,7 @@ export async function saveItem(formData: FormData): Promise<void> {
   };
 
   let savedId: number;
+  let keptDefaults = new Map<number, number[]>();
   if (itemId) {
     const [existing] = await db
       .select({ id: menuItems.id })
@@ -611,9 +612,11 @@ export async function saveItem(formData: FormData): Promise<void> {
       .update(menuItems)
       .set({ ...values, updatedAt: new Date() })
       .where(eq(menuItems.id, itemId));
-    await db
+    const removed = await db
       .delete(itemModifierGroups)
-      .where(eq(itemModifierGroups.itemId, itemId));
+      .where(eq(itemModifierGroups.itemId, itemId))
+      .returning({ groupId: itemModifierGroups.groupId, defaultModifierIds: itemModifierGroups.defaultModifierIds });
+    keptDefaults = new Map(removed.map((l) => [l.groupId, l.defaultModifierIds]));
     savedId = itemId;
   } else {
     const [last] = await db
@@ -640,6 +643,7 @@ export async function saveItem(formData: FormData): Promise<void> {
           itemId: savedId,
           groupId: g.id,
           sortOrder: g.sortOrder,
+          defaultModifierIds: keptDefaults.get(g.id) ?? [],
         })),
       );
     }

@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { asc, eq, inArray } from "drizzle-orm";
 import { categories, db, itemModifierGroups, menuItems, modifierGroups, modifiers } from "@/db";
 import { rejected, type Failure, type PosMenu, type SubmitLine } from "@/lib/orders";
-import { PricingError, priceLine, type MenuItem, type PricingPolicy } from "@/lib/pricing";
+import { PricingError, priceLine, withItemDefaults, type MenuItem, type PricingPolicy } from "@/lib/pricing";
 import { getSettings, policyOf } from "@/lib/settings-server";
 
 async function loadMenuItems(itemIds?: number[]): Promise<(MenuItem & { categoryId: number })[]> {
@@ -54,16 +54,19 @@ async function loadMenuItems(itemIds?: number[]): Promise<(MenuItem & { category
             role: g.role,
             minSelect: g.minSelect,
             maxSelect: g.maxSelect,
-            modifiers: mods
-              .filter((m) => m.groupId === g.id)
-              .map((m) => ({
-                id: m.id,
-                name: m.name,
-                priceDeltaCents: m.priceDeltaCents,
-                extraPriceDeltaCents: m.extraPriceDeltaCents,
-                isDefault: m.isDefault,
-                isAvailable: m.isAvailable,
-              })),
+            modifiers: withItemDefaults(
+              mods
+                .filter((m) => m.groupId === g.id)
+                .map((m) => ({
+                  id: m.id,
+                  name: m.name,
+                  priceDeltaCents: m.priceDeltaCents,
+                  extraPriceDeltaCents: m.extraPriceDeltaCents,
+                  isDefault: m.isDefault,
+                  isAvailable: m.isAvailable,
+                })),
+              l.defaultModifierIds,
+            ),
           },
         ];
       }),
