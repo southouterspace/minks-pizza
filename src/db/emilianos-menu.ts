@@ -175,14 +175,6 @@ const SAUCES: [string, string | null, readonly [number, number, number, number]]
   ["No Sauce", null, SAUCE],
 ];
 
-/** Free swaps for a removed ingredient, Toast's list with its abbreviations spelled out. */
-const SWAPS = [
-  "Bacon", "Balsamic Drizzle", "BBQ Chicken", "Bell Pepper", "Black Olives", "Buffalo Chicken", "Cheddar",
-  "Extra Cheese", "Feta", "Fresh Basil", "Fresh Garlic", "Garlic & Basil Olive Oil", "Ham", "Hamburger Beef",
-  "Italian Sausage", "Jalapeño", "Pepperoni", "Pineapple", "Red Onion", "Ricotta", "Salami", "Sautéed Mushroom",
-  "Spinach", "Texas Hot Honey", "Tomato", "White Onion",
-];
-
 const DRESSINGS: [string, string | null][] = [
   ["Italian Dressing", "Italian dressing"],
   ["Caesar Dressing", "Caesar dressing"],
@@ -241,7 +233,6 @@ const GROUPS = {
       sized: (size) => [[ingredient, at(size, oz)]],
     })),
   },
-  swap: { name: "Swap a Topping (no charge)", role: "option", min: 0, max: 1, options: opts(SWAPS) },
   cookTime: { name: "Cook Time", role: "option", min: 0, max: 1, options: opts(["Light", "Well Done"]) },
   dressing: {
     name: "Dressing",
@@ -310,7 +301,7 @@ const IMG = "https://d1w7312wesee68.cloudfront.net";
 const TOAST_IMG = (path: string, file: string) =>
   `${IMG}/${path}/resize:fit:1080:1080/plain/s3://toasttab/menu_service/restaurants/8f10c155-b659-4079-9e8d-32163578651e/MenuItem/${file}.jpg`;
 
-type Pie = "standard" | "bbq" | "emiliano" | "texan" | "whiteTrio";
+type Pie = "standard" | "bbq" | "emiliano" | "whiteTrio";
 
 /**
  * What a pie uses at a size beyond its crust, sauce and toppings, which are
@@ -326,16 +317,12 @@ function pieRecipe(pie: Pie, size: Size): Use[] {
       return [...base, ["Red pepper flakes", s(PINCH)]];
     case "emiliano":
       return [["Mozzarella", s(CHEESE, 0.75)], ["Red sauce", s(SAUCE, 0.5)]];
-    case "texan":
-      // Toast has no description for the Texan Rattlesnake; only the crust is known.
-      return [];
     case "whiteTrio":
       return [...base, ["Pecorino Romano", s(PINCH, 3)]];
   }
 }
 
 const PIE_GROUPS: GroupKey[] = ["size", "crust", "sauce", "toppings", "cookTime"];
-const SPECIALTY_GROUPS: GroupKey[] = ["size", "crust", "sauce", "toppings", "swap", "cookTime"];
 
 const PIZZAS: Item[] = [
   {
@@ -359,7 +346,7 @@ const PIZZAS: Item[] = [
     description: "BBQ chicken, red onion, bacon, red pepper flakes, and mozzarella",
     cents: 1799,
     image: TOAST_IMG("8B3pV8Zsomp20yNZBqc44WJu4FG0a6XQMu2TMJzzuos", "e3a4cdaf-2108-46b7-8d65-1c509d78eb39"),
-    groups: SPECIALTY_GROUPS,
+    groups: PIE_GROUPS,
     defaults: ["BBQ Sauce", "Chicken", "Red Onion", "Bacon"],
     sized: (size) => pieRecipe("bbq", size),
   },
@@ -368,7 +355,7 @@ const PIZZAS: Item[] = [
     description: "Garlic and basil olive oil with dollops of mozzarella and red sauce",
     cents: 1799,
     image: TOAST_IMG("3h4DztE_-R4DESgLXh9t6fU8FK2pwKLMeBUO8CAAu7A", "fc4ae710-8d26-4818-ac4e-35e4bd5c6e24"),
-    groups: SPECIALTY_GROUPS,
+    groups: PIE_GROUPS,
     defaults: ["Garlic & Basil Olive Oil", "Fresh Garlic", "Fresh Basil"],
     sized: (size) => pieRecipe("emiliano", size),
   },
@@ -377,7 +364,7 @@ const PIZZAS: Item[] = [
     description: "Ham, pineapple, red sauce, and mozzerella",
     cents: 1599,
     image: TOAST_IMG("cEsk-wg4FH93MTfpif30F2nQ2X2eRdym4zIcHt50Pv4", "09a5126d-9298-4a84-93cd-714318659ed5"),
-    groups: SPECIALTY_GROUPS,
+    groups: PIE_GROUPS,
     defaults: ["Red Sauce", "Ham", "Pineapple"],
     sized: (size) => pieRecipe("standard", size),
   },
@@ -386,7 +373,7 @@ const PIZZAS: Item[] = [
     description: "Hot honey buffalo sauce, chicken, bacon, and mozzarella",
     cents: 1799,
     image: TOAST_IMG("TbGZw2mNe4RDanvZPPZj7QEAliQ2gOn2GhoSQW6dL7k", "9e3a0455-c2d3-44cd-8cfa-578a737981a2"),
-    groups: SPECIALTY_GROUPS,
+    groups: PIE_GROUPS,
     defaults: ["Buffalo Sauce", "Chicken", "Bacon", "Texas Hot Honey"],
     sized: (size) => pieRecipe("standard", size),
   },
@@ -394,7 +381,7 @@ const PIZZAS: Item[] = [
     name: "Meat Lovers",
     description: "Pepperoni, ham, hamburger beef, Italian sausage, bacon, mozzarella, and red sauce",
     cents: 1799,
-    groups: SPECIALTY_GROUPS,
+    groups: PIE_GROUPS,
     defaults: ["Red Sauce", "Pepperoni", "Ham", "Hamburger Beef", "Italian Sausage", "Bacon"],
     sized: (size) => pieRecipe("standard", size),
   },
@@ -403,7 +390,7 @@ const PIZZAS: Item[] = [
     description: "Pepperoni, ham, sausage, hamburger beef, bell pepper, red onion, black olives, mushroom, mozzarella, and red sauce",
     cents: 1799,
     image: TOAST_IMG("FBnu30TfEH2cBiqu3PLXvjeUokxQSPdX3vtEyEAk4ac", "c456101c-e8d3-4826-8f80-54d85d1009d4"),
-    groups: SPECIALTY_GROUPS,
+    groups: PIE_GROUPS,
     defaults: ["Red Sauce", "Pepperoni", "Ham", "Italian Sausage", "Hamburger Beef", "Bell Pepper", "Red Onion", "Black Olives", "Fresh Mushroom"],
     sized: (size) => pieRecipe("standard", size),
   },
@@ -412,13 +399,14 @@ const PIZZAS: Item[] = [
     cents: 1799,
     groups: PIE_GROUPS,
     defaults: ["Red Sauce"],
-    sized: (size) => pieRecipe("texan", size),
+    // Toast has no description for the Texan Rattlesnake: a cheese pie until its toppings are known.
+    sized: (size) => pieRecipe("standard", size),
   },
   {
     name: "Veggie Lovers",
     description: "Bell pepper, onion, black olives, sauteed mushroom, mozzarella, and red sauce",
     cents: 1799,
-    groups: SPECIALTY_GROUPS,
+    groups: PIE_GROUPS,
     defaults: ["Red Sauce", "Bell Pepper", "Red Onion", "Black Olives", "Fresh Mushroom"],
     sized: (size) => pieRecipe("standard", size),
   },

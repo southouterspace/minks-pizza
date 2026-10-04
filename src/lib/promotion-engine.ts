@@ -237,14 +237,20 @@ function applyBogo(
 
 type Bundle = Extract<PromotionReward, { type: "bundle" }>;
 
-/** A unit's price under a bundle: the deal price plus every topping charge past the included ones, dearest included first. */
+/**
+ * A unit's price under a bundle: the deal price plus its crust charge (a
+ * gluten-free upgrade is never part of the deal) and every topping charge
+ * past the included ones, dearest included first.
+ */
 function bundleUnitPrice(line: EvalLine, reward: Bundle): number {
-  if (reward.includedToppings === null) return reward.priceCents;
+  const sum = (charges: number[]) => charges.reduce((total, c) => total + c, 0);
+  const crust = sum(line.modifiers.filter((m) => m.role === "crust").map((m) => m.priceDeltaCents));
+  if (reward.includedToppings === null) return reward.priceCents + crust;
   const charges = line.modifiers
     .filter((m) => m.kind === "placed" && m.role === "topping" && m.amount !== "none")
     .map((m) => m.priceDeltaCents)
     .sort((a, b) => b - a);
-  return reward.priceCents + charges.slice(reward.includedToppings).reduce((sum, c) => sum + c, 0);
+  return reward.priceCents + crust + sum(charges.slice(reward.includedToppings));
 }
 
 /**
