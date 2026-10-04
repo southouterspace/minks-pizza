@@ -4,6 +4,7 @@ import { useState } from "react";
 import { Plus } from "lucide-react";
 import type { CategoryView, MenuItemView } from "@/lib/menu";
 import { formatCents } from "@/lib/money";
+import { pricesAt } from "@/lib/pricing";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent } from "@/components/ui/card";
 import { ItemDialog } from "./item-dialog";
@@ -104,16 +105,21 @@ export function MenuBrowser({
   );
 }
 
-/** Cheapest required selections (e.g. smallest size) for "from $X" pricing. */
+/**
+ * Cheapest required selections (e.g. smallest size) for "from $X" pricing,
+ * trying each size since the other options can cost more on some sizes.
+ */
 function minRequiredDelta(item: MenuItemView): number {
-  let delta = 0;
-  for (const group of item.modifierGroups) {
-    if (group.minSelect > 0 && group.modifiers.length > 0) {
-      const cheapest = [...group.modifiers].sort(
-        (a, b) => a.priceDeltaCents - b.priceDeltaCents,
-      )[0];
-      delta += cheapest.priceDeltaCents * group.minSelect;
-    }
-  }
-  return delta;
+  const sizeGroup = item.modifierGroups.find((g) => g.role === "size");
+  const sizeIds = sizeGroup?.minSelect && sizeGroup.modifiers.length ? sizeGroup.modifiers.map((m) => m.id) : [null];
+  return Math.min(
+    ...sizeIds.map((sizeId) =>
+      item.modifierGroups.reduce((delta, group) => {
+        if (group.minSelect === 0 || group.modifiers.length === 0) return delta;
+        const options = group === sizeGroup ? group.modifiers.filter((m) => m.id === sizeId) : group.modifiers;
+        const cheapest = Math.min(...options.map((m) => pricesAt(m, sizeId).priceDeltaCents));
+        return delta + cheapest * group.minSelect;
+      }, 0),
+    ),
+  );
 }

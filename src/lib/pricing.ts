@@ -189,6 +189,12 @@ export function withItemDefaults<M extends { id: number; isDefault: boolean }>(m
   return mods.map((m) => ({ ...m, isDefault: itemDefaultIds.includes(m.id) }));
 }
 
+/** The size picked among `selections`, or null when there is none. */
+export function chosenSize(groups: readonly MenuGroup[], selections: readonly Selection[]): number | null {
+  const sizeIds = new Set(groups.filter((g) => g.role === "size").flatMap((g) => g.modifiers.map((m) => m.id)));
+  return selections.find((s) => sizeIds.has(s.modifierId))?.modifierId ?? null;
+}
+
 /**
  * unit = base + Σ modifier.priceDeltaCents, where each snapshot carries what
  * it was charged at the chosen size's prices (`pricesAt`), whatever order
@@ -211,7 +217,7 @@ export function priceLine(
     for (const mod of group.modifiers) owner.set(mod.id, { group, mod });
   }
 
-  const sizeId = selections.find((s) => owner.get(s.modifierId)?.group.role === "size")?.modifierId ?? null;
+  const sizeId = chosenSize(item.groups, selections);
 
   const seen = new Set<number>();
   const counts = new Map<number, number>();

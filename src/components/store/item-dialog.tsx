@@ -22,8 +22,10 @@ import { Textarea } from "@/components/ui/textarea";
 import { cn } from "@/lib/utils";
 import {
   AMOUNT_LABEL,
+  chosenSize,
   isPlaceable,
   priceLine,
+  pricesAt,
   PricingError,
   type Amount,
   type MenuItem,
@@ -61,10 +63,11 @@ const optionRowClass = (checked: boolean) =>
       : "border-border hover:border-foreground/30",
   );
 
-/** What one choice adds on its own, for the row's price hint. */
-function selectionPrice(item: MenuItemView, mod: ModifierView, choice: ToppingChoice): number {
-  const priced = priceLine(pricingItem(item, true), [{ modifierId: mod.id, ...choice }], item.policy);
-  return priced.unitPriceCents - item.basePriceCents;
+/** What one choice adds on its own at the chosen size, for the row's price hint. */
+function selectionPrice(item: MenuItemView, mod: ModifierView, choice: ToppingChoice, sizeId: number | null): number {
+  const size: Selection[] = sizeId === null ? [] : [{ modifierId: sizeId, ...DEFAULT_CHOICE }];
+  const priced = priceLine(pricingItem(item, true), [...size, { modifierId: mod.id, ...choice }], item.policy);
+  return priced.modifiers.find((m) => m.modifierId === mod.id)?.priceDeltaCents ?? 0;
 }
 
 const PLACEMENT_OPTIONS: { value: Placement; label: string }[] = [
@@ -260,6 +263,8 @@ export function ItemDialog({
   const chosen = priced.modifiers;
   const unitPrice = priced.unitPriceCents;
 
+  const sizeId = chosenSize(item.modifierGroups, selections);
+
   const violations = item.modifierGroups.filter((g) => {
     const count = g.modifiers.filter((m) => isOn(selected.get(m.id))).length;
     return count < g.minSelect;
@@ -316,7 +321,7 @@ export function ItemDialog({
                         mod={mod}
                         checked={isOn(choice)}
                         choice={shown}
-                        priceCents={selectionPrice(item, mod, shown)}
+                        priceCents={selectionPrice(item, mod, shown, sizeId)}
                         onToggle={() => toggle(group.id, mod.id)}
                         onChoice={(patch) => setChoice(mod.id, patch)}
                       />
@@ -335,15 +340,16 @@ export function ItemDialog({
                 >
                   {group.modifiers.map((mod) => {
                     const checked = selected.has(mod.id);
+                    const priceCents = pricesAt(mod, sizeId).priceDeltaCents;
                     return (
                       <label key={mod.id} className={optionRowClass(checked)}>
                         <span className="flex items-center gap-3">
                           <RadioGroupItem value={mod.id} />
                           {mod.name}
                         </span>
-                        {mod.priceDeltaCents !== 0 ? (
+                        {priceCents !== 0 ? (
                           <span className="shrink-0 tabular-nums text-muted-foreground">
-                            +{formatCents(mod.priceDeltaCents)}
+                            +{formatCents(priceCents)}
                           </span>
                         ) : null}
                       </label>
@@ -354,6 +360,7 @@ export function ItemDialog({
                 <div className="mt-3 grid gap-2">
                   {group.modifiers.map((mod) => {
                     const checked = selected.has(mod.id);
+                    const priceCents = pricesAt(mod, sizeId).priceDeltaCents;
                     return (
                       <label key={mod.id} className={optionRowClass(checked)}>
                         <span className="flex items-center gap-3">
@@ -363,9 +370,9 @@ export function ItemDialog({
                           />
                           {mod.name}
                         </span>
-                        {mod.priceDeltaCents !== 0 ? (
+                        {priceCents !== 0 ? (
                           <span className="shrink-0 tabular-nums text-muted-foreground">
-                            +{formatCents(mod.priceDeltaCents)}
+                            +{formatCents(priceCents)}
                           </span>
                         ) : null}
                       </label>
