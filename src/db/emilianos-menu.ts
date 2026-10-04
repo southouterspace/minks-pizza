@@ -8,15 +8,21 @@
  * applied to every pie), one shared Crust group in place of Toast's separate
  * 12in gluten-free item, and one shared placeable Toppings group in place of
  * Toast's nested Whole / Left / Right groups. Recipes are written per size.
- * Toast's "20 oz bottles" and "2L" categories become one Drinks category,
- * each soda one item with a Bottle Size group (2 Liter +$1).
+ *
+ * Categories are where a customer browses: Pizza, Calzones, Wings,
+ * Appetizers, Salads, Desserts, Drinks, Sauces & Dressings. A size or count
+ * is a shared size-role group, not its own item or category. Toast's
+ * "20 oz bottles" and "2L" categories become Drinks, one item per drink with
+ * a Bottle Size group (2 Liter +$1); Gatorade has no 2-liter, so it hides
+ * that option. Toast's 5 and 10 count wings become one Jumbo Wings item with
+ * a Wing Count group (10 Count +$7).
  *
  * Toast has no portions or costs: recipe quantities and ingredient costs
  * below are estimates for the operator to correct in Inventory.
  */
 import { eq, inArray, notInArray } from "drizzle-orm";
 import type { NeonHttpDatabase } from "drizzle-orm/neon-http";
-import type { GroupRole } from "../lib/pricing";
+import { overridesProblem, type GroupRole } from "../lib/pricing";
 import type { KitchenStation } from "../lib/kds";
 import { promotionRewardSchema } from "../lib/promotion-schema";
 import type { BaseUnit } from "../lib/units";
@@ -287,6 +293,16 @@ const GROUPS = {
       ] as const
     ).map(([name, ingredient, oz]) => ({ name, cents: TOPPING_CENTS, recipe: [[ingredient, oz]] })),
   },
+  wingCount: {
+    name: "Wing Count",
+    role: "size",
+    min: 1,
+    max: 1,
+    options: [
+      { name: "5 Count", isDefault: true },
+      { name: "10 Count", cents: 700 },
+    ],
+  },
 } satisfies Record<string, Group>;
 
 type GroupKey = keyof typeof GROUPS;
@@ -304,6 +320,8 @@ type Item = {
   groups?: GroupKey[];
   /** What the item comes with, by option name across its groups; preselected and removable. */
   defaults?: string[];
+  /** Options of its groups the item doesn't offer, by option name. */
+  hidden?: string[];
   recipe?: Use[];
   /** Usage per size, one set of lines per option of the item's Size group. */
   sized?: (size: Size) => Use[];
@@ -436,7 +454,7 @@ const PIZZAS: Item[] = [
   },
 ];
 
-/** A soda Toast sells as separate 20 oz and 2L items, as one item with a Bottle Size. */
+/** A drink Toast sells as separate 20 oz and 2L items, as one item with a Bottle Size. */
 const bottled = (name: string, bottle: string, twoLiter: string, description: string): Item => ({
   name,
   description,
@@ -446,6 +464,44 @@ const bottled = (name: string, bottle: string, twoLiter: string, description: st
 });
 
 const CATEGORIES: Category[] = [
+  { name: "Pizza", station: "pizza", items: PIZZAS },
+  {
+    name: "Calzones",
+    station: "pizza",
+    items: [
+      {
+        name: "Create Your Own Calzone",
+        description: "Create Your Own Calzone",
+        cents: 1299,
+        groups: ["calzoneToppings"],
+        recipe: [["Dough ball 14in", 1], ["Mozzarella", 4], ["Red sauce", 2]],
+      },
+      {
+        name: "The Original Calzone",
+        description: "Mozzarella, Ricotta, and Ham. Served with a side of Marinara",
+        cents: 1299,
+        groups: ["calzoneToppings"],
+        recipe: [["Dough ball 14in", 1], ["Mozzarella", 4], ["Ricotta", 3], ["Ham", 3], ["Red sauce", 2]],
+      },
+    ],
+  },
+  {
+    name: "Wings",
+    station: "kitchen",
+    items: [
+      {
+        name: "Jumbo Wings",
+        description: "Big, crispy, and full of flavor. Served with Ranch: one cup with 5, two with 10.",
+        cents: 799,
+        image: TOAST_IMG("CUgBl3OkSwZe-lYbRadfE-anvUDwjvu90l9jv4PZXgc", "8f6a8de0-922e-468f-af8d-e5e3be92bf73"),
+        groups: ["wingCount", "wingFlavor"],
+        bySize: {
+          "5 Count": [["Jumbo chicken wing", 5], ["Ranch dressing", 2]],
+          "10 Count": [["Jumbo chicken wing", 10], ["Ranch dressing", 4]],
+        },
+      },
+    ],
+  },
   {
     name: "Appetizers",
     station: "kitchen",
@@ -509,40 +565,6 @@ const CATEGORIES: Category[] = [
       },
     ],
   },
-  { name: "Pizza", station: "pizza", items: PIZZAS },
-  {
-    name: "Jumbo Wings",
-    station: "kitchen",
-    items: [
-      {
-        name: "5 Count Jumbo Wings",
-        description: "5 Big, Crispy, and Full of Flavor Wings. Served with a side of Ranch.",
-        cents: 799,
-        image: TOAST_IMG("CUgBl3OkSwZe-lYbRadfE-anvUDwjvu90l9jv4PZXgc", "8f6a8de0-922e-468f-af8d-e5e3be92bf73"),
-        groups: ["wingFlavor"],
-        recipe: [["Jumbo chicken wing", 5], ["Ranch dressing", 2]],
-      },
-      {
-        name: "10 Count Jumbo Wings",
-        description: "10 Big, crispy, and full of flavor. Served with a side of 2 Ranch cups",
-        cents: 1499,
-        image: TOAST_IMG("ED6DuWj41U58TWswTpruOY1aE3oHIZKEELzIkqqrY5E", "dfee9046-06f4-4d9d-8306-68d6a0fde35d"),
-        groups: ["wingFlavor"],
-        recipe: [["Jumbo chicken wing", 10], ["Ranch dressing", 4]],
-      },
-    ],
-  },
-  {
-    name: "Drinks",
-    station: "counter",
-    items: [
-      bottled("Pepsi", "Pepsi 20oz", "Pepsi 2L", "Coca-Cola Original Taste — the crisp, refreshing taste you know and love"),
-      bottled("Pepsi Zero Sugar", "Pepsi Zero Sugar 20oz", "Pepsi Zero 2L", "Enjoy the great taste of Coca-Cola with zero sugar, zero calories"),
-      bottled("Starry", "Starry 20oz", "Starry 2L", "Classic, cool, crisp lemon-lime flavored taste that's caffeine free"),
-      // Toast has no 2-liter Gatorade, so it stays a single-size item.
-      { name: "Gatorade 20oz", cents: 299, recipe: [["Gatorade 20oz", 1]] },
-    ],
-  },
   {
     name: "Desserts",
     station: "counter",
@@ -555,35 +577,26 @@ const CATEGORIES: Category[] = [
     ],
   },
   {
-    name: "Sauce/Dressings",
+    name: "Drinks",
+    station: "counter",
+    items: [
+      bottled("Pepsi", "Pepsi 20oz", "Pepsi 2L", "Coca-Cola Original Taste — the crisp, refreshing taste you know and love"),
+      bottled("Pepsi Zero Sugar", "Pepsi Zero Sugar 20oz", "Pepsi Zero 2L", "Enjoy the great taste of Coca-Cola with zero sugar, zero calories"),
+      bottled("Starry", "Starry 20oz", "Starry 2L", "Classic, cool, crisp lemon-lime flavored taste that's caffeine free"),
+      // Toast has no 2-liter Gatorade.
+      { name: "Gatorade", cents: 299, groups: ["bottleSize"], hidden: ["2 Liter"], bySize: { "20 oz": [["Gatorade 20oz", 1]] } },
+    ],
+  },
+  {
+    name: "Sauces & Dressings",
     station: "counter",
     items: [
       { name: "Ranch", cents: 99, recipe: [["Ranch dressing", 2]] },
-      { name: "Ceasar", cents: 99, recipe: [["Caesar dressing", 2]] },
+      { name: "Caesar", cents: 99, recipe: [["Caesar dressing", 2]] },
       { name: "Italian", cents: 99, recipe: [["Italian dressing", 2]] },
       { name: "Greek", cents: 99, recipe: [["Greek vinaigrette", 2]] },
       { name: "Buffalo", cents: 99, recipe: [["Buffalo sauce", 2]] },
       { name: "Marinara", cents: 99, recipe: [["Red sauce", 2]] },
-    ],
-  },
-  {
-    name: "Calzones",
-    station: "pizza",
-    items: [
-      {
-        name: "Create Your Own Calzone",
-        description: "Create Your Own Calzone",
-        cents: 1299,
-        groups: ["calzoneToppings"],
-        recipe: [["Dough ball 14in", 1], ["Mozzarella", 4], ["Red sauce", 2]],
-      },
-      {
-        name: "The Original Calzone",
-        description: "Mozzarella, Ricotta, and Ham. Served with a side of Marinara",
-        cents: 1299,
-        groups: ["calzoneToppings"],
-        recipe: [["Dough ball 14in", 1], ["Mozzarella", 4], ["Ricotta", 3], ["Ham", 3], ["Red sauce", 2]],
-      },
     ],
   },
 ];
@@ -743,11 +756,25 @@ export async function importEmilianosMenu(db: Db): Promise<ImportSummary> {
 
   const links = flat.flatMap(({ item }, i) => {
     const defaults = new Set(item.defaults);
+    const hidden = new Set(item.hidden);
     const links = (item.groups ?? []).map((key, sortOrder) => {
-      const picked = options.flatMap(({ key: k, option }, j) => (k === key && defaults.delete(option.name) ? [modifierId[j]] : []));
-      return { itemId: itemRows[i].id, groupId: groupId.get(key)!, sortOrder, defaultModifierIds: picked };
+      const ids = (names: Set<string>) =>
+        options.flatMap(({ key: k, option }, j) => (k === key && names.delete(option.name) ? [modifierId[j]] : []));
+      const link = {
+        itemId: itemRows[i].id,
+        groupId: groupId.get(key)!,
+        sortOrder,
+        defaultModifierIds: ids(defaults),
+        hiddenModifierIds: ids(hidden),
+      };
+      const g: Group = GROUPS[key];
+      const mods = options.flatMap(({ key: k }, j) => (k === key ? [{ id: modifierId[j] }] : []));
+      const problem = overridesProblem({ name: g.name, minSelect: g.min, modifiers: mods }, { ...link, soldOutModifierIds: [] });
+      if (problem) throw new Error(`"${item.name}": ${problem}`);
+      return link;
     });
     if (defaults.size > 0) throw new Error(`"${item.name}" defaults to options it doesn't offer: ${[...defaults].join(", ")}`);
+    if (hidden.size > 0) throw new Error(`"${item.name}" hides options its groups don't have: ${[...hidden].join(", ")}`);
     return links;
   });
   if (links.length) await db.insert(schema.itemModifierGroups).values(links);
@@ -761,7 +788,7 @@ export async function importEmilianosMenu(db: Db): Promise<ImportSummary> {
     if (sized) for (const s of sizeOptions.filter((o) => o.key === sizeKey)) addLines(owner, sized(s.size), s.id);
     if (bySize) {
       options.forEach(({ key, option }, j) => {
-        if (key !== sizeKey) return;
+        if (key !== sizeKey || item.hidden?.includes(option.name)) return;
         const uses = bySize[option.name];
         if (!uses) throw new Error(`"${item.name}" has no recipe for its "${option.name}" size`);
         addLines(owner, uses, modifierId[j]);
