@@ -36,6 +36,8 @@ const NUMBER_FIELD: Record<NumberFieldKey, { id: string; label: string; prefix?:
   getQty: { id: "promo-get", label: "Get", step: "1" },
   getPercent: { id: "promo-get-percent", label: "Off the cheapest (100 = free)", suffix: "%" },
   maxApplications: { id: "promo-apps", label: "Max times per order (optional)", step: "1" },
+  bundleQty: { id: "promo-bundle-qty", label: "Items in the bundle", step: "1" },
+  includedToppings: { id: "promo-included-toppings", label: "Toppings included each (blank = all)", step: "1" },
 };
 
 export function PromotionForm({
