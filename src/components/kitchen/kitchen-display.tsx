@@ -33,7 +33,7 @@ import {
 import { formatAddress, type Fulfillment } from "@/lib/orders";
 import { formatClockSeconds, formatClock } from "@/lib/zoned";
 import { usePersistentPrefs } from "@/lib/use-persistent-prefs";
-import { useNow, useServerSnapshot } from "@/lib/use-server-snapshot";
+import { SYNC_STALE_MS, useNow, useServerSnapshot } from "@/lib/use-server-snapshot";
 import { cn } from "@/lib/utils";
 import { SizeCrust, Ticket, TypeChip } from "./ticket";
 
@@ -46,8 +46,6 @@ const HANDOFF_LABEL: Record<Fulfillment["kind"], string> = {
 };
 
 const POLL_MS = 4_000;
-/** No successful sync for this long and the screen says so. */
-const STALE_MS = 15_000;
 /** How long a newly arrived ticket flashes. */
 const FRESH_MS = 20_000;
 const TEXT_SIZES = [16, 18, 21] as const;
@@ -283,7 +281,7 @@ export function KitchenDisplay({ initial, storeName, timeZone }: { initial: KdsS
     setStarted(true);
   }
 
-  const stale = now - lastSync > STALE_MS;
+  const stale = now - lastSync > SYNC_STALE_MS;
   const showAllDay = prefs.allDay && prefs.screen !== "ready" && view !== "oven";
 
   return (
