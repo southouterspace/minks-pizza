@@ -1,7 +1,7 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
-import { and, eq, isNull, sql } from "drizzle-orm";
+import { and, eq, gt, isNull, sql } from "drizzle-orm";
 import { z } from "zod";
 import { db, loyaltyLoginCodes, loyaltyMembers, orders } from "@/db";
 import {
@@ -11,7 +11,7 @@ import {
   verifyLoginCode,
   type CodeRequestResult,
 } from "@/lib/member-auth";
-import { birthdaySchema } from "@/lib/loyalty";
+import { CLAIM_WINDOW_DAYS, birthdaySchema } from "@/lib/loyalty";
 import { getLoyaltySettings } from "@/lib/loyalty-server";
 
 export async function sendCode(phone: string): Promise<CodeRequestResult> {
@@ -38,13 +38,13 @@ export async function verifyCode(input: unknown): Promise<{ ok: true } | { ok: f
   return { ok: true };
 }
 
-/** Who placed an order, when the program is on and the order can still earn. */
+/** Who placed an order, when the program is on and sign-in would still claim it. */
 async function orderCustomer(orderId: string): Promise<{ phone: string; name: string } | null> {
   if (!z.uuid().safeParse(orderId).success || !(await getLoyaltySettings()).enabled) return null;
   const [order] = await db
     .select({ phone: orders.customerPhone, name: orders.customerName, status: orders.status })
     .from(orders)
-    .where(eq(orders.id, orderId));
+    .where(and(eq(orders.id, orderId), gt(orders.placedAt, new Date(Date.now() - CLAIM_WINDOW_DAYS * 86_400_000))));
   return order && order.status !== "canceled" ? order : null;
 }
 

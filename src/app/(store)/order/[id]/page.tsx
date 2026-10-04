@@ -6,7 +6,7 @@ import { Gift } from "lucide-react";
 import { courierDeliveries, db, orderDiscounts, orderItems, orders } from "@/db";
 import { COURIER_STATUS_LABEL, TERMINAL_COURIER_STATUSES } from "@/lib/delivery/types";
 import { formatClock } from "@/lib/zoned";
-import { SIGNUP_MIN_NET_CENTS, normalizePhone, orderPointsStatus } from "@/lib/loyalty";
+import { CLAIM_WINDOW_DAYS, SIGNUP_MIN_NET_CENTS, normalizePhone, orderPointsStatus } from "@/lib/loyalty";
 import { getLoyaltySettings, memberByPhone } from "@/lib/loyalty-server";
 import { getCurrentMember } from "@/lib/member-auth";
 import { formatCents } from "@/lib/money";
@@ -30,7 +30,6 @@ import { cn } from "@/lib/utils";
 export const metadata: Metadata = { title: "Order status" };
 export const dynamic = "force-dynamic";
 
-const DAY_MS = 24 * 60 * 60 * 1000;
 const STATUS_STEPS = ["new", "preparing", "ready", "completed"] as const;
 
 const STATUS_LABELS: Record<string, { title: string; blurb: string }> = {
@@ -269,9 +268,9 @@ export default async function OrderPage({
   );
 }
 
-/** Signing in links only the last 30 days of uncanceled orders (claimRecentOrders). */
+/** Signing in links only recent uncanceled orders (claimRecentOrders). */
 function claimable(order: typeof orders.$inferSelect): boolean {
-  return order.status !== "canceled" && Date.now() - order.placedAt.getTime() < 30 * DAY_MS;
+  return order.status !== "canceled" && Date.now() - order.placedAt.getTime() < CLAIM_WINDOW_DAYS * 86_400_000;
 }
 
 /**

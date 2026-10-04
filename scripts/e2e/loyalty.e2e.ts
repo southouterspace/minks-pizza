@@ -11,7 +11,7 @@ import { after, before, describe, it } from "node:test";
 import assert from "node:assert/strict";
 import type { Browser, BrowserContext, Page } from "playwright";
 import { and, eq, ilike, like } from "drizzle-orm";
-import { categories, db, loyaltyLedger, loyaltyMembers, loyaltyRewards, loyaltySettings, operators } from "../../src/db";
+import { categories, db, loyaltyLedger, loyaltyMembers, loyaltyRewards, loyaltySettings, operators, orders } from "../../src/db";
 import { DEFAULT_TIERS, INSUFFICIENT_POINTS, MONTHS, localYearMonth } from "../../src/lib/loyalty";
 import { auditBalances, getMember, refreshMember } from "../../src/lib/loyalty-server";
 import { createOrder } from "../../src/lib/checkout";
@@ -49,7 +49,7 @@ const PROGRAM = {
 };
 const DAY_MS = 24 * 60 * 60 * 1000;
 
-describe("loyalty", { timeout: 120_000 }, () => {
+describe("loyalty", { timeout: 240_000 }, () => {
   let browser: Browser;
   let op: Page;
   let fixture: Awaited<ReturnType<typeof menuFixture>>;
@@ -241,6 +241,19 @@ describe("loyalty", { timeout: 120_000 }, () => {
     await page.getByTestId("order-points").waitFor();
     assert.equal((await orderRow(placed.id)).loyaltyMemberId, m.id);
     await cancelOrder(placed.id);
+  });
+
+  it("signing in mid-order leaves a phone-in order to price at completion", async () => {
+    const phone = uniquePhone();
+    const phoneIn = await createOrder(order(phone.display, "Pia Phonein"));
+    await db.update(orders).set({ loyaltyPointsEarned: 0 }).where(eq(orders.id, phoneIn.id));
+    const page = await customer();
+    await signInCustomer(page, phone.display, "Pia Phonein");
+    const m = await memberByPhone(phone.digits);
+    assert.equal((await orderRow(phoneIn.id)).loyaltyMemberId, null, "an order with no promise stays unlinked");
+    await moveOrder(phoneIn.id, "ready", "completed");
+    await signInCustomer(await customer(), phone.display, "Pia Phonein");
+    assert.equal(ledgerSummary(await ledgerOf(m.id)), "earn:199,signup_bonus:200");
   });
 
   it("a refused guest order enrolls nobody", async () => {

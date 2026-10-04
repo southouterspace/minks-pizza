@@ -6,7 +6,7 @@
  */
 import { randomInt, randomUUID } from "node:crypto";
 import { cache } from "react";
-import { and, asc, count, desc, eq, gte, inArray, isNull, sql, type AnyColumn, type SQL } from "drizzle-orm";
+import { and, asc, count, desc, eq, gt, gte, inArray, isNull, sql, type AnyColumn, type SQL } from "drizzle-orm";
 import {
   categories,
   db,
@@ -20,6 +20,7 @@ import {
 } from "@/db";
 import { ACTIVE_STATUSES } from "@/lib/order-workflow";
 import {
+  CLAIM_WINDOW_DAYS,
   EXPIRY_RESTORE_DAYS,
   LEDGER_KINDS,
   LEDGER_KIND_RULES,
@@ -491,16 +492,25 @@ async function claimOrders(memberId: number, where: SQL): Promise<number> {
 
 /**
  * Orders from the last 30 days placed with the member's phone. Completed ones
- * post their points now; ones still cooking are linked and post on completion
- * at the points promised at checkout, so joining mid-order counts that order.
+ * post their points now. Online orders still cooking are linked and post on
+ * completion at the points promised at checkout, so joining mid-order counts
+ * that order. Orders with no promise (POS, phone-ins) wait for completion, when
+ * claimOrders prices them.
  */
 export async function claimRecentOrders(member: { id: number; phone: string }): Promise<number> {
   const fromPhone = sql`regexp_replace(customer_phone, '[^0-9]', '', 'g') in (${member.phone}, ${`1${member.phone}`})
-        and placed_at > now() - interval '30 days'`;
+        and placed_at > now() - make_interval(days => ${CLAIM_WINDOW_DAYS})`;
   await db
     .update(orders)
     .set({ loyaltyMemberId: member.id })
-    .where(and(isNull(orders.loyaltyMemberId), inArray(orders.status, [...ACTIVE_STATUSES]), fromPhone));
+    .where(
+      and(
+        isNull(orders.loyaltyMemberId),
+        inArray(orders.status, [...ACTIVE_STATUSES]),
+        gt(orders.loyaltyPointsEarned, 0),
+        fromPhone,
+      ),
+    );
   return claimOrders(member.id, fromPhone);
 }
 
