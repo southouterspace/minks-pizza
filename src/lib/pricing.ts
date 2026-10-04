@@ -198,11 +198,11 @@ export function chosenSize(groups: readonly MenuGroup[], selections: readonly Se
 /**
  * unit = base + Σ modifier.priceDeltaCents, where each snapshot carries what
  * it was charged at the chosen size's prices (`pricesAt`), whatever order
- * the size was picked in: an option its delta; a placed topping its weight w (its
- * delta, its extra price, or 0 for "none", less its delta when the item
- * comes with it) when whole, and for a half
- * `applyBps(w, halfToppingPriceBps)` under `average`, or under `highest` w
- * on the dearer side (ties to the left) and 0 on the other.
+ * the size was picked in: an option its delta; a placed topping its weight w
+ * (its delta, its extra price, or 0 for "none", less its delta when the item
+ * comes with it) when whole, and for a half `applyBps(w, halfToppingPriceBps)`
+ * under `average`, or under `highest` w on the dearer side (ties to the left)
+ * and 0 on the other.
  */
 export function priceLine(
   item: MenuItem,

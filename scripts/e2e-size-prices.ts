@@ -19,8 +19,6 @@ const CART_KEY = "minks-cart-v1";
 const cents = (text: string) => Math.round(Number(text.match(/\$([\d,]+\.\d\d)/)![1].replace(",", "")) * 100);
 const addButton = (page: Page) => page.getByRole("button", { name: /^Add \d+ to cart/ });
 const total = async (page: Page) => cents((await addButton(page).textContent()) ?? "");
-const pepperoniLabel = async (page: Page) =>
-  (await page.locator('[data-topping="Pepperoni"] label').textContent()) ?? "";
 
 async function pickSize(page: Page, size: string) {
   await page.locator("label").filter({ hasText: size }).click();
@@ -64,7 +62,7 @@ run(async () => {
   for (const size of ['Small 10"', 'Medium 12"', 'Large 14"']) {
     await pickSize(page, size);
     const plain = await total(page);
-    const label = (await pepperoniLabel(page)).match(/\+\$\d+\.\d\d/)?.[0] ?? "none";
+    const label = ((await page.locator('[data-topping="Pepperoni"] label').textContent()) ?? "").match(/\+\$\d+\.\d\d/)?.[0] ?? "none";
     await page.locator('[data-topping="Pepperoni"] label').click();
     quoted[size] = [label, (await total(page)) - plain];
     await page.locator('[data-topping="Pepperoni"] label').click();
