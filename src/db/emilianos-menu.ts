@@ -5,7 +5,8 @@
  * Toast sells each pizza size as its own item ("12in Hawaiian", "14in
  * Hawaiian", ...). Here each pie is one item priced at its 12in price, with
  * one shared Size group stepping +$2 / +$4 / +$6 (Toast's cheese pizza steps,
- * applied to every pie) and one shared placeable Toppings group in place of
+ * applied to every pie), one shared Crust group in place of Toast's separate
+ * 12in gluten-free item, and one shared placeable Toppings group in place of
  * Toast's nested Whole / Left / Right groups. Recipes are written per size.
  *
  * Toast has no portions or costs: recipe quantities and ingredient costs
@@ -36,6 +37,9 @@ const INGREDIENTS: Ingredient[] = [
   { name: "Dough ball 16in", unit: "each", area: "Walk-in", each: 0.8 },
   { name: "Dough ball 18in", unit: "each", area: "Walk-in", each: 1.0 },
   { name: "Gluten-free crust 12in", unit: "each", area: "Freezer", each: 2.5 },
+  { name: "Gluten-free crust 14in", unit: "each", area: "Freezer", each: 3.25 },
+  { name: "Gluten-free crust 16in", unit: "each", area: "Freezer", each: 4.0 },
+  { name: "Gluten-free crust 18in", unit: "each", area: "Freezer", each: 5.0 },
   { name: "Red sauce", unit: "g", area: "Walk-in", perLb: 1.2 },
   { name: "Alfredo sauce", unit: "g", area: "Walk-in", perLb: 3.0 },
   { name: "BBQ sauce", unit: "g", area: "Make line", perLb: 2.0 },
@@ -103,6 +107,8 @@ type Use = readonly [string, number];
 type Option = {
   name: string;
   cents?: number;
+  /** Price on each size, 12in first, replacing `cents` there. */
+  sizeCents?: readonly [number, number, number, number];
   isDefault?: true;
   available?: boolean;
   /** Set on Size options: the pie size the option makes. */
@@ -198,6 +204,22 @@ const GROUPS = {
       ...(i === 0 ? { isDefault: true as const } : {}),
     })),
   },
+  crust: {
+    name: "Crust",
+    role: "crust",
+    min: 1,
+    max: 1,
+    options: [
+      { name: "Hand Tossed", isDefault: true, sized: (size) => [[`Dough ball ${size}`, 1]] },
+      {
+        name: "Gluten Free",
+        // Toast's 12in gluten-free pie is $1 over its cheese pie; the larger steps are estimates.
+        cents: 100,
+        sizeCents: [100, 200, 300, 400],
+        sized: (size) => [[`Gluten-free crust ${size}`, 1]],
+      },
+    ],
+  },
   sauce: {
     name: "Sauce",
     role: "option",
@@ -205,7 +227,7 @@ const GROUPS = {
     max: 1,
     options: SAUCES.map(([name, ingredient, oz]) => ({
       name,
-      ...(ingredient ? { recipe: [[ingredient, at("12in", oz)]], sized: (size: Size): Use[] => [[ingredient, at(size, oz)]] } : {}),
+      ...(ingredient ? { sized: (size: Size): Use[] => [[ingredient, at(size, oz)]] } : {}),
     })),
   },
   toppings: {
@@ -216,8 +238,6 @@ const GROUPS = {
     options: TOPPINGS.map(([name, ingredient, oz]) => ({
       name,
       cents: TOPPING_CENTS,
-      // The all-sizes line covers the 12in gluten-free pie, which has no Size group.
-      recipe: [[ingredient, at("12in", oz)]],
       sized: (size) => [[ingredient, at(size, oz)]],
     })),
   },
@@ -290,39 +310,32 @@ const IMG = "https://d1w7312wesee68.cloudfront.net";
 const TOAST_IMG = (path: string, file: string) =>
   `${IMG}/${path}/resize:fit:1080:1080/plain/s3://toasttab/menu_service/restaurants/8f10c155-b659-4079-9e8d-32163578651e/MenuItem/${file}.jpg`;
 
-const DOUGH: Record<Size, string> = {
-  "12in": "Dough ball 12in",
-  "14in": "Dough ball 14in",
-  "16in": "Dough ball 16in",
-  "18in": "Dough ball 18in",
-};
-
 type Pie = "standard" | "bbq" | "emiliano" | "texan" | "whiteTrio";
 
 /**
- * What a pie uses at a size beyond its sauce and toppings, which are its
- * defaults and deplete through their own options' recipes.
+ * What a pie uses at a size beyond its crust, sauce and toppings, which are
+ * its defaults and deplete through their own options' recipes.
  */
 function pieRecipe(pie: Pie, size: Size): Use[] {
   const s = (oz: readonly [number, number, number, number], share = 1) => at(size, oz) * share;
-  const base: Use[] = [[DOUGH[size], 1], ["Mozzarella", s(CHEESE)]];
+  const base: Use[] = [["Mozzarella", s(CHEESE)]];
   switch (pie) {
     case "standard":
       return base;
     case "bbq":
       return [...base, ["Red pepper flakes", s(PINCH)]];
     case "emiliano":
-      return [[DOUGH[size], 1], ["Mozzarella", s(CHEESE, 0.75)], ["Red sauce", s(SAUCE, 0.5)]];
+      return [["Mozzarella", s(CHEESE, 0.75)], ["Red sauce", s(SAUCE, 0.5)]];
     case "texan":
-      // Toast has no description for the Texan Rattlesnake; only the dough is known.
-      return [[DOUGH[size], 1]];
+      // Toast has no description for the Texan Rattlesnake; only the crust is known.
+      return [];
     case "whiteTrio":
       return [...base, ["Pecorino Romano", s(PINCH, 3)]];
   }
 }
 
-const PIE_GROUPS: GroupKey[] = ["size", "sauce", "toppings", "cookTime"];
-const SPECIALTY_GROUPS: GroupKey[] = ["size", "sauce", "toppings", "swap", "cookTime"];
+const PIE_GROUPS: GroupKey[] = ["size", "crust", "sauce", "toppings", "cookTime"];
+const SPECIALTY_GROUPS: GroupKey[] = ["size", "crust", "sauce", "toppings", "swap", "cookTime"];
 
 const PIZZAS: Item[] = [
   {
@@ -417,13 +430,6 @@ const PIZZAS: Item[] = [
     groups: PIE_GROUPS,
     defaults: ["Garlic & Basil Olive Oil", "Ricotta", "Fresh Basil"],
     sized: (size) => pieRecipe("whiteTrio", size),
-  },
-  {
-    name: '12" Gluten Free Cheese or Custom',
-    cents: 1299,
-    groups: ["sauce", "toppings", "cookTime"],
-    defaults: ["Red Sauce"],
-    recipe: [["Gluten-free crust 12in", 1], ["Mozzarella", at("12in", CHEESE)]],
   },
 ];
 
@@ -702,6 +708,15 @@ export async function importEmilianosMenu(db: Db): Promise<ImportSummary> {
     addLines(owner, option.recipe);
     if (option.sized) for (const s of sizeOptions) addLines(owner, option.sized(s.size), s.id);
   });
+  const sizePrices = options.flatMap(({ option }, i) =>
+    sizeOptions.flatMap((s) => {
+      const cents = option.sizeCents?.[SIZES.indexOf(s.size)];
+      return cents === undefined || cents === (option.cents ?? 0)
+        ? []
+        : [{ modifierId: modifierId[i], sizeModifierId: s.id, priceDeltaCents: cents }];
+    }),
+  );
+  if (sizePrices.length) await db.insert(schema.modifierSizePrices).values(sizePrices);
 
   // Categories and items
   const categoryRows = await db
