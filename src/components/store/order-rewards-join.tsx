@@ -8,11 +8,7 @@ import { Button } from "@/components/ui/button";
 import { Field, FieldLabel } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 
-/**
- * Join or verify from the order page, after the customer has paid: the one
- * moment that asks nothing of checkout. The code goes to the order's phone,
- * so joining takes one tap and six digits.
- */
+/** Join or confirm from the order page, with a code texted to the order's phone. */
 export function OrderRewardsJoin({
   orderId,
   phoneLast4,

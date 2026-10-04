@@ -69,7 +69,7 @@ export async function verifyOrderCode(input: unknown): Promise<{ ok: true } | { 
   if (!parsed.success) return { ok: false, error: "Enter the 6-digit code we texted you." };
   const customer = await orderCustomer(parsed.data.orderId);
   if (!customer) return { ok: false, error: "Rewards aren't available for this order." };
-  const result = await verifyLoginCode(customer.phone, parsed.data.code, { name: customer.name.trim() || undefined });
+  const result = await verifyLoginCode(customer.phone, parsed.data.code, { name: customer.name });
   if (!result.ok) return result;
   revalidatePath("/", "layout");
   return { ok: true };

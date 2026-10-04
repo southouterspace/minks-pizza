@@ -103,10 +103,10 @@ export default async function OrderPage({
   const phone = normalizePhone(order.customerPhone);
   const rewardsPrompt =
     loyalty.enabled && viewer === null && phone && claimable(order)
-      ? joinPrompt(order, loyalty, {
+      ? {
+          ...joinPrompt(order, loyalty, order.loyaltyMemberId !== null || (await memberByPhone(phone)) !== null),
           phoneLast4: phone.slice(-4),
-          isMember: order.loyaltyMemberId !== null || (await memberByPhone(phone)) !== null,
-        })
+        }
       : null;
 
   return (
@@ -282,13 +282,12 @@ function claimable(order: typeof orders.$inferSelect): boolean {
 function joinPrompt(
   order: typeof orders.$inferSelect,
   loyalty: { programName: string; signupBonus: number },
-  { phoneLast4, isMember }: { phoneLast4: string; isMember: boolean },
+  isMember: boolean,
 ) {
   const points = order.loyaltyPointsEarned;
   const pointsText = `${points.toLocaleString()} points`;
   if (order.loyaltyMemberId !== null) {
     return {
-      phoneLast4,
       title:
         points === 0
           ? `You're in ${loyalty.programName}`
@@ -301,7 +300,6 @@ function joinPrompt(
   }
   if (isMember) {
     return {
-      phoneLast4,
       title: points > 0 ? `Add ${pointsText} to your ${loyalty.programName} account` : `Sign in to ${loyalty.programName}`,
       body: "This number is already a member. Sign in and this order counts toward your rewards.",
       action: points > 0 ? "Add my points" : "Sign in",
@@ -312,7 +310,6 @@ function joinPrompt(
       ? ` Join now and get ${loyalty.signupBonus.toLocaleString()} bonus points too.`
       : "";
   return {
-    phoneLast4,
     title: points > 0 ? `Keep the ${pointsText} from this order` : `Join ${loyalty.programName}`,
     body: `${loyalty.programName} is free. Points turn into free food.${bonus}`,
     action: points > 0 ? "Save my points" : "Join free",
