@@ -414,7 +414,8 @@ Research behind the defaults is in `docs/loyalty-research.md`, and the
 customer complaints it answers are in `docs/loyalty-complaints.md`.
 
 - **Earning.** 10 points per $1 of food and drink after any reward discount.
-  Tax, tip and the delivery fee don't earn. Points post when the order is
+  Alcohol, tax, tip and the delivery fee don't earn; a discount comes off the
+  part that earns (`earnableNetCents`). Points post when the order is
   completed and are shown as Pending until then. Guests join by phone with a
   checkbox at checkout, with no sign-in needed to earn.
 - **Spending.** Signed-in members pick a reward at checkout ($3 off at 300,

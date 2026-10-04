@@ -26,6 +26,7 @@ import {
   LEDGER_KIND_RULES,
   REFERRER_BONUS_YEARLY_CAP,
   SIGNUP_MIN_NET_CENTS,
+  earnableNetCents,
   activePromotion,
   birthdayGrantDue,
   earnPoints,
@@ -339,6 +340,10 @@ const completedAt = sql`coalesce(o.completed_at, o.updated_at)`;
 const setting = (column: AnyColumn) =>
   sql`(select ${column} from ${loyaltySettings} where ${loyaltySettings.id} = 1)`;
 
+/** The live alcoholic lines of order `o`, which earn no points. */
+const alcoholCents = sql`(select coalesce(sum(i.line_total_cents), 0)::int from order_items i
+  where i.order_id = o.id and i.is_alcoholic and i.voided_at is null)`;
+
 /**
  * Batch with the move that completes an order: post the points promised at
  * checkout, restart the member's expiry clock, and settle the bonuses that
@@ -367,7 +372,7 @@ export function completionStatements(orderId: string) {
       kind: "signup_bonus",
       idemKey: ledgerKey.signup(member),
       from: sql`select ${member} as member_id, ${setting(loyaltySettings.signupBonus)} as points
-                where ${firstOrderDone(sql`o.subtotal_cents - o.discount_cents >= ${SIGNUP_MIN_NET_CENTS}`)}`,
+                where ${firstOrderDone(sql`o.subtotal_cents - ${alcoholCents} - o.discount_cents >= ${SIGNUP_MIN_NET_CENTS}`)}`,
     }),
     ledgerStatement({
       kind: "referee_bonus",
@@ -467,16 +472,16 @@ export type ClaimResult = "claimed" | "not_found" | "not_completed" | "already_l
  */
 async function claimOrders(memberId: number, where: SQL): Promise<number> {
   const settings = await getLoyaltySettings();
-  const { rows } = await db.execute<{ id: string; net: number }>(sql`
-    select id, subtotal_cents - discount_cents as net from orders
-    where status = 'completed' and loyalty_member_id is null and ${where}`);
+  const { rows } = await db.execute<{ id: string; subtotal: number; alcohol: number; discount: number }>(sql`
+    select o.id, o.subtotal_cents as subtotal, ${alcoholCents} as alcohol, o.discount_cents as discount from orders o
+    where o.status = 'completed' and o.loyalty_member_id is null and ${where}`);
   const statements = rows.flatMap((order) => [
     db
       .update(orders)
       .set({
         loyaltyMemberId: memberId,
         loyaltyPointsEarned: earnPoints({
-          netCents: order.net,
+          netCents: earnableNetCents({ subtotalCents: order.subtotal, alcoholCents: order.alcohol, discountCents: order.discount }),
           pointsPerDollar: settings.pointsPerDollar,
           tierMultiplierBps: 10_000,
           promoMultiplierBps: 10_000,

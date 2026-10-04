@@ -120,8 +120,26 @@ export function formatPhone(phone: string): string {
 // ---------------------------------------------------------------------------
 
 /**
- * Points for an order. `netCents` is the food subtotal after any reward
- * discount: tax, tip and delivery fee never earn. Integer math throughout so
+ * What an order earns points on: its items less alcohol, which never earns,
+ * less its discounts. A discount comes off the share that earns even when it
+ * was taken on a drink, so the split needs no per-line bookkeeping and can
+ * only ever earn less.
+ */
+export function earnableNetCents({
+  subtotalCents,
+  alcoholCents,
+  discountCents,
+}: {
+  subtotalCents: number;
+  alcoholCents: number;
+  discountCents: number;
+}): number {
+  return Math.max(0, subtotalCents - alcoholCents - discountCents);
+}
+
+/**
+ * Points for an order. `netCents` is earnableNetCents: tax, tip, delivery
+ * fee and alcohol never earn. Integer math throughout so
  * the promise at checkout and the posting at completion always agree.
  */
 export function earnPoints({

@@ -7,6 +7,7 @@ import {
   birthdaySchema,
   centsPerPoint,
   earnPoints,
+  earnableNetCents,
   expiryDue,
   formatMultiplier,
   nextReward,
@@ -65,6 +66,19 @@ describe("earnPoints", () => {
       earnPoints({ netCents: 0, pointsPerDollar: 10, tierMultiplierBps: 10_000, promoMultiplierBps: 10_000 }),
       0,
     );
+  });
+});
+
+describe("earnableNetCents", () => {
+  it("earns on the whole subtotal less discounts when nothing is alcoholic", () => {
+    assert.equal(earnableNetCents({ subtotalCents: 2448, alcoholCents: 0, discountCents: 300 }), 2148);
+  });
+  it("leaves alcohol out, and takes the discount off what is left", () => {
+    assert.equal(earnableNetCents({ subtotalCents: 3000, alcoholCents: 1200, discountCents: 500 }), 1300);
+  });
+  it("never goes below zero, so an all-alcohol order or a big discount earns nothing", () => {
+    assert.equal(earnableNetCents({ subtotalCents: 1200, alcoholCents: 1200, discountCents: 0 }), 0);
+    assert.equal(earnableNetCents({ subtotalCents: 3000, alcoholCents: 1200, discountCents: 2000 }), 0);
   });
 });
 

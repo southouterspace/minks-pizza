@@ -6,7 +6,7 @@ import { Gift } from "lucide-react";
 import { courierDeliveries, db, orderDiscounts, orderItems, orders } from "@/db";
 import { COURIER_STATUS_LABEL, TERMINAL_COURIER_STATUSES } from "@/lib/delivery/types";
 import { formatClock } from "@/lib/zoned";
-import { CLAIM_WINDOW_DAYS, SIGNUP_MIN_NET_CENTS, normalizePhone, orderPointsStatus } from "@/lib/loyalty";
+import { CLAIM_WINDOW_DAYS, SIGNUP_MIN_NET_CENTS, earnableNetCents, normalizePhone, orderPointsStatus } from "@/lib/loyalty";
 import { getLoyaltySettings, memberByPhone } from "@/lib/loyalty-server";
 import { getCurrentMember } from "@/lib/member-auth";
 import { formatCents } from "@/lib/money";
@@ -103,7 +103,16 @@ export default async function OrderPage({
   const rewardsPrompt =
     loyalty.enabled && viewer === null && phone && claimable(order)
       ? {
-          ...joinPrompt(order, loyalty, order.loyaltyMemberId !== null || (await memberByPhone(phone)) !== null),
+          ...joinPrompt(
+            order,
+            earnableNetCents({
+              subtotalCents: order.subtotalCents,
+              alcoholCents: items.filter((i) => i.isAlcoholic && !i.voidedAt).reduce((n, i) => n + i.lineTotalCents, 0),
+              discountCents: order.discountCents,
+            }),
+            loyalty,
+            order.loyaltyMemberId !== null || (await memberByPhone(phone)) !== null,
+          ),
           phoneLast4: phone.slice(-4),
         }
       : null;
@@ -280,6 +289,7 @@ function claimable(order: typeof orders.$inferSelect): boolean {
  */
 function joinPrompt(
   order: typeof orders.$inferSelect,
+  netCents: number,
   loyalty: { programName: string; signupBonus: number },
   isMember: boolean,
 ) {
@@ -305,7 +315,7 @@ function joinPrompt(
     };
   }
   const bonus =
-    loyalty.signupBonus > 0 && order.subtotalCents - order.discountCents >= SIGNUP_MIN_NET_CENTS
+    loyalty.signupBonus > 0 && netCents >= SIGNUP_MIN_NET_CENTS
       ? ` Join now and get ${loyalty.signupBonus.toLocaleString()} bonus points too.`
       : "";
   return {
