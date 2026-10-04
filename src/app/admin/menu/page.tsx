@@ -319,6 +319,14 @@ export default async function MenuPage() {
                               Featured
                             </Badge>
                           ) : null}
+                          {item.isAlcoholic ? (
+                            <Badge
+                              variant="outline"
+                              className="text-muted-foreground!"
+                            >
+                              21+
+                            </Badge>
+                          ) : null}
                         </div>
                       </div>
                       <span className="text-sm tabular-nums">

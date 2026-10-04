@@ -68,6 +68,9 @@ export function MenuBrowser({
                       {item.isFeatured ? (
                         <Badge variant="secondary">Popular</Badge>
                       ) : null}
+                      {item.isAlcoholic ? (
+                        <Badge variant="outline">21+</Badge>
+                      ) : null}
                     </div>
                     {item.description ? (
                       <p className="mt-1 line-clamp-2 text-sm text-muted-foreground">

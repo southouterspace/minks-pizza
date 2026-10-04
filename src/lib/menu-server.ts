@@ -57,6 +57,7 @@ async function loadMenuItems(itemIds?: number[]): Promise<(MenuItem & { category
     description: item.description,
     basePriceCents: item.basePriceCents,
     isAvailable: item.isAvailable,
+    isAlcoholic: item.isAlcoholic,
     station,
     groups: links
       .filter((l) => l.itemId === item.id)
@@ -117,6 +118,7 @@ export type PricedLine = SubmitLine & {
   /** Chosen modifier ids, so promotions can target a size. */
   modifierIds: number[];
   station: MenuItem["station"];
+  isAlcoholic: boolean;
   unitPriceCents: number;
   modifiers: ReturnType<typeof priceLine>["modifiers"];
 };
@@ -136,6 +138,7 @@ export async function priceLines(lines: SubmitLine[], policy: PricingPolicy): Pr
         categoryId: item.categoryId,
         modifierIds: line.selections.map((s) => s.modifierId),
         station: item.station,
+        isAlcoholic: item.isAlcoholic,
         ...priced,
       };
     });

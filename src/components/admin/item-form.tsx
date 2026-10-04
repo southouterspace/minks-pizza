@@ -24,6 +24,7 @@ export type ItemFormItem = {
   categoryId: number;
   isAvailable: boolean;
   isFeatured: boolean;
+  isAlcoholic: boolean;
 };
 
 export type ItemFormCategory = { id: number; name: string };
@@ -146,6 +147,16 @@ export function ItemForm({
             />
             <FieldLabel htmlFor="item-featured" className="font-normal!">
               Featured (“Popular” badge)
+            </FieldLabel>
+          </Field>
+          <Field orientation="horizontal" className="w-auto">
+            <Checkbox
+              id="item-alcoholic"
+              name="isAlcoholic"
+              defaultChecked={item?.isAlcoholic ?? false}
+            />
+            <FieldLabel htmlFor="item-alcoholic" className="font-normal!">
+              Contains alcohol (21+)
             </FieldLabel>
           </Field>
         </div>

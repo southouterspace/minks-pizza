@@ -72,6 +72,7 @@ export default async function EditItemPage({
             categoryId: item.categoryId,
             isAvailable: item.isAvailable,
             isFeatured: item.isFeatured,
+            isAlcoholic: item.isAlcoholic,
           }}
           allCategories={allCategories}
           allGroups={groups.map((g) => ({

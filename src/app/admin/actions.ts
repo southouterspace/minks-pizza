@@ -568,6 +568,7 @@ const itemSchema = z.object({
   basePriceCents: z.number().int().min(0),
   isAvailable: z.boolean(),
   isFeatured: z.boolean(),
+  isAlcoholic: z.boolean(),
 });
 
 /** Create or update a menu item (hidden itemId field ⇒ update). */
@@ -583,6 +584,7 @@ export async function saveItem(formData: FormData): Promise<void> {
     basePriceCents: dollarsToCents(formData, "price"),
     isAvailable: checkbox(formData, "isAvailable"),
     isFeatured: checkbox(formData, "isFeatured"),
+    isAlcoholic: checkbox(formData, "isAlcoholic"),
   });
   const groupIds = [
     ...new Set(
@@ -600,6 +602,7 @@ export async function saveItem(formData: FormData): Promise<void> {
     basePriceCents: data.basePriceCents,
     isAvailable: data.isAvailable,
     isFeatured: data.isFeatured,
+    isAlcoholic: data.isAlcoholic,
   };
 
   // Overrides are validated before anything is written: there is no transaction to roll back.

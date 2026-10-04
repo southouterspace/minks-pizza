@@ -31,6 +31,7 @@ const cheese: MenuItem = {
   description: null,
   basePriceCents: 1099,
   isAvailable: true,
+  isAlcoholic: false,
   station: "pizza",
   groups: [
     { id: 3, name: "Extra Toppings", role: "topping", minSelect: 0, maxSelect: null, modifiers: [mod(30, "Pepperoni", 175), mod(31, "Mushrooms", 150), mod(32, "Basil", 125, true)] },
@@ -38,7 +39,7 @@ const cheese: MenuItem = {
     { id: 2, name: "Crust", role: "crust", minSelect: 1, maxSelect: 1, modifiers: [mod(20, "Hand Tossed", 0, true)] },
   ],
 };
-const soda: MenuItem = { id: 2, name: "Soda", description: null, basePriceCents: 399, isAvailable: true, station: "counter", groups: [] };
+const soda: MenuItem = { id: 2, name: "Soda", description: null, basePriceCents: 399, isAvailable: true, isAlcoholic: false, station: "counter", groups: [] };
 const policy: PricingPolicy = { halfToppingRule: "average", halfToppingPriceBps: 5000, extraToppingBps: 20_000 };
 const [pep, , basil] = cheese.groups[0].modifiers;
 

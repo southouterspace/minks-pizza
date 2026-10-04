@@ -30,6 +30,7 @@ const pie = (toppings: MenuModifier[] = [pepperoni, mod(MUSHROOMS, "Mushrooms", 
   description: null,
   basePriceCents: 1000,
   isAvailable: true,
+  isAlcoholic: false,
   station: "pizza",
   groups: [
     { id: 1, name: "Size", role: "size", minSelect: 0, maxSelect: 1, modifiers: [mod(SMALL, "Small", 0), mod(MEDIUM, "Medium", 300), mod(LARGE, "Large", 600)] },

@@ -25,14 +25,14 @@ export async function ingestExternalOrder(
   if (seen) return { orderId: seen.id, duplicate: true };
 
   const itemIds = order.lines.flatMap((l) => (l.merchantItemId === null ? [] : [l.merchantItemId]));
-  const stations = itemIds.length
+  const known = itemIds.length
     ? await db
-        .select({ id: menuItems.id, station: categories.station })
+        .select({ id: menuItems.id, station: categories.station, isAlcoholic: menuItems.isAlcoholic })
         .from(menuItems)
         .innerJoin(categories, eq(categories.id, menuItems.categoryId))
         .where(inArray(menuItems.id, itemIds))
     : [];
-  const rows = externalOrderRows(order, new Map(stations.map((s) => [s.id, s.station])));
+  const rows = externalOrderRows(order, new Map(known.map(({ id, ...item }) => [id, item])));
   const actor = { name: SOURCE_LABEL[order.source], operatorId: null, employeeId: null };
 
   // The id is minted here so every insert fits in one batch. A concurrent copy

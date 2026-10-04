@@ -23,6 +23,7 @@ export type MenuItemView = {
   basePriceCents: number;
   imageUrl: string | null;
   isFeatured: boolean;
+  isAlcoholic: boolean;
   modifierGroups: ModifierGroupView[];
 };
 
@@ -129,6 +130,7 @@ export async function getPublicMenu(): Promise<CategoryView[]> {
           basePriceCents: i.basePriceCents,
           imageUrl: i.imageUrl,
           isFeatured: i.isFeatured,
+          isAlcoholic: i.isAlcoholic,
           modifierGroups: links
             .filter((l) => l.itemId === i.id)
             .flatMap((l) => {

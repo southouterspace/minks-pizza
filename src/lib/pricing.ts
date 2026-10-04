@@ -139,6 +139,7 @@ export type MenuItem = {
   description: string | null;
   basePriceCents: number;
   isAvailable: boolean;
+  isAlcoholic: boolean;
   station: KitchenStation;
   groups: MenuGroup[];
 };

@@ -49,6 +49,7 @@ function pricingItem(item: MenuItemView, relaxed: boolean): MenuItem {
     description: item.description,
     basePriceCents: item.basePriceCents,
     isAvailable: true,
+    isAlcoholic: item.isAlcoholic,
     station: "kitchen",
     groups: relaxed ? item.modifierGroups.map((g) => ({ ...g, minSelect: 0, maxSelect: null })) : item.modifierGroups,
   };
@@ -297,6 +298,11 @@ export function ItemDialog({
           <DialogTitle>{item.name}</DialogTitle>
           {item.description ? (
             <DialogDescription>{item.description}</DialogDescription>
+          ) : null}
+          {item.isAlcoholic ? (
+            <p className="text-xs font-medium text-muted-foreground" data-testid="alcohol-note">
+              21+ · Pickup only
+            </p>
           ) : null}
         </DialogHeader>
 
