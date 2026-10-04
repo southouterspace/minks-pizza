@@ -12,6 +12,7 @@ import {
 } from "@/db";
 import { recipeLineFromRow } from "@/lib/recipes";
 import { DEFAULT_PORTIONS } from "@/lib/recipes";
+import { loadSizePrices } from "@/lib/menu-server";
 import { plateDefaults, withItemDefaults } from "@/lib/pricing";
 import type {
   PlateContext,
@@ -84,29 +85,37 @@ export async function itemRecipe(item: { id: number; basePriceCents: number }): 
 
   const optionMods = optionGroups.length
     ? await db
-        .select({ id: modifiers.id, groupId: modifiers.groupId, priceDeltaCents: modifiers.priceDeltaCents, isDefault: modifiers.isDefault })
+        .select({
+          id: modifiers.id,
+          groupId: modifiers.groupId,
+          priceDeltaCents: modifiers.priceDeltaCents,
+          extraPriceDeltaCents: modifiers.extraPriceDeltaCents,
+          isDefault: modifiers.isDefault,
+        })
         .from(modifiers)
         .where(inArray(modifiers.groupId, optionGroups.map((g) => g.groupId)))
     : [];
-  const defaults = plateDefaults(
-    optionGroups.map((g) => ({
-      role: g.role,
-      modifiers: withItemDefaults(optionMods.filter((m) => m.groupId === g.groupId), g.defaultModifierIds),
-    })),
-  );
+  const sizePrices = await loadSizePrices(optionMods.map((m) => m.id));
+  const plateGroups = optionGroups.map((g) => ({
+    role: g.role,
+    modifiers: withItemDefaults(
+      optionMods.filter((m) => m.groupId === g.groupId).map((m) => ({ ...m, sizePrices: sizePrices.get(m.id) ?? [] })),
+      g.defaultModifierIds,
+    ),
+  }));
+  const defaults = plateDefaults(plateGroups, null);
   const defaultIds = defaults.ids;
   const defaultLines = defaultIds.length
     ? await db.select().from(recipeLines).where(inArray(recipeLines.modifierId, defaultIds))
     : [];
 
-  const withDefaults = item.basePriceCents + defaults.priceCents;
   return {
     sizes: sizes.map((s) => ({ id: s.id, name: s.name })),
     lines,
     plate: {
       priceCents: Object.fromEntries([
-        ["all", withDefaults],
-        ...sizes.map((s) => [String(s.id), withDefaults + s.priceDeltaCents]),
+        ["all", item.basePriceCents + defaults.priceCents],
+        ...sizes.map((s) => [String(s.id), item.basePriceCents + plateDefaults(plateGroups, s.id).priceCents + s.priceDeltaCents]),
       ]),
       defaultModifierIds: defaultIds,
       modifierLines: defaultLines.map(recipeLineFromRow),

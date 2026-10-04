@@ -22,6 +22,7 @@ const mod = (id: number, name: string, priceDeltaCents: number, isDefault = fals
   extraPriceDeltaCents: null,
   isDefault,
   isAvailable: true,
+  sizePrices: [],
 });
 
 const cheese: MenuItem = {

@@ -25,6 +25,7 @@ import {
   recipeLineFromRow,
   type RecipeContext,
 } from "@/lib/recipes";
+import { loadSizePrices } from "@/lib/menu-server";
 import { isPlaceable, plateDefaults, withItemDefaults, type GroupRole, type LineModifier } from "@/lib/pricing";
 import { DEFAULT_PORTIONS } from "@/lib/recipes";
 import type { BaseUnit } from "@/lib/units";
@@ -404,7 +405,7 @@ export type MarginRow = {
 export type MarginReport = { minMarginBps: number; rows: MarginRow[] };
 
 export async function marginReport(): Promise<MarginReport> {
-  const [items, links, mods, recipeRows, costRows, [settings]] = await Promise.all([
+  const [items, links, mods, recipeRows, costRows, [settings], sizePrices] = await Promise.all([
     db
       .select({ id: menuItems.id, name: menuItems.name, basePriceCents: menuItems.basePriceCents, category: categories.name })
       .from(menuItems)
@@ -432,6 +433,7 @@ export async function marginReport(): Promise<MarginReport> {
       })
       .from(storeSettings)
       .where(eq(storeSettings.id, 1)),
+    loadSizePrices(),
   ]);
   const minMarginBps = settings?.minMarginBps ?? 7000;
   const book = buildRecipeBook(recipeRows.map(recipeLineFromRow));
@@ -446,15 +448,19 @@ export async function marginReport(): Promise<MarginReport> {
   const rows = items.flatMap((item) => {
     const groups = links.filter((l) => l.itemId === item.id);
     const sizes = groups.filter((g) => g.role === "size").flatMap((g) => mods.filter((m) => m.groupId === g.groupId));
-    const defaults = plateDefaults(
-      groups
-        .filter((g) => g.role !== "size")
-        .map((g) => ({ role: g.role, modifiers: withItemDefaults(mods.filter((m) => m.groupId === g.groupId), g.defaultModifierIds) })),
-    );
+    const plateGroups = groups
+      .filter((g) => g.role !== "size")
+      .map((g) => ({
+        role: g.role,
+        modifiers: withItemDefaults(
+          mods.filter((m) => m.groupId === g.groupId).map((m) => ({ ...m, sizePrices: sizePrices.get(m.id) ?? [] })),
+          g.defaultModifierIds,
+        ),
+      }));
     const hasRecipe = book.has(ownerKey({ kind: "item", id: item.id }));
-    const priceBase = item.basePriceCents + defaults.priceCents;
     return (sizes.length ? sizes : [null]).map((size): MarginRow => {
-      const priceCents = priceBase + (size?.priceDeltaCents ?? 0);
+      const defaults = plateDefaults(plateGroups, size?.id ?? null);
+      const priceCents = item.basePriceCents + defaults.priceCents + (size?.priceDeltaCents ?? 0);
       const plateCostCents = hasRecipe
         ? plateCost(item.id, size?.id ?? null, defaults.ids, ctx, unitCosts)
         : null;

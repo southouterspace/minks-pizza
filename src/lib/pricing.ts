@@ -63,15 +63,31 @@ export type LineModifier =
 
 export type Selection = { modifierId: number; placement: Placement; amount: Amount };
 
-export type MenuModifier = {
-  id: number;
-  name: string;
+export type Prices = {
   priceDeltaCents: number;
   /** What "extra" costs when the menu names a price; null falls back to `extraToppingBps`. */
   extraPriceDeltaCents: number | null;
+};
+
+/** A modifier's prices on one size, replacing its own there. */
+export type SizePrice = Prices & { sizeModifierId: number };
+
+type SizedPrices = Prices & { sizePrices: readonly SizePrice[] };
+
+export type MenuModifier = Prices & {
+  id: number;
+  name: string;
   isDefault: boolean;
   isAvailable: boolean;
+  sizePrices: SizePrice[];
 };
+
+/** What `mod` costs on the size `sizeId`, or its own prices when that size names none. */
+export function pricesAt(mod: SizedPrices, sizeId: number | null): Prices {
+  const sized = sizeId === null ? undefined : mod.sizePrices.find((p) => p.sizeModifierId === sizeId);
+  const { priceDeltaCents, extraPriceDeltaCents } = sized ?? mod;
+  return { priceDeltaCents, extraPriceDeltaCents };
+}
 
 export const PLACEMENT_LABEL: Record<Placement, string> = {
   whole: "Whole",
@@ -96,14 +112,15 @@ export function describeChoice(m: LineModifier): string {
   return parts.length ? `${m.modifierName} (${parts.join(", ")})` : m.modifierName;
 }
 
-/** The options a plain plate comes with and what they add to its price; a default topping adds nothing. */
+/** The options a plain plate comes with and what they add to its price on `sizeId`; a default topping adds nothing. */
 export function plateDefaults(
-  groups: readonly { role: GroupRole; modifiers: readonly { id: number; priceDeltaCents: number; isDefault: boolean }[] }[],
+  groups: readonly { role: GroupRole; modifiers: readonly (SizedPrices & { id: number; isDefault: boolean })[] }[],
+  sizeId: number | null,
 ): { ids: number[]; priceCents: number } {
   const picked = groups.flatMap((g) => g.modifiers.filter((m) => m.isDefault).map((m) => ({ m, placeable: isPlaceable(g.role) })));
   return {
     ids: picked.map(({ m }) => m.id),
-    priceCents: picked.reduce((sum, { m, placeable }) => sum + (placeable ? 0 : m.priceDeltaCents), 0),
+    priceCents: picked.reduce((sum, { m, placeable }) => sum + (placeable ? 0 : pricesAt(m, sizeId).priceDeltaCents), 0),
   };
 }
 
@@ -148,22 +165,22 @@ export function applyBps(cents: number, bps: number): number {
   return roundHalfUp((cents * bps) / 10_000);
 }
 
-function portionWeight(mod: MenuModifier, amount: Amount, policy: PricingPolicy): number {
+function portionWeight(prices: Prices, amount: Amount, policy: PricingPolicy): number {
   switch (amount) {
     case "none":
       return 0;
     case "light":
     case "regular":
-      return mod.priceDeltaCents;
+      return prices.priceDeltaCents;
     case "extra":
-      return mod.extraPriceDeltaCents ?? applyBps(mod.priceDeltaCents, policy.extraToppingBps);
+      return prices.extraPriceDeltaCents ?? applyBps(prices.priceDeltaCents, policy.extraToppingBps);
   }
 }
 
 /** A default topping comes with the pie, so only what an extra portion adds over a regular one is charged. */
-function amountWeight(mod: MenuModifier, amount: Amount, policy: PricingPolicy): number {
-  const w = portionWeight(mod, amount, policy);
-  return mod.isDefault ? Math.max(0, w - mod.priceDeltaCents) : w;
+function amountWeight(prices: Prices, isDefault: boolean, amount: Amount, policy: PricingPolicy): number {
+  const w = portionWeight(prices, amount, policy);
+  return isDefault ? Math.max(0, w - prices.priceDeltaCents) : w;
 }
 
 /** An item's own defaults in a group replace the group's. */
@@ -174,7 +191,8 @@ export function withItemDefaults<M extends { id: number; isDefault: boolean }>(m
 
 /**
  * unit = base + Σ modifier.priceDeltaCents, where each snapshot carries what
- * it was charged: an option its delta; a placed topping its weight w (its
+ * it was charged at the chosen size's prices (`pricesAt`), whatever order
+ * the size was picked in: an option its delta; a placed topping its weight w (its
  * delta, its extra price, or 0 for "none", less its delta when the item
  * comes with it) when whole, and for a half
  * `applyBps(w, halfToppingPriceBps)` under `average`, or under `highest` w
@@ -192,6 +210,8 @@ export function priceLine(
   for (const group of item.groups) {
     for (const mod of group.modifiers) owner.set(mod.id, { group, mod });
   }
+
+  const sizeId = selections.find((s) => owner.get(s.modifierId)?.group.role === "size")?.modifierId ?? null;
 
   const seen = new Set<number>();
   const counts = new Map<number, number>();
@@ -212,8 +232,9 @@ export function priceLine(
     if (s.amount !== "none") counts.set(group.id, (counts.get(group.id) ?? 0) + 1);
 
     const base = { modifierId: mod.id, groupName: group.name, modifierName: mod.name };
+    const prices = pricesAt(mod, sizeId);
     if (isPlaceable(group.role)) {
-      const w = amountWeight(mod, s.amount, policy);
+      const w = amountWeight(prices, mod.isDefault, s.amount, policy);
       const charged = s.placement === "whole" ? w : policy.halfToppingRule === "average" ? applyBps(w, policy.halfToppingPriceBps) : 0;
       if (s.placement !== "whole") halves.push({ index: modifiers.length, placement: s.placement, weight: w });
       modifiers.push({ kind: "placed", role: group.role, placement: s.placement, amount: s.amount, priceDeltaCents: charged, ...base });
@@ -221,7 +242,7 @@ export function priceLine(
       if (s.placement !== "whole" || s.amount !== "regular") {
         throw new PricingError(`${group.name} on "${item.name}" cannot be split or changed in amount.`);
       }
-      modifiers.push({ kind: "option", role: group.role, priceDeltaCents: mod.priceDeltaCents, ...base });
+      modifiers.push({ kind: "option", role: group.role, priceDeltaCents: prices.priceDeltaCents, ...base });
     }
   }
 
