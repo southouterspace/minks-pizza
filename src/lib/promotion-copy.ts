@@ -97,6 +97,12 @@ export function describeReward(reward: PromotionReward, names?: TargetNames): st
       const times = reward.maxApplications ? ` (up to ${reward.maxApplications}× per order)` : "";
       return `Buy ${reward.buy.quantity} ${describeTarget(reward.buy.target, names)}, get ${getWhat} ${deal}${times}`;
     }
+    case "bundle": {
+      const n = reward.includedToppings;
+      const toppings = n === null ? "" : n === 0 ? ", toppings extra" : `, ${n} topping${n === 1 ? "" : "s"} included`;
+      const times = reward.maxApplications ? ` (up to ${reward.maxApplications}× per order)` : "";
+      return `${reward.quantity} ${describeTarget(reward.target, names)} for ${formatCents(reward.priceCents)} each${toppings}${times}`;
+    }
     case "free_delivery":
       return "Free delivery";
   }
@@ -158,6 +164,8 @@ function noQualifyingCopy(reward: PromotionReward, names?: TargetNames): string 
         : `${countOf(buy.quantity, describeTarget(buy.target, names))} and ${countOf(get.quantity, describeTarget(get.target, names))}`;
       return `Add ${what} to use this`;
     }
+    case "bundle":
+      return `Add ${countOf(reward.quantity, describeTarget(reward.target, names))} to use this`;
     case "order_percent":
     case "order_amount":
       return "Add an item to use this";

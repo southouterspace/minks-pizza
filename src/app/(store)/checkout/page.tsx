@@ -42,6 +42,7 @@ export default async function CheckoutPage() {
         loyalty: loyalty.enabled
           ? {
               programName: loyalty.programName,
+              signupBonus: loyalty.signupBonus,
               member: member
                 ? {
                     name: member.name,

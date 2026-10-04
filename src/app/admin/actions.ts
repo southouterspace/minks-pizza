@@ -13,6 +13,7 @@ import {
   menuItems,
   modifierGroups,
   modifiers,
+  modifierSizePrices,
   operators,
   recipeLines,
   storeLogo,
@@ -32,6 +33,7 @@ import { COURIER_PROVIDERS, CourierError } from "@/lib/delivery/types";
 import { OrderError } from "@/lib/checkout";
 import { STORE_TIMEZONES } from "@/lib/hours";
 import { GROUP_ROLES, isPlaceable, type GroupRole } from "@/lib/pricing";
+import { sizeModifiers } from "@/lib/recipe-data";
 import { unitFor } from "@/lib/unit-entry";
 import { KITCHEN_STATIONS, type KitchenStation } from "@/lib/kds";
 import { DEFAULT_STAFF_RULES, parseStaffRules } from "@/lib/timeclock";
@@ -601,6 +603,7 @@ export async function saveItem(formData: FormData): Promise<void> {
   };
 
   let savedId: number;
+  let keptDefaults = new Map<number, number[]>();
   if (itemId) {
     const [existing] = await db
       .select({ id: menuItems.id })
@@ -611,9 +614,11 @@ export async function saveItem(formData: FormData): Promise<void> {
       .update(menuItems)
       .set({ ...values, updatedAt: new Date() })
       .where(eq(menuItems.id, itemId));
-    await db
+    const removed = await db
       .delete(itemModifierGroups)
-      .where(eq(itemModifierGroups.itemId, itemId));
+      .where(eq(itemModifierGroups.itemId, itemId))
+      .returning({ groupId: itemModifierGroups.groupId, defaultModifierIds: itemModifierGroups.defaultModifierIds });
+    keptDefaults = new Map(removed.map((l) => [l.groupId, l.defaultModifierIds]));
     savedId = itemId;
   } else {
     const [last] = await db
@@ -640,6 +645,7 @@ export async function saveItem(formData: FormData): Promise<void> {
           itemId: savedId,
           groupId: g.id,
           sortOrder: g.sortOrder,
+          defaultModifierIds: keptDefaults.get(g.id) ?? [],
         })),
       );
     }
@@ -713,6 +719,28 @@ export async function deleteModifierGroup(formData: FormData): Promise<void> {
 function extraPriceField(fd: FormData, role: GroupRole): number | null {
   if (!isPlaceable(role) || textField(fd, "extraPrice") === "") return null;
   return dollarsToCents(fd, "extraPrice");
+}
+
+/** A row per size given a price; a size left blank keeps the modifier's own prices. */
+function sizePriceRows(fd: FormData, modifierId: number, role: GroupRole, sizes: readonly { id: number; name: string }[]) {
+  if (role === "size") return [];
+  return sizes.flatMap((size) => {
+    const price = `sizePrice-${size.id}`;
+    const extra = `sizeExtraPrice-${size.id}`;
+    const hasExtra = isPlaceable(role) && textField(fd, extra) !== "";
+    if (textField(fd, price) === "") {
+      if (hasExtra) throw new Error(`Set a ${size.name} price to give it an extra price`);
+      return [];
+    }
+    return [
+      {
+        modifierId,
+        sizeModifierId: size.id,
+        priceDeltaCents: dollarsToCents(fd, price),
+        extraPriceDeltaCents: hasExtra ? dollarsToCents(fd, extra) : null,
+      },
+    ];
+  });
 }
 
 /**
@@ -792,10 +820,15 @@ export async function updateModifier(formData: FormData): Promise<void> {
     .where(eq(modifiers.id, modifierId));
   if (!modifier) return;
 
-  await db
-    .update(modifiers)
-    .set({ name, priceDeltaCents, extraPriceDeltaCents: extraPriceField(formData, modifier.role) })
-    .where(eq(modifiers.id, modifierId));
+  const sizeRows = sizePriceRows(formData, modifierId, modifier.role, await sizeModifiers());
+  await db.batch([
+    db
+      .update(modifiers)
+      .set({ name, priceDeltaCents, extraPriceDeltaCents: extraPriceField(formData, modifier.role) })
+      .where(eq(modifiers.id, modifierId)),
+    db.delete(modifierSizePrices).where(eq(modifierSizePrices.modifierId, modifierId)),
+    ...(sizeRows.length ? [db.insert(modifierSizePrices).values(sizeRows)] : []),
+  ]);
   await applyDefault(modifier.groupId, modifierId, isDefault);
   revalidateModifiers();
 }

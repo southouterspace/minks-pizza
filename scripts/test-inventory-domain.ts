@@ -57,9 +57,9 @@ const pie: MenuItem = {
       minSelect: 0,
       maxSelect: null,
       modifiers: [
-        { id: 1, name: "Pepperoni", priceDeltaCents: 200, extraPriceDeltaCents: 300, isDefault: false, isAvailable: true },
-        { id: 2, name: "Mushrooms", priceDeltaCents: 175, extraPriceDeltaCents: null, isDefault: false, isAvailable: true },
-        { id: 3, name: "Olives", priceDeltaCents: 125, extraPriceDeltaCents: null, isDefault: false, isAvailable: true },
+        { id: 1, name: "Pepperoni", priceDeltaCents: 200, extraPriceDeltaCents: 300, isDefault: false, isAvailable: true, sizePrices: [] },
+        { id: 2, name: "Mushrooms", priceDeltaCents: 175, extraPriceDeltaCents: null, isDefault: false, isAvailable: true, sizePrices: [] },
+        { id: 3, name: "Olives", priceDeltaCents: 125, extraPriceDeltaCents: null, isDefault: false, isAvailable: true, sizePrices: [] },
       ],
     },
   ],

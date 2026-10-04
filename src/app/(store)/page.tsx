@@ -5,6 +5,9 @@ import { ComingSoon } from "@/components/store/coming-soon";
 import { StoreStatusBanner } from "@/components/store/status-banner";
 import { RecentOrderLink } from "@/components/store/recent-order-link";
 import { DealsStrip } from "@/components/store/deals-strip";
+import { RewardsStrip } from "@/components/store/rewards-strip";
+import { getLoyaltySettings } from "@/lib/loyalty-server";
+import { getCurrentMember } from "@/lib/member-auth";
 import { getAdvertisedDeals } from "@/lib/promotion-queries";
 import { DAY_NAMES, formatHhmm } from "@/lib/zoned";
 
@@ -24,9 +27,11 @@ export default async function StorePage() {
     );
   }
 
-  const [menu, deals] = await Promise.all([
+  const [menu, deals, loyalty, member] = await Promise.all([
     getPublicMenu(),
     getAdvertisedDeals(new Date(), settings.timezone),
+    getLoyaltySettings(),
+    getCurrentMember(),
   ]);
   const todayHours = settings.hours?.find(
     (h) => h.day === new Date().getDay(),
@@ -64,6 +69,14 @@ export default async function StorePage() {
       </section>
 
       <DealsStrip deals={deals} />
+
+      {loyalty.enabled && !member ? (
+        <RewardsStrip
+          programName={loyalty.programName}
+          pointsPerDollar={loyalty.pointsPerDollar}
+          signupBonus={loyalty.signupBonus}
+        />
+      ) : null}
 
       {settings.isAcceptingOrders ? null : (
         <div className="border-b border-border bg-muted">

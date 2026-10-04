@@ -5,6 +5,7 @@
  */
 import { zonedParts } from "./hours";
 import { bpsOf } from "./money";
+import type { LineModifier } from "./pricing";
 import {
   REWARD_SCOPE,
   type DiscountTarget,
@@ -62,6 +63,8 @@ export type EvalLine = {
   itemId: number;
   categoryId: number;
   modifierIds: number[];
+  /** What each choice on the line was charged, so a bundle can include some toppings. */
+  modifiers: readonly LineModifier[];
   quantity: number;
   unitPriceCents: number;
 };
@@ -232,6 +235,50 @@ function applyBogo(
   return total;
 }
 
+type Bundle = Extract<PromotionReward, { type: "bundle" }>;
+
+/**
+ * A unit's price under a bundle: the deal price plus its crust charge (a
+ * gluten-free upgrade is never part of the deal) and every topping charge
+ * past the included ones, dearest included first.
+ */
+function bundleUnitPrice(line: EvalLine, reward: Bundle): number {
+  const sum = (charges: number[]) => charges.reduce((total, c) => total + c, 0);
+  const crust = sum(line.modifiers.filter((m) => m.role === "crust").map((m) => m.priceDeltaCents));
+  if (reward.includedToppings === null) return reward.priceCents + crust;
+  const charges = line.modifiers
+    .filter((m) => m.kind === "placed" && m.role === "topping" && m.amount !== "none")
+    .map((m) => m.priceDeltaCents)
+    .sort((a, b) => b - a);
+  return reward.priceCents + crust + sum(charges.slice(reward.includedToppings));
+}
+
+/**
+ * N items for a price each. Sets are priced as a whole, so a unit already
+ * under the deal price still counts toward one; units that save the most go
+ * into the first sets, and a set that saves nothing ends the search.
+ */
+function applyBundle(s: PriceState, lines: EvalLine[], reward: Bundle): number {
+  const pool = s.units
+    .filter((u) => lineQualifies(lines[u.line], reward.target))
+    .map((u) => ({ u, saving: u.remaining - bundleUnitPrice(lines[u.line], reward) }))
+    .sort((a, b) => b.saving - a.saving);
+  let total = 0;
+  for (let n = 0; reward.maxApplications === null || n < reward.maxApplications; n++) {
+    const set = pool.slice(n * reward.quantity, (n + 1) * reward.quantity);
+    if (set.length < reward.quantity) break;
+    let left = set.reduce((sum, p) => sum + p.saving, 0);
+    if (left <= 0) break;
+    total += left;
+    for (const p of set) {
+      const off = Math.min(Math.max(0, p.saving), left);
+      p.u.remaining -= off;
+      left -= off;
+    }
+  }
+  return total;
+}
+
 /** Applies a reward to `s` in place and returns the cents it took off. */
 function applyReward(reward: PromotionReward, s: PriceState, lines: EvalLine[]): number {
   switch (reward.type) {
@@ -254,6 +301,8 @@ function applyReward(reward: PromotionReward, s: PriceState, lines: EvalLine[]):
       return discountUnits(s, lines, reward.target, reward.maxUnits, (r) => r - reward.priceCents);
     case "bogo":
       return applyBogo(s, lines, reward);
+    case "bundle":
+      return applyBundle(s, lines, reward);
     case "free_delivery": {
       const off = s.delivery;
       s.delivery = 0;

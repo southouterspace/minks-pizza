@@ -45,10 +45,10 @@ const PEPPERONI = 2;
 const KNOTS = 3;
 
 const lines: EvalLine[] = [
-  { itemId: CHEESE, categoryId: PIZZAS, modifierIds: [LARGE, 200], quantity: 2, unitPriceCents: 1699 },
-  { itemId: PEPPERONI, categoryId: PIZZAS, modifierIds: [LARGE], quantity: 1, unitPriceCents: 1999 },
-  { itemId: CHEESE, categoryId: PIZZAS, modifierIds: [MEDIUM], quantity: 1, unitPriceCents: 1399 },
-  { itemId: KNOTS, categoryId: SIDES, modifierIds: [], quantity: 1, unitPriceCents: 599 },
+  { itemId: CHEESE, categoryId: PIZZAS, modifierIds: [LARGE, 200], modifiers: [], quantity: 2, unitPriceCents: 1699 },
+  { itemId: PEPPERONI, categoryId: PIZZAS, modifierIds: [LARGE], modifiers: [], quantity: 1, unitPriceCents: 1999 },
+  { itemId: CHEESE, categoryId: PIZZAS, modifierIds: [MEDIUM], modifiers: [], quantity: 1, unitPriceCents: 1399 },
+  { itemId: KNOTS, categoryId: SIDES, modifierIds: [], modifiers: [], quantity: 1, unitPriceCents: 599 },
 ];
 const SUBTOTAL = 7395;
 
@@ -201,7 +201,7 @@ test("bogo: buy a pizza, knots half off; a unit is never both buy and get", () =
 });
 
 test("bogo: maxApplications caps the sets", () => {
-  const four: EvalLine[] = [{ itemId: CHEESE, categoryId: PIZZAS, modifierIds: [LARGE], quantity: 4, unitPriceCents: 1000 }];
+  const four: EvalLine[] = [{ itemId: CHEESE, categoryId: PIZZAS, modifierIds: [LARGE], modifiers: [], quantity: 4, unitPriceCents: 1000 }];
   const larges = target({ modifierIds: [LARGE] });
   const reward = (max: number | null): PromotionReward => ({
     type: "bogo",
@@ -211,6 +211,98 @@ test("bogo: maxApplications caps the sets", () => {
   });
   assert.deepEqual(amounts(run([auto(promo(reward(null)))], { lines: four, subtotalCents: 4000 })), [2000]);
   assert.deepEqual(amounts(run([auto(promo(reward(1)))], { lines: four, subtotalCents: 4000 })), [1000]);
+});
+
+// A Large Cheese is $15.99; each whole topping $2.00, a half one $1.00.
+type Topping = [name: string, placement: "whole" | "left" | "right", amount: "regular" | "extra" | "none", cents: number];
+function largeCheese(quantity: number, toppings: Topping[]): EvalLine {
+  return {
+    itemId: CHEESE,
+    categoryId: PIZZAS,
+    modifierIds: [LARGE],
+    modifiers: [
+      { kind: "option", modifierId: LARGE, role: "size", groupName: "Size", modifierName: 'Large 14"', priceDeltaCents: 400 },
+      ...toppings.map(([modifierName, placement, amount, priceDeltaCents]) => ({
+        kind: "placed" as const,
+        modifierId: null,
+        role: "topping" as const,
+        groupName: "Toppings",
+        modifierName,
+        priceDeltaCents,
+        placement,
+        amount,
+      })),
+    ],
+    quantity,
+    unitPriceCents: 1599 + toppings.reduce((sum, t) => sum + t[3], 0),
+  };
+}
+const bundle = (over: Partial<Extract<PromotionReward, { type: "bundle" }>> = {}): PromotionReward => ({
+  type: "bundle",
+  target: target({ itemIds: [CHEESE], modifierIds: [LARGE] }),
+  quantity: 2,
+  priceCents: 1649,
+  includedToppings: 1,
+  maxApplications: null,
+  ...over,
+});
+const runLines = (bundleLines: EvalLine[], reward = bundle()) =>
+  run([auto(promo(reward))], { lines: bundleLines, subtotalCents: bundleLines.reduce((s, l) => s + l.quantity * l.unitPriceCents, 0) });
+
+test("bundle: two Large one-toppings for $16.49 each", () => {
+  assert.deepEqual(amounts(runLines([largeCheese(2, [["Ham", "whole", "regular", 200]])])), [150 + 150]);
+});
+
+test("bundle: toppings past the included one are still charged", () => {
+  const threeToppings = largeCheese(1, [["Ham", "whole", "regular", 200], ["Bacon", "whole", "regular", 200], ["Feta", "whole", "regular", 200]]);
+  // $21.99 + $17.99 for ($16.49 + $4.00) + $16.49.
+  assert.deepEqual(amounts(runLines([threeToppings, largeCheese(1, [["Ham", "whole", "regular", 200]])])), [300]);
+});
+
+test("bundle: priced as a pair, so a plain Large still counts at the deal price", () => {
+  // $15.99 + $17.99 for 2 × $16.49.
+  assert.deepEqual(amounts(runLines([largeCheese(1, []), largeCheese(1, [["Ham", "whole", "regular", 200]])])), [100]);
+  // Two plain Larges already cost less than the deal.
+  assert.deepEqual(amounts(runLines([largeCheese(2, [])])), []);
+});
+
+test("bundle: the included topping is the dearest one, and a removed topping isn't one", () => {
+  const lines = [largeCheese(2, [["Ham", "left", "regular", 100], ["Bacon", "whole", "regular", 200], ["Basil", "whole", "none", 0]])];
+  // $18.99 each; the whole Bacon is included, the half Ham charged: $17.49 each.
+  assert.deepEqual(amounts(runLines(lines)), [150 + 150]);
+});
+
+test("bundle: needs the full set; extra units and maxApplications", () => {
+  const one = runLines([largeCheese(1, [["Ham", "whole", "regular", 200]])]);
+  assert.deepEqual(amounts(one), []);
+  const four = [largeCheese(5, [["Ham", "whole", "regular", 200]])];
+  assert.deepEqual(amounts(runLines(four)), [600]);
+  assert.deepEqual(amounts(runLines(four, bundle({ maxApplications: 1 }))), [300]);
+});
+
+test("bundle: a crust upcharge is never part of the deal", () => {
+  const glutenFree = (line: EvalLine): EvalLine => ({
+    ...line,
+    modifiers: [...line.modifiers, { kind: "option", modifierId: null, role: "crust", groupName: "Crust", modifierName: "Gluten Free", priceDeltaCents: 300 }],
+    unitPriceCents: line.unitPriceCents + 300,
+  });
+  // $20.99 each for ($16.49 + $3.00): the same $1.50 off a pie as on Hand Tossed.
+  const lines = [glutenFree(largeCheese(2, [["Ham", "whole", "regular", 200]]))];
+  assert.deepEqual(amounts(runLines(lines)), [150 + 150]);
+  assert.deepEqual(amounts(runLines([glutenFree(largeCheese(2, [["Ham", "whole", "regular", 200]]))], bundle({ includedToppings: null }))), [150 + 150]);
+});
+
+test("bundle: every topping included when includedToppings is null", () => {
+  const lines = [largeCheese(2, [["Ham", "whole", "regular", 200], ["Bacon", "whole", "extra", 400]])];
+  assert.deepEqual(amounts(runLines(lines, bundle({ includedToppings: null }))), [(2199 - 1649) * 2]);
+});
+
+test("bundle words: the offer, and what to add when there's no full set", () => {
+  const reward = bundle();
+  assert.equal(describePromotionShort(promo(reward), names), '2 Large 14" Cheese Pizza for $16.49 each, 1 topping included');
+  assert.equal(describePromotionShort(promo(bundle({ includedToppings: null, maxApplications: 2 })), names), '2 Large 14" Cheese Pizza for $16.49 each (up to 2× per order)');
+  const short = run([coded(promo(reward), "PAIR")], { lines: [largeCheese(1, [])], subtotalCents: 1599 });
+  assert.equal(reasonFor(short, "PAIR"), 'Add 2 × Large 14" Cheese Pizza to use this');
 });
 
 test("free_delivery takes the whole fee and targets delivery", () => {
@@ -486,6 +578,7 @@ test("every template and every reward type survives save and edit unchanged", ()
     { ...EMPTY_DRAFT, name: "Knots 30% off", rewardType: "item_percent", percent: "30", maxUnits: "2", target: target({ categoryIds: [SIDES] }) },
     { ...EMPTY_DRAFT, name: "$3 off pizzas", rewardType: "item_amount", amount: "3.5", target: target({ categoryIds: [PIZZAS] }), startsOn: "2026-10-10", endsOn: "2026-10-31" },
     { ...EMPTY_DRAFT, name: "Pizza, half-off knots", rewardType: "bogo", target: target({ categoryIds: [PIZZAS] }), getSameAsBuy: false, getTarget: target({ itemIds: [KNOTS] }), getPercent: "50", maxApplications: "2" },
+    { ...EMPTY_DRAFT, name: "3 mediums, all toppings", rewardType: "bundle", bundleQty: "3", price: "12.99", includedToppings: "", maxApplications: "1", target: target({ modifierIds: [MEDIUM] }) },
     { ...EMPTY_DRAFT, name: "12.5% up to $8", rewardType: "order_percent", percent: "12.5", maxDiscount: "8", perCustomerLimit: "1", totalLimit: "100", newCustomersOnly: true, stackable: true, advertised: false },
   ];
   assert.deepEqual([...new Set(drafts.map((d) => d.rewardType))].sort(), [...REWARD_TYPES].sort());
@@ -507,6 +600,8 @@ test("each reward type's form shows exactly the fields its reward reads", () => 
     getQty: "7",
     getPercent: "7",
     maxApplications: "7",
+    bundleQty: "7",
+    includedToppings: "7",
     target: target({ itemIds: [KNOTS] }),
     getTarget: target({ itemIds: [KNOTS] }),
   };

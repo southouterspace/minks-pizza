@@ -6,8 +6,10 @@ import { cyclePlacement, groupsInEntryOrder, pickOption, selectionOf, tapTopping
 import { draftLine, lineSummary, type DraftLine } from "@/lib/pos-client/draft";
 import { formatCents } from "@/lib/money";
 import {
+  chosenSize,
   isPlaceable,
   priceLine,
+  pricesAt,
   PricingError,
   type MenuGroup,
   type MenuItem,
@@ -52,6 +54,7 @@ export function PizzaBuilder({
   const [notes, setNotes] = useState(initial.notes ?? "");
   const [active, setActive] = useState<Placement>("whole");
   const groups = useMemo(() => groupsInEntryOrder(item), [item]);
+  const sizeId = chosenSize(item.groups, sel);
   const editing = initial.lineId !== undefined;
 
   const priced = useMemo(() => {
@@ -111,13 +114,14 @@ export function PizzaBuilder({
               key={g.id}
               group={g}
               sel={sel}
+              sizeId={sizeId}
               active={active}
               onActive={setActive}
               onTap={(m) => setSel((s) => tapTopping(s, m, active))}
               onLongPress={(m) => setSel((s) => cyclePlacement(s, m))}
             />
           ) : (
-            <OptionGroup key={g.id} group={g} sel={sel} onPick={(m) => setSel((s) => pickOption(s, g, m))} />
+            <OptionGroup key={g.id} group={g} sel={sel} sizeId={sizeId} onPick={(m) => setSel((s) => pickOption(s, g, m))} />
           ),
         )}
         <label className="flex flex-col gap-1">
@@ -134,7 +138,17 @@ export function PizzaBuilder({
   );
 }
 
-function OptionGroup({ group, sel, onPick }: { group: MenuGroup; sel: Selection[]; onPick: (m: MenuModifier) => void }) {
+function OptionGroup({
+  group,
+  sel,
+  sizeId,
+  onPick,
+}: {
+  group: MenuGroup;
+  sel: Selection[];
+  sizeId: number | null;
+  onPick: (m: MenuModifier) => void;
+}) {
   return (
     <section>
       <h3 className="mb-2 text-sm font-semibold tracking-wide text-muted-foreground uppercase">
@@ -144,6 +158,7 @@ function OptionGroup({ group, sel, onPick }: { group: MenuGroup; sel: Selection[
       <div className="grid grid-cols-4 gap-2">
         {group.modifiers.map((m) => {
           const on = !!selectionOf(sel, m.id);
+          const priceCents = pricesAt(m, sizeId).priceDeltaCents;
           return (
             <button
               key={m.id}
@@ -158,7 +173,7 @@ function OptionGroup({ group, sel, onPick }: { group: MenuGroup; sel: Selection[
               )}
             >
               <span className="line-clamp-1">{m.name}</span>
-              {m.priceDeltaCents > 0 && <span className="text-xs opacity-70">+{formatCents(m.priceDeltaCents)}</span>}
+              {priceCents > 0 && <span className="text-xs opacity-70">+{formatCents(priceCents)}</span>}
             </button>
           );
         })}
@@ -170,6 +185,7 @@ function OptionGroup({ group, sel, onPick }: { group: MenuGroup; sel: Selection[
 function ToppingGroup({
   group,
   sel,
+  sizeId,
   active,
   onActive,
   onTap,
@@ -177,6 +193,7 @@ function ToppingGroup({
 }: {
   group: MenuGroup;
   sel: Selection[];
+  sizeId: number | null;
   active: Placement;
   onActive: (p: Placement) => void;
   onTap: (m: MenuModifier) => void;
@@ -197,6 +214,7 @@ function ToppingGroup({
           const removed = s?.amount === "none";
           const amountTag = s ? AMOUNT_TAG[s.amount] : null;
           const halfTag = s && !removed ? HALF_TAG[s.placement] : null;
+          const priceCents = pricesAt(m, sizeId).priceDeltaCents;
           return (
             <button
               key={m.id}
@@ -233,7 +251,7 @@ function ToppingGroup({
             >
               <span className="line-clamp-1">{m.name}</span>
               <span className="text-xs opacity-75">
-                {amountTag ?? (m.priceDeltaCents > 0 ? `+${formatCents(m.priceDeltaCents)}` : m.isDefault ? "on pizza" : " ")}
+                {amountTag ?? (m.isDefault ? "on pizza" : priceCents > 0 ? `+${formatCents(priceCents)}` : " ")}
               </span>
               {halfTag && (
                 <span className="absolute top-1 right-1 flex size-6 items-center justify-center rounded-full bg-background text-xs font-bold text-foreground">

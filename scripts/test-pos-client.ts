@@ -8,7 +8,7 @@
  */
 import { cyclePlacement, defaultSelections, tapTopping } from "../src/lib/pos-client/builder";
 import { draftLine, draftProblem, draftReducer, draftTotals, emptyDraft, firePlan, lineSummary, toSubmitRequest, type Draft, type NewOrderDraft } from "../src/lib/pos-client/draft";
-import { reorderLines, type MenuItem, type PricingPolicy } from "../src/lib/pricing";
+import { priceLine, reorderLines, withItemDefaults, type MenuItem, type PricingPolicy } from "../src/lib/pricing";
 import { withCounts } from "../src/lib/reports";
 import { parseCents } from "../src/lib/money";
 import { chargeRows } from "../src/components/pos/totals";
@@ -22,6 +22,7 @@ const mod = (id: number, name: string, priceDeltaCents: number, isDefault = fals
   extraPriceDeltaCents: null,
   isDefault,
   isAvailable: true,
+  sizePrices: [],
 });
 
 const cheese: MenuItem = {
@@ -55,6 +56,24 @@ run(async () => {
   check("a default topping cycles regular → extra → light → NO", sel.find((s) => s.modifierId === 32)?.amount, "none");
   sel = tapTopping(sel, basil, "whole");
   check("…and back to regular", sel.find((s) => s.modifierId === 32)?.amount, "regular");
+
+  const price = (amount: "regular" | "extra" | "light" | "none", placement: "whole" | "left" = "whole") =>
+    priceLine(cheese, [{ modifierId: 10, placement: "whole", amount: "regular" }, { modifierId: 20, placement: "whole", amount: "regular" }, { modifierId: 32, placement, amount }], policy).unitPriceCents;
+  check(
+    "a topping the pie comes with is in its price; only the extra portion costs",
+    [price("regular"), price("light"), price("none"), price("regular", "left"), price("extra")],
+    [1399, 1399, 1399, 1399, 1524],
+  );
+  check(
+    "an item's own defaults replace the group's",
+    withItemDefaults([mod(1, "Red", 0, true), mod(2, "BBQ", 0)], [2]).map((m) => [m.id, m.isDefault]),
+    [[1, false], [2, true]],
+  );
+  check(
+    "with no defaults of its own, an item keeps the group's",
+    withItemDefaults([mod(1, "Red", 0, true), mod(2, "BBQ", 0)], []).map((m) => m.isDefault),
+    [true, false],
+  );
 
   sel = tapTopping([], pep, "left");
   check("tapping with Left active adds a left half", sel, [{ modifierId: 30, placement: "left", amount: "regular" }]);

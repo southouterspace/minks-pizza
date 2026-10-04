@@ -40,6 +40,9 @@ export const LEDGER_KIND_RULES: Record<LedgerKind, { lifetime: boolean; label: s
   restore: { lifetime: false, label: "Expired points restored" },
 };
 
+/** Signing in claims guest orders placed within this many days. */
+export const CLAIM_WINDOW_DAYS = 30;
+
 /** The welcome bonus waits for a first completed order of at least this net. */
 export const SIGNUP_MIN_NET_CENTS = 1500;
 

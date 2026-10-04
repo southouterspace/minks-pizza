@@ -23,8 +23,10 @@ import { Textarea } from "@/components/ui/textarea";
 import { cn } from "@/lib/utils";
 import {
   AMOUNT_LABEL,
+  chosenSize,
   isPlaceable,
   priceLine,
+  pricesAt,
   PricingError,
   type Amount,
   type MenuItem,
@@ -35,6 +37,9 @@ import { PizzaGlyph } from "@/components/pizza-glyph";
 
 type ToppingChoice = { placement: Placement; amount: Amount };
 const DEFAULT_CHOICE: ToppingChoice = { placement: "whole", amount: "regular" };
+/** An unchecked topping the pie comes with, so the kitchen reads "No Ham" rather than nothing. */
+const REMOVED: ToppingChoice = { placement: "whole", amount: "none" };
+const isOn = (choice: ToppingChoice | undefined): choice is ToppingChoice => choice !== undefined && choice.amount !== "none";
 const AMOUNT_OPTIONS: Amount[] = ["light", "regular", "extra"];
 
 /** The dialog prices with the same function checkout does, over the live menu. */
@@ -59,10 +64,11 @@ const optionRowClass = (checked: boolean) =>
       : "border-border hover:border-foreground/30",
   );
 
-/** What one choice adds on its own, for the row's price hint. */
-function selectionPrice(item: MenuItemView, mod: ModifierView, choice: ToppingChoice): number {
-  const priced = priceLine(pricingItem(item, true), [{ modifierId: mod.id, ...choice }], item.policy);
-  return priced.unitPriceCents - item.basePriceCents;
+/** What one choice adds on its own at the chosen size, for the row's price hint. */
+function selectionPrice(item: MenuItemView, mod: ModifierView, choice: ToppingChoice, sizeId: number | null): number {
+  const size: Selection[] = sizeId === null ? [] : [{ modifierId: sizeId, ...DEFAULT_CHOICE }];
+  const priced = priceLine(pricingItem(item, true), [...size, { modifierId: mod.id, ...choice }], item.policy);
+  return priced.modifiers.find((m) => m.modifierId === mod.id)?.priceDeltaCents ?? 0;
 }
 
 const PLACEMENT_OPTIONS: { value: Placement; label: string }[] = [
@@ -209,6 +215,7 @@ export function ItemDialog({
   const toggle = (groupId: number, modId: number) => {
     const group = item.modifierGroups.find((g) => g.id === groupId);
     if (!group) return;
+    const mod = group.modifiers.find((m) => m.id === modId);
     setSelected((prev) => {
       const next = new Map(prev);
       const groupModIds = group.modifiers.map((m) => m.id);
@@ -216,10 +223,11 @@ export function ItemDialog({
         // radio behavior
         for (const id of groupModIds) next.delete(id);
         next.set(modId, DEFAULT_CHOICE);
-      } else if (next.has(modId)) {
-        next.delete(modId);
+      } else if (isOn(next.get(modId))) {
+        if (mod?.isDefault && isPlaceable(group.role)) next.set(modId, REMOVED);
+        else next.delete(modId);
       } else {
-        const count = groupModIds.filter((id) => next.has(id)).length;
+        const count = groupModIds.filter((id) => isOn(next.get(id))).length;
         if (group.maxSelect !== null && count >= group.maxSelect) return prev;
         next.set(modId, DEFAULT_CHOICE);
       }
@@ -274,8 +282,10 @@ export function ItemDialog({
   const checking = limit?.key !== limitKey;
   const count = max === null ? quantity : Math.min(quantity, max);
 
+  const sizeId = chosenSize(item.modifierGroups, selections);
+
   const violations = item.modifierGroups.filter((g) => {
-    const count = g.modifiers.filter((m) => selected.has(m.id)).length;
+    const count = g.modifiers.filter((m) => isOn(selected.get(m.id))).length;
     return count < g.minSelect;
   });
 
@@ -323,13 +333,14 @@ export function ItemDialog({
                 <div className="mt-3 grid gap-2">
                   {group.modifiers.map((mod) => {
                     const choice = selected.get(mod.id);
+                    const shown = isOn(choice) ? choice : DEFAULT_CHOICE;
                     return (
                       <ToppingOption
                         key={mod.id}
                         mod={mod}
-                        checked={choice !== undefined}
-                        choice={choice ?? DEFAULT_CHOICE}
-                        priceCents={selectionPrice(item, mod, choice ?? DEFAULT_CHOICE)}
+                        checked={isOn(choice)}
+                        choice={shown}
+                        priceCents={selectionPrice(item, mod, shown, sizeId)}
                         onToggle={() => toggle(group.id, mod.id)}
                         onChoice={(patch) => setChoice(mod.id, patch)}
                       />
@@ -348,15 +359,16 @@ export function ItemDialog({
                 >
                   {group.modifiers.map((mod) => {
                     const checked = selected.has(mod.id);
+                    const priceCents = pricesAt(mod, sizeId).priceDeltaCents;
                     return (
                       <label key={mod.id} className={optionRowClass(checked)}>
                         <span className="flex items-center gap-3">
                           <RadioGroupItem value={mod.id} />
                           {mod.name}
                         </span>
-                        {mod.priceDeltaCents !== 0 ? (
+                        {priceCents !== 0 ? (
                           <span className="shrink-0 tabular-nums text-muted-foreground">
-                            +{formatCents(mod.priceDeltaCents)}
+                            +{formatCents(priceCents)}
                           </span>
                         ) : null}
                       </label>
@@ -367,6 +379,7 @@ export function ItemDialog({
                 <div className="mt-3 grid gap-2">
                   {group.modifiers.map((mod) => {
                     const checked = selected.has(mod.id);
+                    const priceCents = pricesAt(mod, sizeId).priceDeltaCents;
                     return (
                       <label key={mod.id} className={optionRowClass(checked)}>
                         <span className="flex items-center gap-3">
@@ -376,9 +389,9 @@ export function ItemDialog({
                           />
                           {mod.name}
                         </span>
-                        {mod.priceDeltaCents !== 0 ? (
+                        {priceCents !== 0 ? (
                           <span className="shrink-0 tabular-nums text-muted-foreground">
-                            +{formatCents(mod.priceDeltaCents)}
+                            +{formatCents(priceCents)}
                           </span>
                         ) : null}
                       </label>

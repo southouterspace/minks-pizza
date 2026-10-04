@@ -7,7 +7,8 @@ import {
   modifierGroups,
   modifiers,
 } from "@/db";
-import type { MenuGroup, MenuModifier, PricingPolicy } from "@/lib/pricing";
+import { withItemDefaults, type MenuGroup, type MenuModifier, type PricingPolicy } from "@/lib/pricing";
+import { loadSizePrices } from "@/lib/menu-server";
 import { getSettings, policyOf } from "@/lib/settings-server";
 
 export type ModifierView = MenuModifier;
@@ -84,7 +85,10 @@ export async function getPublicMenu(): Promise<CategoryView[]> {
         .orderBy(asc(modifiers.sortOrder), asc(modifiers.id))
     : [];
 
-  const policy = policyOf(await getSettings());
+  const [policy, sizePrices] = await Promise.all([
+    getSettings().then(policyOf),
+    loadSizePrices(mods.map((m) => m.id)),
+  ]);
 
   const groupView = new Map<number, ModifierGroupView>(
     groups.map((g) => [
@@ -104,6 +108,7 @@ export async function getPublicMenu(): Promise<CategoryView[]> {
             extraPriceDeltaCents: m.extraPriceDeltaCents,
             isDefault: m.isDefault,
             isAvailable: m.isAvailable,
+            sizePrices: sizePrices.get(m.id) ?? [],
           })),
       },
     ]),
@@ -126,8 +131,10 @@ export async function getPublicMenu(): Promise<CategoryView[]> {
           isFeatured: i.isFeatured,
           modifierGroups: links
             .filter((l) => l.itemId === i.id)
-            .map((l) => groupView.get(l.groupId))
-            .filter((g): g is ModifierGroupView => Boolean(g)),
+            .flatMap((l) => {
+              const g = groupView.get(l.groupId);
+              return g ? [{ ...g, modifiers: withItemDefaults(g.modifiers, l.defaultModifierIds) }] : [];
+            }),
         })),
     }))
     .filter((c) => c.items.length > 0);
