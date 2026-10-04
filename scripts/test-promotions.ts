@@ -280,6 +280,18 @@ test("bundle: needs the full set; extra units and maxApplications", () => {
   assert.deepEqual(amounts(runLines(four, bundle({ maxApplications: 1 }))), [300]);
 });
 
+test("bundle: a crust upcharge is never part of the deal", () => {
+  const glutenFree = (line: EvalLine): EvalLine => ({
+    ...line,
+    modifiers: [...line.modifiers, { kind: "option", modifierId: null, role: "crust", groupName: "Crust", modifierName: "Gluten Free", priceDeltaCents: 300 }],
+    unitPriceCents: line.unitPriceCents + 300,
+  });
+  // $20.99 each for ($16.49 + $3.00): the same $1.50 off a pie as on Hand Tossed.
+  const lines = [glutenFree(largeCheese(2, [["Ham", "whole", "regular", 200]]))];
+  assert.deepEqual(amounts(runLines(lines)), [150 + 150]);
+  assert.deepEqual(amounts(runLines([glutenFree(largeCheese(2, [["Ham", "whole", "regular", 200]]))], bundle({ includedToppings: null }))), [150 + 150]);
+});
+
 test("bundle: every topping included when includedToppings is null", () => {
   const lines = [largeCheese(2, [["Ham", "whole", "regular", 200], ["Bacon", "whole", "extra", 400]])];
   assert.deepEqual(amounts(runLines(lines, bundle({ includedToppings: null }))), [(2199 - 1649) * 2]);
