@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import { Fragment } from "react";
 import { asc, eq } from "drizzle-orm";
 import { SlidersHorizontal, Star } from "lucide-react";
 import { db, itemModifierGroups, menuItems, modifierGroups, modifiers } from "@/db";
@@ -22,7 +23,8 @@ import {
   sizeModifiers,
 } from "@/lib/recipe-data";
 import { NativeSelect, NativeSelectOption } from "@/components/ui/native-select";
-import { GROUP_ROLE_LABEL, GROUP_ROLES, isPlaceable, type GroupRole } from "@/lib/pricing";
+import { loadSizePrices } from "@/lib/menu-server";
+import { GROUP_ROLE_LABEL, GROUP_ROLES, isPlaceable, type GroupRole, type SizePrice } from "@/lib/pricing";
 import { Button, buttonVariants } from "@/components/ui/button";
 import {
   Card,
@@ -38,7 +40,7 @@ import {
   EmptyMedia,
   EmptyTitle,
 } from "@/components/ui/empty";
-import { Field, FieldGroup, FieldLabel } from "@/components/ui/field";
+import { Field, FieldGroup, FieldLabel, FieldLegend, FieldSet } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import { formatDelta, ruleSummary } from "@/components/admin/ui";
 import { centsToDollars } from "@/lib/money";
@@ -141,6 +143,75 @@ function ExtraPriceField({ id, cents }: { id: string; cents: number | null }) {
   );
 }
 
+type SizeOption = { id: number; label: string };
+
+function SizePriceFields({
+  sizes,
+  prices,
+  placeable,
+}: {
+  sizes: readonly SizeOption[];
+  prices: readonly SizePrice[];
+  placeable: boolean;
+}) {
+  if (sizes.length === 0) return null;
+  return (
+    <FieldSet>
+      <FieldLegend variant="label">
+        Price by size{" "}
+        <span className="font-normal text-muted-foreground">(blank = price above)</span>
+      </FieldLegend>
+      <div className={`grid items-center gap-2 ${placeable ? "grid-cols-[1fr_5rem_5rem]" : "grid-cols-[1fr_5rem]"}`}>
+        {placeable ? (
+          <>
+            <span />
+            <span className="text-xs text-muted-foreground">Price</span>
+            <span className="text-xs text-muted-foreground">Extra</span>
+          </>
+        ) : null}
+        {sizes.map((size) => {
+          const price = prices.find((p) => p.sizeModifierId === size.id);
+          return (
+            <Fragment key={size.id}>
+              <span className="truncate text-sm">{size.label}</span>
+              <Input
+                name={`sizePrice-${size.id}`}
+                aria-label={`${size.label} price ($)`}
+                type="number"
+                step="0.01"
+                min="0"
+                defaultValue={price ? centsToDollars(price.priceDeltaCents) : ""}
+                className="tabular-nums"
+              />
+              {placeable ? (
+                <Input
+                  name={`sizeExtraPrice-${size.id}`}
+                  aria-label={`${size.label} extra price ($)`}
+                  type="number"
+                  step="0.01"
+                  min="0"
+                  defaultValue={price?.extraPriceDeltaCents == null ? "" : centsToDollars(price.extraPriceDeltaCents)}
+                  className="tabular-nums"
+                />
+              ) : null}
+            </Fragment>
+          );
+        })}
+      </div>
+    </FieldSet>
+  );
+}
+
+/** "Large +$2.50 (extra +$4.00)" for each size that has its own price. */
+function sizePriceSummary(prices: readonly SizePrice[], sizes: readonly SizeOption[], placeable: boolean): string[] {
+  return sizes.flatMap((size) => {
+    const price = prices.find((p) => p.sizeModifierId === size.id);
+    if (!price) return [];
+    const extra = placeable && price.extraPriceDeltaCents !== null ? ` (extra ${formatDelta(price.extraPriceDeltaCents)})` : "";
+    return [`${size.label} ${formatDelta(price.priceDeltaCents)}${extra}`];
+  });
+}
+
 function recipeSummary(lines: readonly { ingredientId: number; qtyMilli: number }[]): string {
   if (lines.length === 0) return "none";
   const ingredientCount = new Set(lines.map((l) => l.ingredientId)).size;
@@ -166,11 +237,18 @@ export default async function ModifiersPage() {
     })
     .from(itemModifierGroups)
     .innerJoin(menuItems, eq(itemModifierGroups.itemId, menuItems.id));
-  const [allIngredients, sizes, recipeRows] = await Promise.all([
+  const [allIngredients, sizes, recipeRows, sizePrices] = await Promise.all([
     recipeIngredients(),
     sizeModifiers(),
     modifierRecipeLines(),
+    loadSizePrices(),
   ]);
+  const groupName = new Map(groups.map((g) => [g.id, g.name]));
+  const manySizeGroups = new Set(sizes.map((s) => s.groupId)).size > 1;
+  const sizeOptions = sizes.map((s) => ({
+    id: s.id,
+    label: manySizeGroups ? `${groupName.get(s.groupId)} ${s.name}` : s.name,
+  }));
 
   return (
     <div>
@@ -230,6 +308,7 @@ export default async function ModifiersPage() {
           );
           const isToppings = isPlaceable(group.role);
           const recipeSizes = group.role === "size" ? [] : sizes;
+          const pricedSizes = group.role === "size" ? [] : sizeOptions;
           const usedBy = [
             ...new Set(
               usage.filter((u) => u.groupId === group.id).map((u) => u.itemName),
@@ -338,6 +417,9 @@ export default async function ModifiersPage() {
                         {isToppings && modifier.extraPriceDeltaCents !== null
                           ? ` · extra ${formatDelta(modifier.extraPriceDeltaCents)}`
                           : null}
+                        {sizePriceSummary(sizePrices.get(modifier.id) ?? [], pricedSizes, isToppings).map(
+                          (s) => ` · ${s}`,
+                        )}
                       </span>
                       <form action={toggleModifierAvailability}>
                         <input
@@ -369,7 +451,7 @@ export default async function ModifiersPage() {
                         >
                           Edit
                         </summary>
-                        <div className="absolute right-0 z-20 mt-2 w-72 rounded-xl border border-border bg-popover p-4 text-left shadow-md">
+                        <div className="absolute right-0 z-20 mt-2 w-80 rounded-xl border border-border bg-popover p-4 text-left shadow-md">
                           <form action={updateModifier}>
                             <input
                               type="hidden"
@@ -414,6 +496,11 @@ export default async function ModifiersPage() {
                                   cents={modifier.extraPriceDeltaCents}
                                 />
                               ) : null}
+                              <SizePriceFields
+                                sizes={pricedSizes}
+                                prices={sizePrices.get(modifier.id) ?? []}
+                                placeable={isToppings}
+                              />
                               <Field orientation="horizontal">
                                 <Checkbox
                                   id={`mod-default-${modifier.id}`}
