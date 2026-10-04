@@ -619,6 +619,7 @@ npx tsx --env-file=.env.local scripts/e2e-timeclock.ts
 npm run e2e:loyalty
 npx tsx --env-file=.env.local scripts/e2e-operator.ts     # also e2e-customer, e2e-team, e2e-logo
 NODE_PATH=scripts/shims npx tsx --env-file=.env.local scripts/e2e-toppings.ts        # half-and-half toppings: dialog, cart, checkout, KDS
+NODE_PATH=scripts/shims npx tsx --env-file=.env.local scripts/e2e-size-prices.ts     # per-size modifier prices: admin, dialog, checkout
 NODE_PATH=scripts/shims npx tsx --env-file=.env.local scripts/e2e-recipes.ts         # ingredients, recipes, 86, settings
 NODE_PATH=scripts/shims npx tsx --env-file=.env.local scripts/e2e-inventory-ops.ts   # receive, count, waste
 NODE_PATH=scripts/shims npx tsx --env-file=.env.local scripts/e2e-reports.ts         # food cost, variance, topping mix, margins
