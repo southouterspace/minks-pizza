@@ -183,10 +183,48 @@ function amountWeight(prices: Prices, isDefault: boolean, amount: Amount, policy
   return isDefault ? Math.max(0, w - prices.priceDeltaCents) : w;
 }
 
-/** An item's own defaults in a group replace the group's. */
-export function withItemDefaults<M extends { id: number; isDefault: boolean }>(mods: readonly M[], itemDefaultIds: readonly number[]): M[] {
-  if (itemDefaultIds.length === 0) return [...mods];
-  return mods.map((m) => ({ ...m, isDefault: itemDefaultIds.includes(m.id) }));
+/** How one item uses a shared group, from its `item_modifier_groups` row. Empty arrays leave the group as it is. */
+export type ItemGroupOverrides = {
+  /** Replace the group's defaults. */
+  defaultModifierIds: readonly number[];
+  hiddenModifierIds: readonly number[];
+  soldOutModifierIds: readonly number[];
+};
+
+/**
+ * The options an item offers from a shared group: its hidden ones gone (a
+ * hidden default with them), its own sold-out ones unavailable, and its own
+ * defaults in place of the group's.
+ */
+export function itemOptions<M extends { id: number; isDefault: boolean; isAvailable: boolean }>(
+  mods: readonly M[],
+  o: ItemGroupOverrides,
+): M[] {
+  return mods
+    .filter((m) => !o.hiddenModifierIds.includes(m.id))
+    .map((m) => ({
+      ...m,
+      isDefault: o.defaultModifierIds.length ? o.defaultModifierIds.includes(m.id) : m.isDefault,
+      isAvailable: m.isAvailable && !o.soldOutModifierIds.includes(m.id),
+    }));
+}
+
+/** Why an item can't use `o` on `group`, or null when it can. */
+export function overridesProblem(
+  group: { name: string; minSelect: number; modifiers: readonly { id: number }[] },
+  o: ItemGroupOverrides,
+): string | null {
+  const ids = new Set(group.modifiers.map((m) => m.id));
+  if ([...o.hiddenModifierIds, ...o.soldOutModifierIds].some((id) => !ids.has(id))) {
+    return `An option marked on ${group.name} isn't in that group.`;
+  }
+  if (o.hiddenModifierIds.some((id) => o.defaultModifierIds.includes(id))) {
+    return `This item comes with an option it doesn't offer in ${group.name}.`;
+  }
+  if (group.minSelect > 0 && group.modifiers.every((m) => o.hiddenModifierIds.includes(m.id))) {
+    return `${group.name} is required, so this item must offer at least one of its options.`;
+  }
+  return null;
 }
 
 /** The size picked among `selections`, or null when there is none. */

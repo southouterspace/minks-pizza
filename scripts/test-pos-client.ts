@@ -8,7 +8,7 @@
  */
 import { cyclePlacement, defaultSelections, tapTopping } from "../src/lib/pos-client/builder";
 import { draftLine, draftProblem, draftReducer, draftTotals, emptyDraft, firePlan, lineSummary, toSubmitRequest, type Draft, type NewOrderDraft } from "../src/lib/pos-client/draft";
-import { priceLine, reorderLines, withItemDefaults, type MenuItem, type PricingPolicy } from "../src/lib/pricing";
+import { itemOptions, priceLine, reorderLines, type MenuItem, type PricingPolicy } from "../src/lib/pricing";
 import { withCounts } from "../src/lib/reports";
 import { parseCents } from "../src/lib/money";
 import { chargeRows } from "../src/components/pos/totals";
@@ -66,12 +66,12 @@ run(async () => {
   );
   check(
     "an item's own defaults replace the group's",
-    withItemDefaults([mod(1, "Red", 0, true), mod(2, "BBQ", 0)], [2]).map((m) => [m.id, m.isDefault]),
+    itemOptions([mod(1, "Red", 0, true), mod(2, "BBQ", 0)], { defaultModifierIds: [2], hiddenModifierIds: [], soldOutModifierIds: [] }).map((m) => [m.id, m.isDefault]),
     [[1, false], [2, true]],
   );
   check(
     "with no defaults of its own, an item keeps the group's",
-    withItemDefaults([mod(1, "Red", 0, true), mod(2, "BBQ", 0)], []).map((m) => m.isDefault),
+    itemOptions([mod(1, "Red", 0, true), mod(2, "BBQ", 0)], { defaultModifierIds: [], hiddenModifierIds: [], soldOutModifierIds: [] }).map((m) => m.isDefault),
     [true, false],
   );
 

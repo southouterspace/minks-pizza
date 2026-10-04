@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { asc, eq, inArray } from "drizzle-orm";
 import { categories, db, itemModifierGroups, menuItems, modifierGroups, modifiers, modifierSizePrices } from "@/db";
 import { rejected, type Failure, type PosMenu, type SubmitLine } from "@/lib/orders";
-import { PricingError, priceLine, withItemDefaults, type MenuItem, type PricingPolicy, type SizePrice } from "@/lib/pricing";
+import { PricingError, itemOptions, priceLine, type MenuItem, type PricingPolicy, type SizePrice } from "@/lib/pricing";
 import { getSettings, policyOf } from "@/lib/settings-server";
 
 /** Each modifier's per-size prices, for the given modifiers or every one. */
@@ -70,7 +70,7 @@ async function loadMenuItems(itemIds?: number[]): Promise<(MenuItem & { category
             role: g.role,
             minSelect: g.minSelect,
             maxSelect: g.maxSelect,
-            modifiers: withItemDefaults(
+            modifiers: itemOptions(
               mods
                 .filter((m) => m.groupId === g.id)
                 .map((m) => ({
@@ -82,7 +82,7 @@ async function loadMenuItems(itemIds?: number[]): Promise<(MenuItem & { category
                   isAvailable: m.isAvailable,
                   sizePrices: sizePrices.get(m.id) ?? [],
                 })),
-              l.defaultModifierIds,
+              l,
             ),
           },
         ];
